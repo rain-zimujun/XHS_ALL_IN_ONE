@@ -3,9 +3,10 @@ import { Alert, Button, Card, Col, Empty, Form, Input, Progress, Row, Select, Sp
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { cancelCreativeRun, collectCreativeNotes, fetchAccounts, fetchCreativeHistory, fetchCreativeRun, searchCreativeNotes } from "../../../lib/api";
-import type { PlatformAccount, XhsSearchNote } from "../../../types";
-import type { CreativeHistoryItem, CreativeRun, CreativeSearch } from "../../../types/creative";
+import { analyzeCreativeCollection, cancelCreativeRun, collectCreativeNotes, fetchAccounts, fetchCreativeHistory, fetchCreativeRun, fetchModelConfigs, searchCreativeNotes } from "../../../lib/api";
+import type { ModelConfig, PlatformAccount, XhsSearchNote } from "../../../types";
+import type { CreativeAnalysisOptions, CreativeHistoryItem, CreativeRun, CreativeSearch } from "../../../types/creative";
+import { CreativeResults } from "./creative-results";
 
 const { Title, Text, Paragraph } = Typography;
 const sortOptions = [
@@ -33,6 +34,11 @@ export function HotContentPage() {
   const [collection, setCollection] = useState<CreativeRun | null>(null);
   const [starting, setStarting] = useState(false);
   const [history, setHistory] = useState<CreativeHistoryItem[]>([]);
+  const [models, setModels] = useState<ModelConfig[]>([]);
+  const [modelId, setModelId] = useState<number>();
+  const [ideaCount, setIdeaCount] = useState<1 | 3 | 5>(3);
+  const [audience, setAudience] = useState("关注 AI 与服装设计的从业者");
+  const [instruction, setInstruction] = useState("");
   const collecting = collection?.status === "running" || collection?.status === "pending";
 
   async function loadAccounts() {
@@ -45,6 +51,15 @@ export function HotContentPage() {
     finally { setLoadingAccounts(false); }
   }
   useEffect(() => { void loadAccounts(); }, []);
+
+  async function loadModels() {
+    try {
+      const items = (await fetchModelConfigs("text")).items;
+      setModels(items);
+      setModelId(id => items.some(m => m.id === id) ? id : items.find(m => m.is_default)?.id || items[0]?.id);
+    } catch { setError("模型配置加载失败，请重试。"); }
+  }
+  useEffect(() => { void loadModels(); }, []);
 
   async function loadHistory() {
     try { setHistory(await fetchCreativeHistory()); } catch { /* explicit refresh remains available */ }
@@ -68,25 +83,45 @@ export function HotContentPage() {
     return () => { disposed = true; clearTimeout(timer); };
   }, [collection?.id, collecting]);
 
-  async function startCollection() {
+  function analysisOptions(): CreativeAnalysisOptions | undefined {
+    return modelId ? { model_id: modelId, idea_count: ideaCount, audience, instruction } : undefined;
+  }
+
+  async function startCollection(withAnalysis = false) {
     if (!run || selected.length < 3) return;
+    if (withAnalysis && !modelId) return;
     setStarting(true); setError("");
-    try { setCollection(await collectCreativeNotes(run.id, selected)); void loadHistory(); }
+    try { setCollection(await collectCreativeNotes(run.id, selected, withAnalysis ? analysisOptions() : undefined)); void loadHistory(); }
     catch { setError("无法开始采集，请检查选取的笔记与账号状态。"); }
     finally { setStarting(false); }
+  }
+
+  async function analyzeAgain() {
+    const options = analysisOptions();
+    if (!collection || !options) return;
+    setStarting(true); setError("");
+    try { setCollection(await analyzeCreativeCollection(collection.id, options)); void loadHistory(); }
+    catch { setError("无法开始分析，请检查模型配置与有效样本数量。"); }
+    finally { setStarting(false); }
+  }
+
+  async function stopTask() {
+    if (!collection) return;
+    try { setCollection(await cancelCreativeRun(collection.id)); void loadHistory(); }
+    catch { setError("停止请求未成功，请重试。"); }
   }
 
   async function openHistory(id: number) {
     try {
       const item = await fetchCreativeRun(id);
-      if (item.task_type === "creative_search") { setRun(item); setSelected((item.payload.items || []).map(n => n.note_id)); }
-      else setCollection(item);
+      if (item.task_type === "creative_search") { setCollection(null); setRun(item); setSelected((item.payload.items || []).map(n => n.note_id)); }
+      else { setRun(null); setSelected([]); setCollection(item); }
     } catch { setError("历史任务加载失败。"); }
   }
 
   async function search() {
     if (!accountId || !keyword.trim()) return;
-    setSearching(true); setError(""); setRun(null); setSelected([]);
+    setSearching(true); setError(""); setRun(null); setSelected([]); setCollection(null);
     const payload: CreativeSearch = {
       account_id: accountId, keyword: keyword.trim(), limit,
       sort_type_choice: sort, note_time: noteTime, note_type: noteType,
@@ -142,19 +177,36 @@ export function HotContentPage() {
           ]}
         />
         <Space wrap>
-          <Button type="primary" onClick={() => void startCollection()} loading={starting} disabled={searching || collecting || selected.length < 3}>采集选中的 {selected.length} 篇正文</Button>
+          <Button onClick={() => void startCollection()} loading={starting} disabled={searching || collecting || selected.length < 3}>仅采集选中的 {selected.length} 篇正文</Button>
           <Text type="secondary">至少选 3 篇用于综合分析；采集正文和互动数据，图片由你们自行准备。</Text>
         </Space>
       </Card>
-      {collection && <Card title={`采集任务 #${collection.id}`} extra={collecting && <Button onClick={async () => { setCollection(await cancelCreativeRun(collection.id)); }}>停止任务</Button>}>
+      <Card title="3. AI 创作设置" extra={<Button onClick={() => void loadModels()} icon={<ReloadOutlined />}>刷新模型</Button>}>
+        {!models.length && <Alert type="info" title="先在模型配置中添加文字模型" description="使用已有的文字模型 API 配置；只生成文案和图片提示词，不调用生图接口。" style={{ marginBottom: 16 }} />}
+        <Form layout="vertical" disabled={starting || collecting || searching}>
+          <Row gutter={16}>
+            <Col xs={24} md={12}><Form.Item label="文字模型"><Select aria-label="文字模型" value={modelId} onChange={setModelId} placeholder="选择文字模型" options={models.map(m => ({ value: m.id, label: `${m.name} · ${m.model_name}`, disabled: !m.has_api_key || !m.base_url }))} /></Form.Item></Col>
+            <Col xs={24} md={12}><Form.Item label="方案数量"><Select aria-label="方案数量" value={ideaCount} onChange={setIdeaCount} options={[1, 3, 5].map(value => ({ value, label: `${value} 套方案` }))} /></Form.Item></Col>
+            <Col span={24}><Form.Item label="目标受众"><Input aria-label="目标受众" maxLength={300} value={audience} onChange={e => setAudience(e.target.value)} /></Form.Item></Col>
+            <Col span={24}><Form.Item label="创作要求"><Input.TextArea aria-label="创作要求" rows={3} maxLength={2000} value={instruction} onChange={e => setInstruction(e.target.value)} placeholder="例如：面向女装品牌主理人；偏实操教程；避免夸张效果承诺；配图以 3:4 竖图为主。" /></Form.Item></Col>
+          </Row>
+          <Space wrap>
+            <Button type="primary" onClick={() => void startCollection(true)} loading={starting} disabled={!modelId || !run || selected.length < 3 || collecting || searching}>采集并生成 {ideaCount} 套方案</Button>
+            {collection && (collection.payload.sources?.length || 0) >= 3 && <Button onClick={() => void analyzeAgain()} disabled={!modelId || collecting || searching} loading={starting}>使用已采集正文重新生成</Button>}
+          </Space>
+        </Form>
+        <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>点击生成会将样本文字发送给所选模型服务，按其规则计费；格式校验失败最多重试一次。刷新页面后可从历史任务继续查看，不会自动发布。停止任务无法撤回已发出的模型请求。</Paragraph>
+      </Card>
+      {collection && <Card title={`创作任务 #${collection.id}`} extra={collecting && <Button onClick={() => void stopTask()}>停止任务</Button>}>
         <Text>{collection.payload.stage || collection.status}</Text>
         <Progress percent={collection.progress} status={collection.status === "failed" ? "exception" : collecting ? "active" : "normal"} />
         <Paragraph>已保存 {collection.payload.sources?.length || 0} 篇正文，失败 {collection.payload.failures?.length || 0} 篇。</Paragraph>
         {collection.payload.error && <Alert type="error" title={collection.payload.error} />}
         {collection.payload.failures?.map(f => <Paragraph key={f.note_id} type="secondary">{f.title || f.note_id}：{f.reason}</Paragraph>)}
       </Card>}
+      {collection?.payload.result && <CreativeResults run={collection} />}
       <Card title="历史任务" extra={<Button onClick={() => void loadHistory()} icon={<ReloadOutlined />}>刷新</Button>}>
-        <Space wrap>{history.map(item => <Button key={item.id} disabled={collecting || starting || searching} onClick={() => void openHistory(item.id)}>#{item.id} {item.keyword} · {item.task_type === "creative_search" ? "搜索" : "采集"} · {item.status}</Button>)}</Space>
+        <Space wrap>{history.map(item => <Button key={item.id} disabled={collecting || starting || searching} onClick={() => void openHistory(item.id)}>#{item.id} {item.keyword} · {item.task_type === "creative_search" ? "搜索" : item.task_type === "creative_analysis" ? "分析" : "采集/创作"} · {item.status}</Button>)}</Space>
         {!history.length && <Text type="secondary">完成搜索或采集后，会保留历史记录。</Text>}
       </Card>
     </Space>

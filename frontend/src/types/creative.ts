@@ -18,7 +18,32 @@ export type CreativeRun = Omit<TaskRecord, "payload"> & {
     stage?: string;
     sources?: XhsSearchNote[];
     failures?: { note_id: string; title: string; reason: string }[];
+    analysis?: CreativeAnalysisOptions | null;
+    result?: CreativeResult;
+    analysis_metadata?: { model_name: string; sample_count: number; excerpt_chars_per_note: number; disclaimer: string };
   };
+};
+
+export type CreativeAnalysisOptions = {
+  model_id: number;
+  idea_count: 1 | 3 | 5;
+  audience: string;
+  instruction: string;
+};
+
+export type CreativeResult = {
+  summary: string;
+  patterns: string[];
+  ideas: {
+    title: string;
+    alternative_titles: string[];
+    body: string;
+    tags: string[];
+    reason: string;
+    source_note_ids: string[];
+    cover_text: string;
+    image_plan: { purpose: string; composition: string; prompt: string; negative_prompt: string }[];
+  }[];
 };
 
 export type CreativeHistoryItem = {

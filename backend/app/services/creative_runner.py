@@ -7,6 +7,7 @@ from sqlalchemy import select
 from backend.app.api.platforms.xhs.pc import _get_owned_pc_account_cookies, _normalize_detail_payload
 from backend.app.core.time import shanghai_now
 from backend.app.models import Note, Task, User
+from backend.app.services.creative_analysis import CreativeError, analyze_sources
 
 
 class RunCancelled(Exception):
@@ -21,7 +22,51 @@ def checkpoint(db, task: Task, **updates):
     db.commit()
 
 
-def collect_samples(task_id: int, session_factory, adapter_factory):
+def generate_for_task(db, task, client_factory):
+    def update_stage(stage):
+        checkpoint(db, task, stage=stage)
+        task.progress = 85
+        db.commit()
+
+    result, metadata = analyze_sources(
+        db, task.user_id, task.payload["search"], task.payload["sources"],
+        task.payload["analysis"], client_factory, update_stage,
+    )
+    checkpoint(db, task, result=result, analysis_metadata=metadata, stage="创作方案已生成")
+
+
+def fail_task(db, task, exc, message):
+    db.rollback()
+    db.refresh(task)
+    if task.status != "cancelled":
+        task.status = "failed"
+        task.payload = {**task.payload, "error": str(exc) if isinstance(exc, CreativeError) else message}
+    task.finished_at = shanghai_now()
+    db.commit()
+
+
+def analyze_collection(task_id: int, session_factory, client_factory):
+    with session_factory() as db:
+        task = db.get(Task, task_id)
+        if task is None or task.status != "pending":
+            return
+        try:
+            task.status = "running"
+            task.started_at = shanghai_now()
+            db.commit()
+            generate_for_task(db, task, client_factory)
+            checkpoint(db, task)
+            task.status = "completed"
+            task.progress = 100
+            task.finished_at = shanghai_now()
+            db.commit()
+        except RunCancelled:
+            pass
+        except Exception as exc:
+            fail_task(db, task, exc, "AI 分析失败，请检查模型配置或网络后重新生成。采集数据已保留。")
+
+
+def collect_samples(task_id: int, session_factory, adapter_factory, client_factory=None):
     """Persist successful text samples incrementally; no media download or publishing."""
     with session_factory() as db:
         task = db.get(Task, task_id)
@@ -66,29 +111,26 @@ def collect_samples(task_id: int, session_factory, adapter_factory):
                     db.commit()
                     sources.append(detail)
                 checkpoint(db, task, sources=sources, failures=failures, stage=f"已处理 {i + 1}/{len(candidates)}")
-                task.progress = round((i + 1) / len(candidates) * 100)
+                task.progress = round((i + 1) / len(candidates) * (75 if task.payload.get("analysis") else 100))
                 db.commit()
                 if authentication_failed:
-                    raise ValueError("小红书登录需要重新验证，采集已停止。请重新绑定账号后重试。")
+                    raise CreativeError("小红书登录需要重新验证，采集已停止。请重新绑定账号后重试。")
             checkpoint(db, task)
             if len(sources) < 3:
-                raise ValueError(f"仅采集到 {len(sources)} 篇有效正文，至少需要 3 篇才能进行综合分析。")
+                raise CreativeError(f"仅采集到 {len(sources)} 篇有效正文，至少需要 3 篇才能进行综合分析。")
+            if task.payload.get("analysis"):
+                generate_for_task(db, task, client_factory)
+            checkpoint(db, task)
             task.status = "completed"
-            task.payload = {**task.payload, "stage": f"采集完成：{len(sources)} 篇有效正文"}
+            task.progress = 100
+            task.payload = {**task.payload, "stage": "创作方案已生成" if task.payload.get("result") else f"采集完成：{len(sources)} 篇有效正文"}
             task.finished_at = shanghai_now()
             db.commit()
         except RunCancelled:
             task.finished_at = shanghai_now()
             db.commit()
         except Exception as exc:
-            db.rollback()
-            db.refresh(task)
-            if task.status != "cancelled":
-                task.status = "failed"
-                error = str(exc) if isinstance(exc, ValueError) else "采集任务失败，请检查账号或网络后重试。"
-                task.payload = {**task.payload, "sources": sources, "failures": failures, "error": error}
-            task.finished_at = shanghai_now()
-            db.commit()
+            fail_task(db, task, exc, "任务失败，请检查账号、模型配置或网络后重试；已采集的正文仍保留。")
 
 
 def recover_interrupted_runs(session_factory):

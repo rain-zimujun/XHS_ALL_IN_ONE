@@ -1,3 +1,4 @@
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -9,9 +10,36 @@ from backend.app.api.platforms.xhs.pc import get_xhs_pc_api_adapter_factory
 from backend.app.core.database import Base, get_db
 from backend.app.core.security import create_access_token, encrypt_text
 from backend.app.main import app
-from backend.app.models import AccountCookieVersion, Note, PlatformAccount, PublishJob, Task, User
+from backend.app.models import AccountCookieVersion, ModelConfig, Note, PlatformAccount, PublishJob, Task, User
 from backend.app.schemas.creative import CreativeSearchRequest
 from backend.app.services import creative_service
+from backend.app.services.creative_analysis import get_creative_text_client_factory
+from backend.app.services.creative_runner import recover_interrupted_runs
+
+
+def valid_analysis(count=1, ids=None):
+    return {
+        "summary": "样本主要关注 AI 服装流程，不能代表全站趋势。", "patterns": ["步骤拆解", "效果对比"],
+        "ideas": [{
+            "title": f"AI 服装设计流程 {i + 1}", "alternative_titles": ["从草图到服装", "AI 试衣流程", "设计师的 AI 工具箱"],
+            "body": "先准备服装草图，再比较不同方案。具体效果需自行验证。", "tags": ["AI服装", "服装设计"],
+            "reason": "多篇样本都关注可重复的设计步骤。", "source_note_ids": ids or ["note-0", "note-1"],
+            "cover_text": "AI 服装设计流程", "image_plan": [{
+                "purpose": "封面对比", "composition": "左侧草图，右侧服装，3:4 竖图，顶部留白。",
+                "prompt": "Editorial fashion concept sheet, sketch and garment side by side, neutral background, vertical 3:4, no text",
+                "negative_prompt": "watermark, logo, text, distorted anatomy",
+            }],
+        } for i in range(count)],
+    }
+
+
+class FakeTextClient:
+    calls = []
+
+    def _complete(self, **kwargs):
+        self.calls.append(kwargs)
+        prompt = json.loads(kwargs["user_prompt"].split("\n上次输出")[0])
+        return json.dumps(valid_analysis(prompt["required_idea_count"]), ensure_ascii=False)
 
 
 class FakeAdapter:
@@ -51,8 +79,11 @@ def env(tmp_path, monkeypatch):
         account = PlatformAccount(user_id=user.id, platform="xhs", sub_type="pc", nickname="测试账号", external_user_id="test")
         db.add(account); db.flush()
         db.add(AccountCookieVersion(platform_account_id=account.id, encrypted_cookies=encrypt_text("test=fixture")))
+        model = ModelConfig(user_id=user.id, name="测试文字模型", model_type="text", provider="mock", model_name="test-model",
+                            base_url="https://model.example.invalid/v1", encrypted_api_key=encrypt_text("fixture-key-private"))
+        db.add(model); db.flush()
         db.commit()
-        user_id, other_id, account_id = user.id, other.id, account.id
+        user_id, other_id, account_id, model_id = user.id, other.id, account.id, model.id
 
     def override_db():
         with factory() as db:
@@ -60,15 +91,18 @@ def env(tmp_path, monkeypatch):
 
     app.dependency_overrides[get_db] = override_db
     app.dependency_overrides[get_xhs_pc_api_adapter_factory] = lambda: FakeAdapter
+    app.dependency_overrides[get_creative_text_client_factory] = lambda: FakeTextClient
     monkeypatch.setattr(creative_service.time, "sleep", lambda _: None)
     FakeAdapter.calls = []
+    FakeTextClient.calls = []
     yield SimpleNamespace(
-        client=TestClient(app), factory=factory, account_id=account_id, user_id=user_id,
+        client=TestClient(app), factory=factory, account_id=account_id, user_id=user_id, model_id=model_id,
         headers={"Authorization": f"Bearer {create_access_token(user_id)}"},
         other_headers={"Authorization": f"Bearer {create_access_token(other_id)}"},
     )
     app.dependency_overrides.pop(get_db, None)
     app.dependency_overrides.pop(get_xhs_pc_api_adapter_factory, None)
+    app.dependency_overrides.pop(get_creative_text_client_factory, None)
     engine.dispose()
 
 
@@ -187,3 +221,117 @@ def test_collection_rejects_tampered_selection(env):
         "search_task_id": search["id"], "note_ids": ["note-0", "note-1", "note-2"],
     })
     assert response.status_code == 404
+
+
+def collect_for_analysis(env, options=None):
+    search = search_for_collection(env)
+    response = env.client.post("/api/xhs/creative/collect", headers=env.headers, json={
+        "search_task_id": search["id"], "note_ids": ["note-0", "note-1", "note-2"], "analysis": options,
+    })
+    assert response.status_code == 202
+    return env.client.get(f"/api/xhs/creative/runs/{response.json()['id']}", headers=env.headers).json()
+
+
+@pytest.mark.parametrize("count", [1, 3, 5])
+def test_one_click_collects_and_generates_validated_ideas(env, count):
+    result = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": count})
+    assert result["status"] == "completed"
+    assert result["progress"] == 100
+    assert len(result["payload"]["result"]["ideas"]) == count
+    assert result["payload"]["analysis_metadata"]["sample_count"] == 3
+    assert "fixture-key-private" not in str(result)
+    assert len(FakeTextClient.calls) == 1
+    assert "不可信" in FakeTextClient.calls[0]["system_prompt"]
+    assert "base_url" not in FakeTextClient.calls[0]["user_prompt"]
+    with env.factory() as db:
+        assert not db.scalars(select(PublishJob)).all()
+
+
+def test_analysis_can_retry_existing_sources_without_another_crawl(env):
+    collection = collect_for_analysis(env)
+    before = len(FakeAdapter.calls)
+    response = env.client.post("/api/xhs/creative/analyze", headers=env.headers, json={
+        "collection_task_id": collection["id"], "model_id": env.model_id, "idea_count": 1,
+    })
+    result = env.client.get(f"/api/xhs/creative/runs/{response.json()['id']}", headers=env.headers).json()
+    assert result["status"] == "completed"
+    assert result["parent_task_id"] == collection["id"]
+    assert len(FakeAdapter.calls) == before
+    assert env.client.post("/api/xhs/creative/analyze", headers=env.other_headers, json={
+        "collection_task_id": collection["id"], "model_id": env.model_id,
+    }).status_code == 404
+
+
+@pytest.mark.parametrize("malformed", ["not json", json.dumps(valid_analysis(ids=["note-0", "foreign-id"])), json.dumps(valid_analysis(ids=["note-0", "note-0"]))])
+def test_invalid_ai_output_is_retried_once_and_never_accepted(env, monkeypatch, malformed):
+    calls = []
+    def bad_response(self, **kwargs):
+        calls.append(kwargs)
+        return malformed
+    monkeypatch.setattr(FakeTextClient, "_complete", bad_response)
+    result = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": 1})
+    assert result["status"] == "failed"
+    assert len(calls) == 2
+    assert len(result["payload"]["sources"]) == 3
+    assert "result" not in result["payload"]
+
+
+def test_ai_invalid_output_can_be_repaired_on_second_attempt(env, monkeypatch):
+    responses = iter(["not json", "```json\n" + json.dumps(valid_analysis()) + "\n```"])
+    monkeypatch.setattr(FakeTextClient, "_complete", lambda *_a, **_kw: next(responses))
+    result = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": 1})
+    assert result["status"] == "completed"
+
+
+def test_ai_provider_errors_are_masked_and_sources_retained(env, monkeypatch):
+    def fail(*_a, **_kw):
+        raise ValueError("Authorization: Bearer fixture-key-private")
+    monkeypatch.setattr(FakeTextClient, "_complete", fail)
+    result = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": 1})
+    assert result["status"] == "failed"
+    assert len(result["payload"]["sources"]) == 3
+    assert "fixture-key-private" not in str(result)
+
+
+def test_model_ownership_is_checked_before_collection(env):
+    with env.factory() as db:
+        model = db.get(ModelConfig, env.model_id)
+        other = db.scalar(select(User).where(User.username == "other-user"))
+        model.user_id = other.id
+        db.commit()
+    search = search_for_collection(env)
+    response = env.client.post("/api/xhs/creative/collect", headers=env.headers, json={
+        "search_task_id": search["id"], "note_ids": ["note-0", "note-1", "note-2"],
+        "analysis": {"model_id": env.model_id},
+    })
+    assert response.status_code == 400
+    assert not FakeTextClient.calls
+    with env.factory() as db:
+        assert not db.scalars(select(Note)).all()
+
+
+def test_cancelling_during_ai_request_prevents_saving_generated_result(env, monkeypatch):
+    def cancel_during_model(*_a, **_kw):
+        with env.factory() as db:
+            task = db.scalar(select(Task).where(Task.task_type == "creative_collect"))
+            task.status = "cancelled"
+            db.commit()
+        return json.dumps(valid_analysis())
+    monkeypatch.setattr(FakeTextClient, "_complete", cancel_during_model)
+    result = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": 1})
+    assert result["status"] == "cancelled"
+    assert "result" not in result["payload"]
+    assert len(result["payload"]["sources"]) == 3
+
+
+def test_startup_marks_interrupted_creative_runs_without_touching_other_tasks(env):
+    with env.factory() as db:
+        creative = Task(user_id=env.user_id, platform="xhs", task_type="creative_analysis", status="running", payload={"sources": [{"note_id": "saved"}]})
+        unrelated = Task(user_id=env.user_id, platform="xhs", task_type="other", status="pending", payload={})
+        db.add_all([creative, unrelated]); db.commit()
+        creative_id, unrelated_id = creative.id, unrelated.id
+    recover_interrupted_runs(env.factory)
+    with env.factory() as db:
+        assert db.get(Task, creative_id).status == "failed"
+        assert db.get(Task, creative_id).payload["sources"] == [{"note_id": "saved"}]
+        assert db.get(Task, unrelated_id).status == "pending"
