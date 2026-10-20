@@ -201,7 +201,7 @@ export function HotContentPage() {
             <Col xs={12} md={6}><Form.Item label="标题数量"><Select aria-label="标题数量" value={ideaCount} onChange={setIdeaCount} options={[1, 3, 5].map(value => ({ value, label: `${value} 个标题` }))} /></Form.Item></Col>
             <Col xs={12} md={6}><Form.Item label="每个标题的文案数"><Select aria-label="每个标题的文案数" value={variantCount} onChange={setVariantCount} options={[2, 3].map(value => ({ value, label: `${value} 个版本` }))} /></Form.Item></Col>
             <Col span={24}><Form.Item label="目标受众"><Input aria-label="目标受众" maxLength={300} value={audience} onChange={e => setAudience(e.target.value)} /></Form.Item></Col>
-            <Col span={24}><Form.Item label="创作要求"><Input.TextArea aria-label="创作要求" rows={3} maxLength={2000} value={instruction} onChange={e => setInstruction(e.target.value)} placeholder="例如：面向女装品牌主理人；偏实操教程；避免夸张效果承诺；配图以 3:4 竖图为主。" /></Form.Item></Col>
+            <Col span={24}><Form.Item label="创作要求"><Input.TextArea aria-label="创作要求" rows={3} maxLength={2000} value={instruction} onChange={e => setInstruction(e.target.value)} placeholder="默认写可直接发布的作品／灵感分享，参考样本口吻，不夹带制作指导。可补充：语气自然、少用术语；需要教程时请明确写出。" /></Form.Item></Col>
           </Row>
           <Space wrap>
             <Button type="primary" onClick={() => void startCollection(true)} loading={starting} disabled={!modelId || !run || selected.length < 3 || collecting || searching}>采集并生成 {ideaCount} 个标题 × {variantCount} 版文案</Button>

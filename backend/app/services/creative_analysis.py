@@ -11,6 +11,7 @@ from backend.app.core.security import decrypt_text
 from backend.app.models import ModelConfig
 from backend.app.schemas.creative import CreativeAnalysisOptions, CreativeAnalysisResult
 from backend.app.services.ai_service import OpenAICompatibleTextClient
+from backend.app.services.creative_copy import has_editorial_leak, normalize_result_copy
 
 AI_CONNECT_TIMEOUT_SECONDS = 10
 AI_READ_TIMEOUT_SECONDS = 180
@@ -94,7 +95,7 @@ def analyze_sources(db, user_id: int, search: dict, sources: list[dict], options
         "captured_at": n.get("captured_at", ""),
     } for n in sources]
     system_prompt = (
-        "你是小红书原创内容策划。基于多篇样本综合提炼，不要逐篇改写或复制原文。"
+        "你在替用户撰写可以直接发布的小红书原创笔记，同时单独提供配图方案。基于多篇样本综合提炼，不要逐篇改写或复制原文。"
         "必须先综合本批所有有效正文，归纳其共同文案风格，写入 style_summary："
         "开头方式、语气与口语程度、句子和段落长度、表情及话题用法、互动结尾；"
         "生成正文要模仿这些表达习惯，不能只借题材却套用通用营销腔，也不能模仿某个作者的身份。"
@@ -110,6 +111,18 @@ def analyze_sources(db, user_id: int, search: dict, sources: list[dict], options
         "每版的 label 是简短的写法名称，同一标题下不可重复。"
         "body 是用户可直接复制发布的小红书正文成稿，包含自然开头、具体内容和合适结尾，"
         "不是写作大纲、设计任务书或给用户的操作指令；篇幅和分段参考样本，优先精炼。"
+        "正文的说话对象是刷到笔记的读者，不是正在操作本工具的发布者。默认写自然的作品展示或灵感分享，"
+        "围绕这组概念服装的颜色、轮廓、细节与氛围展开；不得因关键词含 AI 或受众是从业者，就把每篇写成 AI 操作教程。"
+        "只有用户明确要求教程、步骤或教学时，才写面向读者的实操正文。其他情况下不要写‘你可以先…’‘试试让 AI…’"
+        "‘写提示词时…’‘出图后检查…’等教发布者怎么制作内容的话；这些制作要求放在 image_plan。"
+        "分享语气可以有审美偏好，但不虚构已制作、已穿着、亲测或市场反馈；概念设计就自然称为概念设计。"
+        "参考表达边界：不要写‘先提取海岸线颜色，再让 AI 试廓形，出图后检查结构’；"
+        "可以写‘把海岸线的弧度留在裙摆上，雾白和深蓝交叠，有一点海风吹过的感觉。’"
+        "这只是语气示例，不要照搬题材、句子或给所有版本套同一模板。"
+        "body 只放正文，不重复标题或 #话题，不放‘正文文案：’‘以下是为你生成的文案’、"
+        "推荐理由、来源编号、配图说明、正负向提示词、注意事项、免责声明、括号内的编辑备注或待填写占位符。"
+        "话题只放 tags；分析依据只放 reason/style_summary；发布核查提醒放在正文之外。"
+        "少用抽象行话和生硬总结，不强行凑编号，不为每版机械加‘你会选哪一种？’。表情和互动句按样本风格自然使用。"
         "每个版本独立提供标签、封面文字和与本版正文一一对应的 image_plan，不共用一套泛化配图。"
         "配图脚本需说明用途、主体、构图、色彩、比例、文字留白以及正向/负向生图提示词；"
         "封面文字由用户排版叠加，不要求生图模型直接渲染汉字。"
@@ -124,12 +137,13 @@ def analyze_sources(db, user_id: int, search: dict, sources: list[dict], options
     }, ensure_ascii=False)
     client = client_factory()
     source_ids = {n["note_id"] for n in sources}
+    repair_hint = "请严格遵守 JSON schema、标题数量、每个标题的文案版本数量和来源 ID；同一标题下的正文及版本名称不可重复。"
     for attempt in range(2):
         on_checkpoint(f"AI 综合分析中（第 {attempt + 1}/2 次，读取超时 3 分钟）")
         raw = request_analysis(
             client,
             model_config=model, api_key=api_key, system_prompt=system_prompt,
-            user_prompt=user_prompt + ("\n上次输出未通过结构或引用校验。请严格遵守 JSON schema、标题数量、每个标题的文案版本数量和来源 ID；同一标题下的正文及版本名称不可重复。" if attempt else ""),
+            user_prompt=user_prompt + ("\n上次输出未通过校验。" + repair_hint if attempt else ""),
             temperature=0.6,
         )
         on_checkpoint("正在校验方案结构与引用来源")
@@ -137,10 +151,13 @@ def analyze_sources(db, user_id: int, search: dict, sources: list[dict], options
             cleaned = raw.strip()
             if cleaned.startswith("```") and cleaned.endswith("```"):
                 cleaned = cleaned.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-            result = CreativeAnalysisResult.model_validate_json(cleaned)
+            result = CreativeAnalysisResult.model_validate(normalize_result_copy(json.loads(cleaned)))
             if len(result.ideas) != config.idea_count:
                 raise ValueError("Wrong idea count")
             for idea in result.ideas:
+                if any(has_editorial_leak(variant.body) for variant in idea.variants):
+                    repair_hint = "body 中混入了编辑说明、配图/提示词字段或待填占位符。请重写为给读者看的纯正文成稿，相关说明放入独立字段；不要仅删除标签后留下说明内容。返回完整 JSON。"
+                    raise ValueError("Editorial material in body")
                 if len(idea.variants) != config.variant_count:
                     raise ValueError("Wrong variant count")
                 bodies = {"".join(v.body.split()) for v in idea.variants}
@@ -160,4 +177,4 @@ def analyze_sources(db, user_id: int, search: dict, sources: list[dict], options
             }
         except (ValueError, IndexError):
             continue
-    raise CreativeError("模型两次输出均未通过结构或来源校验。已保留采集正文，可换模型或调整要求后重新生成。")
+    raise CreativeError("模型两次输出均未通过结构、正文或来源校验。已保留采集正文，可换模型或调整要求后重新生成。")

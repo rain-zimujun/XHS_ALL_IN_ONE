@@ -31,7 +31,7 @@ def valid_analysis(count=1, ids=None, variant_count=3):
             "reason": "多篇样本都关注可重复的设计步骤。", "source_note_ids": ids or ["note-0", "note-1"],
             "variants": [{
                 "label": ["问题拆解", "步骤清单", "对比讨论"][v % 3],
-                "body": f"标题 {i + 1} 的第 {v + 1} 版正文：先准备服装草图，再比较不同方案。具体效果需自行验证。",
+                "body": f"第 {i + 1} 组概念服装，用{['雾白和深蓝', '砂灰和赭棕', '灰蓝和银色'][v % 3]}留住风景里的颜色。弧形衣摆和轻盈的线条，有一种安静的呼吸感。",
                 "tags": ["AI服装", "服装设计"], "cover_text": f"封面 {i + 1}-{v + 1}",
                 "image_plan": [{
                     "purpose": "封面对比", "composition": f"版本 {i + 1}-{v + 1}：左侧草图，右侧服装，3:4 竖图，顶部留白。",
@@ -264,6 +264,9 @@ def test_one_click_collects_and_generates_validated_ideas(env, count, variant_co
     assert "模仿这些表达习惯" in FakeTextClient.calls[0]["system_prompt"]
     assert "不是写作大纲" in FakeTextClient.calls[0]["system_prompt"]
     assert "image_plan" in FakeTextClient.calls[0]["system_prompt"]
+    assert "默认写自然的作品展示或灵感分享" in FakeTextClient.calls[0]["system_prompt"]
+    assert "只有用户明确要求教程" in FakeTextClient.calls[0]["system_prompt"]
+    assert "话题只放 tags" in FakeTextClient.calls[0]["system_prompt"]
     assert "base_url" not in FakeTextClient.calls[0]["user_prompt"]
     with env.factory() as db:
         assert not db.scalars(select(PublishJob)).all()
@@ -431,6 +434,88 @@ def test_legacy_single_body_result_stays_readable_and_can_be_exported(env):
     assert current["status"] == "completed"
     assert len(current["payload"]["result"]["ideas"][0]["variants"]) == 2
     assert env.client.get(f"/api/xhs/creative/runs/{run['id']}", headers=env.headers).json()["payload"]["result"] == old_result
+
+
+def test_editorial_leaks_are_repaired_with_specific_feedback(env, monkeypatch):
+    contaminated = valid_analysis()
+    contaminated["ideas"][0]["variants"][0]["body"] += "\n配图建议：主体放中间，顶部留白。"
+    responses = iter([contaminated, valid_analysis()])
+    prompts = []
+    def respond(*_args, **kwargs):
+        prompts.append(kwargs["user_prompt"])
+        return json.dumps(next(responses))
+    monkeypatch.setattr(FakeTextClient, "_complete", respond)
+    run = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": 1})
+    assert run["status"] == "completed"
+    assert len(prompts) == 2
+    assert "body 中混入了编辑说明" in prompts[1]
+    assert "不要仅删除标签后留下说明内容" in prompts[1]
+    assert "配图建议：" not in run["payload"]["result"]["ideas"][0]["variants"][0]["body"]
+
+
+@pytest.mark.parametrize("body", ["以下是为你生成的文案：春天来了。", "喜欢【待填写颜色】的裙摆。", "#AI服装 #服装设计"])
+def test_repeated_editorial_leaks_or_topic_only_bodies_are_not_accepted(env, monkeypatch, body):
+    generated = valid_analysis()
+    generated["ideas"][0]["variants"][0]["body"] = body
+    calls = []
+    def respond(*_args, **kwargs):
+        calls.append(kwargs)
+        return json.dumps(generated)
+    monkeypatch.setattr(FakeTextClient, "_complete", respond)
+    run = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": 1})
+    assert run["status"] == "failed"
+    assert len(calls) == 2
+    assert "result" not in run["payload"]
+    assert len(run["payload"]["sources"]) == 3
+
+
+def test_generated_copy_has_topics_once_in_saved_result_and_reports(env, monkeypatch):
+    generated = valid_analysis()
+    original_body = generated["ideas"][0]["variants"][0]["body"]
+    generated["ideas"][0]["variants"][0]["body"] += "\n\n#AI服装 #服装设计 #新话题"
+    generated["ideas"][0]["variants"][0]["tags"] = ["#AI服装", "AI服装", "服装设计"]
+    monkeypatch.setattr(FakeTextClient, "_complete", lambda *_a, **_kw: json.dumps(generated))
+    run = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": 1})
+    assert run["status"] == "completed"
+    with env.factory() as db:
+        variant = db.get(Task, run["id"]).payload["result"]["ideas"][0]["variants"][0]
+        assert variant["body"] == original_body
+        assert variant["tags"] == ["AI服装", "服装设计", "新话题"]
+    for file in run["payload"]["report_files"]:
+        response = env.client.get(file["download_url"], headers=env.headers)
+        if file["file_name"].endswith(".json"):
+            assert response.json()["result"]["ideas"][0]["variants"][0] == variant
+        else:
+            assert response.text.count("#新话题") == 1
+
+
+@pytest.mark.parametrize("legacy", [True, False])
+def test_historical_copy_formats_topics_without_database_rewrite(env, legacy):
+    run = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": 1})
+    saved_result = valid_analysis()
+    idea = saved_result["ideas"][0]
+    variant = idea["variants"][0]
+    variant["body"] = "原有正文，不改措辞。\n\n#服装 #灵感"
+    variant["tags"] = ["#服装", "服装"]
+    if legacy:
+        idea.pop("variants")
+        idea.update(variant)
+        idea["alternative_titles"] = ["旧标题一", "旧标题二", "旧标题三"]
+    with env.factory() as db:
+        task = db.get(Task, run["id"])
+        task.payload = {**task.payload, "result": saved_result}
+        db.commit()
+    for response in (
+        env.client.get(f"/api/xhs/creative/runs/{run['id']}", headers=env.headers),
+        env.client.post(f"/api/xhs/creative/runs/{run['id']}/export", headers=env.headers),
+    ):
+        assert response.status_code == 200
+        returned = response.json()["payload"]["result"]["ideas"][0]
+        returned = returned if legacy else returned["variants"][0]
+        assert returned["body"] == "原有正文，不改措辞。"
+        assert returned["tags"] == ["服装", "灵感"]
+    with env.factory() as db:
+        assert db.get(Task, run["id"]).payload["result"] == saved_result
 
 
 def test_ai_provider_errors_are_masked_and_sources_retained(env, monkeypatch):

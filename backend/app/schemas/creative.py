@@ -50,8 +50,8 @@ class CreativeVariant(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     label: str = Field(min_length=1, max_length=40, description="该版本的表达角度或写法，需符合样本风格")
-    body: str = Field(min_length=1, max_length=6000)
-    tags: list[ShortText] = Field(min_length=1, max_length=10)
+    body: str = Field(min_length=1, max_length=6000, description="给小红书读者看的纯正文成稿；默认自然分享作品或灵感，不写给发布者的指导。不得包含标题、话题标签、配图/生图说明、分析注释或待填占位符。")
+    tags: list[ShortText] = Field(min_length=1, max_length=10, description="独立的话题名称，不带 #，不重复写进 body")
     cover_text: ShortText
     image_plan: list[CreativeImagePlan] = Field(min_length=1, max_length=6)
 

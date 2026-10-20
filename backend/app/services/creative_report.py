@@ -10,6 +10,7 @@ from pathlib import Path
 from backend.app.core.config import get_settings
 from backend.app.models import Task
 from backend.app.services.creative_service import valid_note_url
+from backend.app.services.creative_copy import normalize_result_copy
 
 
 def escape(value) -> str:
@@ -29,7 +30,7 @@ def source_link(source: dict) -> str:
 
 
 def render_report(document: dict) -> str:
-    result = document["result"]
+    result = normalize_result_copy(document["result"])
     sources = {s["note_id"]: s for s in document["sources"]}
     metadata = document["analysis_metadata"]
     parts = [
@@ -105,7 +106,7 @@ def export_report(task: Task) -> dict:
     document = {
         "schema_version": 2 if any(idea.get("variants") for idea in payload["result"]["ideas"]) else 1,
         "task_id": task.id, "created_at": task.created_at.isoformat(),
-        "search": payload["search"], "analysis": payload["analysis"], "result": payload["result"],
+        "search": payload["search"], "analysis": payload["analysis"], "result": normalize_result_copy(payload["result"]),
         "analysis_metadata": payload.get("analysis_metadata", {}),
         "sources": [{k: v for k, v in note.items() if k != "raw"} for note in payload["sources"]],
         "failures": payload.get("failures", []),

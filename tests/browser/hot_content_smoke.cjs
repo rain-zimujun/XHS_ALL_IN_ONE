@@ -60,7 +60,7 @@ async function main() {
               title: `AI 服装创作方案 ${i + 1}`,
               reason: "基于多篇样本的共同特点", source_note_ids: sources.slice(0, 2).map(n => n.note_id),
               variants: Array.from({ length: collectBody.analysis.variant_count }, (_, v) => ({
-                label: ["问题拆解", "步骤清单", "对比讨论"][v], body: `标题 ${i + 1} 的文案 ${v + 1}，图片由用户自行准备。`,
+                label: ["问题拆解", "步骤清单", "对比讨论"][v], body: `标题 ${i + 1} 的文案 ${v + 1}：雾白的衣摆和轻盈的线条，有海风吹过的感觉。`,
                 tags: [`标题${i + 1}`, `版本${v + 1}`], cover_text: `封面 ${i + 1}-${v + 1}`,
                 image_plan: [{ purpose: "封面", composition: `配图 ${i + 1}-${v + 1}：3:4 竖图，顶部留白`, prompt: `concept ${i + 1}, version ${v + 1}, fashion sketch, 3:4`, negative_prompt: "logo, watermark, text" }],
               })),
@@ -135,8 +135,13 @@ async function main() {
         assert.ok(images.includes(variant.image_plan[0].composition));
         assert.ok(images.includes(variant.image_plan[0].prompt));
         assert.equal((await page.getByTestId("creative-selected-title").innerText()).trim(), collectedRun.payload.result.ideas[i].title);
+        await page.getByRole("button", { name: "复制正文", exact: true }).click();
+        assert.equal(await page.evaluate(() => window.__copiedText), variant.body);
         await page.getByRole("button", { name: "复制完整笔记", exact: true }).click();
         assert.equal(await page.evaluate(() => window.__copiedText), [collectedRun.payload.result.ideas[i].title, variant.body, variant.tags.map(t => `#${t}`).join(" ")].join("\n\n"));
+        const copied = await page.evaluate(() => window.__copiedText);
+        assert.ok(!copied.includes("配图建议") && !copied.includes("生图提示词") && !copied.includes("推荐理由"));
+        assert.ok(variant.tags.every(tag => copied.split(`#${tag}`).length === 2));
       }
     }
     // Re-export changes download state only, not the current selection.

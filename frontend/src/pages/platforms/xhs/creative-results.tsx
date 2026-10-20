@@ -8,22 +8,25 @@ import type { CreativeIdea, CreativeRun, CreativeVariant } from "../../../types/
 const { Paragraph, Title, Text } = Typography;
 
 function VariantContent({ title, variant }: { title: string; variant: CreativeVariant }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"body" | "note" | null>(null);
   const [copyError, setCopyError] = useState(false);
   const tags = variant.tags.map(t => `#${t.replace(/^#+/, "")}`).join(" ");
-  async function copyNote() {
+  async function copyNote(kind: "body" | "note") {
     setCopyError(false);
     try {
-      await navigator.clipboard.writeText([title, variant.body, tags].join("\n\n"));
-      setCopied(true);
+      await navigator.clipboard.writeText(kind === "body" ? variant.body : [title, variant.body, tags].join("\n\n"));
+      setCopied(kind);
     } catch { setCopyError(true); }
   }
   return <Row gutter={[16, 16]} data-testid="creative-variant-content">
     <Col xs={24} xl={12}>
-      <Card size="small" title="正文文案" extra={<Button onClick={() => void copyNote()}>{copied ? "已复制完整笔记" : "复制完整笔记"}</Button>}>
+      <Card size="small" title="正文文案">
         {copyError && <Alert type="warning" title="浏览器未允许复制，请选中正文手动复制。" style={{ marginBottom: 12 }} />}
-        <Paragraph type="secondary">复制完整笔记包含：当前标题、此版正文和话题标签。</Paragraph>
-        <Paragraph copyable style={{ whiteSpace: "pre-wrap" }} data-testid="creative-body">{variant.body}</Paragraph>
+        <Space wrap style={{ marginBottom: 16 }}>
+          <Button onClick={() => void copyNote("body")}>{copied === "body" ? "已复制正文" : "复制正文"}</Button>
+          <Button onClick={() => void copyNote("note")}>{copied === "note" ? "已复制完整笔记" : "复制完整笔记"}</Button>
+        </Space>
+        <Paragraph copyable={{ text: variant.body }} style={{ whiteSpace: "pre-wrap" }} data-testid="creative-body">{variant.body}</Paragraph>
         <Title level={5}>话题标签</Title>
         <Paragraph copyable={{ text: tags }}>{variant.tags.map((tag, i) => <Tag key={i}>{tag}</Tag>)}</Paragraph>
       </Card>

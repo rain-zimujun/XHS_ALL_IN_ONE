@@ -14,6 +14,7 @@ from backend.app.schemas.creative import CreativeAnalyzeRequest, CreativeCollect
 from backend.app.services.creative_analysis import CreativeError, get_creative_text_client_factory, owned_text_model
 from backend.app.services.creative_runner import analyze_collection, collect_samples
 from backend.app.services.creative_report import export_report
+from backend.app.services.creative_copy import normalize_result_copy
 from backend.app.services.creative_service import search_samples
 
 router = APIRouter(prefix="/xhs/creative", tags=["xhs-creative"])
@@ -28,6 +29,9 @@ def has_timestamp(value) -> bool:
 
 def serialize_creative_task(db: Session, task: Task) -> dict:
     result = serialize_task(task)
+    if result["payload"].get("result"):
+        # Read-through formatting for old results; never rewrite saved prose.
+        result["payload"] = {**result["payload"], "result": normalize_result_copy(result["payload"]["result"])}
     if task.task_type != "creative_search":
         return result
     items = (task.payload or {}).get("items", [])
@@ -186,4 +190,4 @@ def export(task_id: int, current_user: User = Depends(get_current_user), db: Ses
         raise HTTPException(500, "报告导出失败，请检查本地输出目录是否可写。") from exc
     task.payload = {**task.payload, **report}
     db.commit()
-    return serialize_task(task)
+    return serialize_creative_task(db, task)
