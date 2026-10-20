@@ -11,13 +11,15 @@ from backend.app.api import accounts, ai, auth, auto_tasks, drafts, files, keywo
 from backend.app.api.platforms import registry
 from backend.app.api.platforms.xhs import analytics, crawl, creator, creative, monitoring, pc
 from backend.app.core.config import get_settings
-from backend.app.core.database import init_db
+from backend.app.core.database import SessionLocal, init_db
+from backend.app.services.creative_runner import recover_interrupted_runs
 from backend.app.services.scheduler_service import run_due_auto_tasks, shutdown_due_publish_scheduler, start_due_publish_scheduler
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    recover_interrupted_runs(SessionLocal)
     settings = get_settings()
     scheduler = None
     if settings.scheduler_enabled:

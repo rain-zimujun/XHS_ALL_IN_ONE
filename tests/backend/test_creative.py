@@ -9,7 +9,7 @@ from backend.app.api.platforms.xhs.pc import get_xhs_pc_api_adapter_factory
 from backend.app.core.database import Base, get_db
 from backend.app.core.security import create_access_token, encrypt_text
 from backend.app.main import app
-from backend.app.models import AccountCookieVersion, PlatformAccount, Task, User
+from backend.app.models import AccountCookieVersion, Note, PlatformAccount, PublishJob, Task, User
 from backend.app.schemas.creative import CreativeSearchRequest
 from backend.app.services import creative_service
 
@@ -30,6 +30,13 @@ class FakeAdapter:
             "interact_info": {"liked_count": str(i)},
         }} for i in range(first, first + 20)]
         return True, "", {"data": {"items": items, "has_more": page < 4}}
+
+    def get_note_info(self, url):
+        note_id = url.rsplit("/", 1)[-1]
+        return True, "", {"data": {"items": [{"id": note_id, "note_card": {
+            "title": f"AI 服装案例 {note_id}", "desc": "这是一篇完整正文，介绍服装设计流程与 AI 试衣效果。",
+            "interact_info": {"liked_count": 120, "collected_count": 60},
+        }}]}}
 
 
 @pytest.fixture
@@ -111,3 +118,72 @@ def test_failed_search_is_saved_without_sensitive_error(env, monkeypatch):
         task = db.scalar(select(Task))
         assert task.status == "failed"
         assert task.finished_at is not None
+
+
+def search_for_collection(env):
+    return env.client.post("/api/xhs/creative/search", headers=env.headers, json={
+        "account_id": env.account_id, "keyword": "AI 服装", "limit": 20,
+    }).json()
+
+
+def test_collection_persists_only_selected_full_text_and_never_publishes(env):
+    search = search_for_collection(env)
+    response = env.client.post("/api/xhs/creative/collect", headers=env.headers, json={
+        "search_task_id": search["id"], "note_ids": ["note-0", "note-1", "note-2"],
+    })
+    assert response.status_code == 202
+    result = env.client.get(f"/api/xhs/creative/runs/{response.json()['id']}", headers=env.headers).json()
+    assert result["status"] == "completed"
+    assert len(result["payload"]["sources"]) == 3
+    with env.factory() as db:
+        assert len(db.scalars(select(Note)).all()) == 3
+        assert not db.scalars(select(PublishJob)).all()
+
+
+def test_collection_retains_successes_when_one_note_fails(env, monkeypatch):
+    original = FakeAdapter.get_note_info
+    def sometimes_fail(self, url):
+        if url.endswith("note-1"):
+            raise TimeoutError("internal details")
+        return original(self, url)
+    monkeypatch.setattr(FakeAdapter, "get_note_info", sometimes_fail)
+    search = search_for_collection(env)
+    run = env.client.post("/api/xhs/creative/collect", headers=env.headers, json={
+        "search_task_id": search["id"], "note_ids": [f"note-{i}" for i in range(4)],
+    }).json()
+    result = env.client.get(f"/api/xhs/creative/runs/{run['id']}", headers=env.headers).json()
+    assert result["status"] == "completed"
+    assert len(result["payload"]["sources"]) == 3
+    assert len(result["payload"]["failures"]) == 1
+    assert "internal details" not in str(result)
+
+
+def test_collection_cancellation_is_observed_after_network_call(env, monkeypatch):
+    original = FakeAdapter.get_note_info
+    def cancel_during_request(self, url):
+        with env.factory() as db:
+            task = db.scalar(select(Task).where(Task.task_type == "creative_collect"))
+            task.status = "cancelled"
+            db.commit()
+        return original(self, url)
+    monkeypatch.setattr(FakeAdapter, "get_note_info", cancel_during_request)
+    search = search_for_collection(env)
+    run = env.client.post("/api/xhs/creative/collect", headers=env.headers, json={
+        "search_task_id": search["id"], "note_ids": [f"note-{i}" for i in range(3)],
+    }).json()
+    result = env.client.get(f"/api/xhs/creative/runs/{run['id']}", headers=env.headers).json()
+    assert result["status"] == "cancelled"
+    with env.factory() as db:
+        assert not db.scalars(select(Note)).all()
+
+
+def test_collection_rejects_tampered_selection(env):
+    search = search_for_collection(env)
+    response = env.client.post("/api/xhs/creative/collect", headers=env.headers, json={
+        "search_task_id": search["id"], "note_ids": ["note-0", "note-1", "foreign-id"],
+    })
+    assert response.status_code == 400
+    response = env.client.post("/api/xhs/creative/collect", headers=env.other_headers, json={
+        "search_task_id": search["id"], "note_ids": ["note-0", "note-1", "note-2"],
+    })
+    assert response.status_code == 404

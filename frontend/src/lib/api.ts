@@ -95,6 +95,14 @@ export async function fetchCreativeHistory(): Promise<CreativeHistoryItem[]> {
   return (await http.get<{ items: CreativeHistoryItem[] }>("/xhs/creative/runs")).data.items;
 }
 
+export async function collectCreativeNotes(searchTaskId: number, noteIds: string[]): Promise<CreativeRun> {
+  return (await http.post<CreativeRun>("/xhs/creative/collect", { search_task_id: searchTaskId, note_ids: noteIds })).data;
+}
+
+export async function cancelCreativeRun(id: number): Promise<CreativeRun> {
+  return (await http.post<CreativeRun>(`/xhs/creative/runs/${id}/cancel`)).data;
+}
+
 const REFRESH_TOKEN_KEY = "spider_xhs_refresh_token";
 let accessToken: string | null = null;
 

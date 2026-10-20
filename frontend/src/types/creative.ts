@@ -15,6 +15,9 @@ export type CreativeRun = Omit<TaskRecord, "payload"> & {
     items?: XhsSearchNote[];
     warnings?: string[];
     error?: string;
+    stage?: string;
+    sources?: XhsSearchNote[];
+    failures?: { note_id: string; title: string; reason: string }[];
   };
 };
 

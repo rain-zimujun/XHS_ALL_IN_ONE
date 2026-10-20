@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, sessionmaker
 
 from backend.app.api.platforms.xhs.pc import _get_owned_pc_account_cookies, get_xhs_pc_api_adapter_factory
 from backend.app.api.tasks import serialize_task
@@ -10,7 +10,8 @@ from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
 from backend.app.core.time import shanghai_now
 from backend.app.models import Task, User
-from backend.app.schemas.creative import CreativeSearchRequest
+from backend.app.schemas.creative import CreativeCollectRequest, CreativeSearchRequest
+from backend.app.services.creative_runner import collect_samples
 from backend.app.services.creative_service import search_samples
 
 router = APIRouter(prefix="/xhs/creative", tags=["xhs-creative"])
@@ -18,7 +19,7 @@ router = APIRouter(prefix="/xhs/creative", tags=["xhs-creative"])
 
 def owned_task(db: Session, user: User, task_id: int, task_type: str | None = None) -> Task:
     task = db.scalar(select(Task).where(Task.id == task_id, Task.user_id == user.id))
-    if task is None or task.task_type not in ("creative_search", "creative_analysis"):
+    if task is None or task.task_type not in ("creative_search", "creative_collect", "creative_analysis"):
         raise HTTPException(404, "任务不存在")
     if task_type and task.task_type != task_type:
         raise HTTPException(400, "任务类型不匹配")
@@ -57,7 +58,7 @@ def search(
 @router.get("/runs")
 def history(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     tasks = db.scalars(select(Task).where(
-        Task.user_id == current_user.id, Task.task_type.in_(("creative_search", "creative_analysis")),
+        Task.user_id == current_user.id, Task.task_type.in_(("creative_search", "creative_collect", "creative_analysis")),
     ).order_by(Task.id.desc()).limit(30)).all()
     return {"items": [{
         "id": task.id, "task_type": task.task_type, "status": task.status,
@@ -69,3 +70,38 @@ def history(current_user: User = Depends(get_current_user), db: Session = Depend
 @router.get("/runs/{task_id}")
 def detail(task_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     return serialize_task(owned_task(db, current_user, task_id))
+
+
+@router.post("/collect", status_code=202)
+def collect(
+    payload: CreativeCollectRequest, background: BackgroundTasks,
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
+    adapter_factory=Depends(get_xhs_pc_api_adapter_factory),
+):
+    search_task = owned_task(db, current_user, payload.search_task_id, "creative_search")
+    if search_task.status != "completed":
+        raise HTTPException(400, "请先完成搜索")
+    ids = list(dict.fromkeys(payload.note_ids))
+    notes = {n["note_id"]: n for n in search_task.payload["items"]}
+    if len(ids) < 3 or any(note_id not in notes for note_id in ids):
+        raise HTTPException(400, "请选择本次搜索中的至少 3 篇不同笔记")
+    _get_owned_pc_account_cookies(db, current_user, search_task.payload["search"]["account_id"])
+    task = Task(
+        user_id=current_user.id, platform="xhs", task_type="creative_collect", status="pending",
+        progress=0, parent_task_id=search_task.id,
+        payload={"search": search_task.payload["search"], "selected_notes": [notes[n] for n in ids], "stage": "等待采集"},
+    )
+    db.add(task); db.commit(); db.refresh(task)
+    background.add_task(collect_samples, task.id, sessionmaker(bind=db.get_bind()), adapter_factory)
+    return serialize_task(task)
+
+
+@router.post("/runs/{task_id}/cancel")
+def cancel(task_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    task = owned_task(db, current_user, task_id)
+    if task.status in ("pending", "running"):
+        task.status = "cancelled"
+        task.finished_at = shanghai_now()
+        task.payload = {**task.payload, "stage": "已停止"}
+        db.commit()
+    return serialize_task(task)
