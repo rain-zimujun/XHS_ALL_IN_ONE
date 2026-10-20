@@ -90,6 +90,8 @@ async function main() {
     });
     await page.goto(process.env.XHS_TEST_BASE_URL || "http://127.0.0.1:5173/platforms/xhs/hot-content");
     await page.getByRole("heading", { name: "热点创作", exact: true }).waitFor();
+    assert.equal(await page.getByLabel("目标受众").inputValue(), "电商、服装行业、AI、时尚行业、营销行业、美工、后期从业者");
+    assert.equal(await page.getByLabel("创作要求").inputValue(), "符合小红书爆款文案的调性，文案尽可能精简、抓眼球");
     await page.getByLabel("搜索关键词").fill("AI 模特穿搭");
     await page.getByLabel("目标数量").click();
     await page.getByText("30 篇", { exact: true }).last().click();
@@ -113,6 +115,7 @@ async function main() {
     assert.equal(collectBody.note_ids.length, 29);
     assert.equal(collectBody.analysis.model_id, 2);
     assert.equal(collectBody.analysis.instruction, "偏向实操教程，不夸张承诺");
+    assert.equal(collectBody.analysis.audience, "电商、服装行业、AI、时尚行业、营销行业、美工、后期从业者");
     assert.equal(collectBody.analysis.variant_count, variantCount);
     assert.ok(pollCount >= 1);
     // The existing search table is hydrated during polling, before any reload.

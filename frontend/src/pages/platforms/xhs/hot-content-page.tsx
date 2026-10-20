@@ -40,8 +40,8 @@ export function HotContentPage() {
   const [modelId, setModelId] = useState<number>();
   const [ideaCount, setIdeaCount] = useState<1 | 3 | 5>(3);
   const [variantCount, setVariantCount] = useState<2 | 3>(3);
-  const [audience, setAudience] = useState("关注 AI 与服装设计的从业者");
-  const [instruction, setInstruction] = useState("");
+  const [audience, setAudience] = useState("电商、服装行业、AI、时尚行业、营销行业、美工、后期从业者");
+  const [instruction, setInstruction] = useState("符合小红书爆款文案的调性，文案尽可能精简、抓眼球");
   const collecting = collection?.status === "running" || collection?.status === "pending";
 
   async function loadAccounts() {

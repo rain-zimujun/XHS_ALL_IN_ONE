@@ -14,7 +14,7 @@ from backend.app.core.database import Base, get_db
 from backend.app.core.security import create_access_token, encrypt_text
 from backend.app.main import app
 from backend.app.models import AccountCookieVersion, ModelConfig, Note, PlatformAccount, PublishJob, Task, User
-from backend.app.schemas.creative import CreativeSearchRequest
+from backend.app.schemas.creative import CreativeAnalysisOptions, CreativeAnalyzeRequest, CreativeSearchRequest
 from backend.app.services import creative_report, creative_runner, creative_service
 from backend.app.services.creative_analysis import get_creative_text_client_factory
 from backend.app.services.creative_analysis import style_excerpt
@@ -247,6 +247,16 @@ def collect_for_analysis(env, options=None):
     return env.client.get(f"/api/xhs/creative/runs/{response.json()['id']}", headers=env.headers).json()
 
 
+def test_analysis_defaults_preserve_explicit_user_values():
+    for options in (CreativeAnalysisOptions(model_id=1), CreativeAnalyzeRequest(model_id=1, collection_task_id=1)):
+        assert options.audience == "电商、服装行业、AI、时尚行业、营销行业、美工、后期从业者"
+        assert options.instruction == "符合小红书爆款文案的调性，文案尽可能精简、抓眼球"
+    custom = CreativeAnalysisOptions(model_id=1, audience="服装设计学生", instruction="只写配色分享")
+    assert custom.audience == "服装设计学生"
+    assert custom.instruction == "只写配色分享"
+    assert CreativeAnalysisOptions(model_id=1, instruction="").instruction == ""
+
+
 @pytest.mark.parametrize("count", [1, 3, 5])
 @pytest.mark.parametrize("variant_count", [2, 3])
 def test_one_click_collects_and_generates_validated_ideas(env, count, variant_count):
@@ -268,6 +278,9 @@ def test_one_click_collects_and_generates_validated_ideas(env, count, variant_co
     assert "只有用户明确要求教程" in FakeTextClient.calls[0]["system_prompt"]
     assert "话题只放 tags" in FakeTextClient.calls[0]["system_prompt"]
     assert "base_url" not in FakeTextClient.calls[0]["user_prompt"]
+    prompt = json.loads(FakeTextClient.calls[0]["user_prompt"])
+    assert prompt["audience"] == "电商、服装行业、AI、时尚行业、营销行业、美工、后期从业者"
+    assert prompt["requirements"] == "符合小红书爆款文案的调性，文案尽可能精简、抓眼球"
     with env.factory() as db:
         assert not db.scalars(select(PublishJob)).all()
 

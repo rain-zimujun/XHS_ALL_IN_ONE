@@ -20,8 +20,8 @@ class CreativeAnalysisOptions(BaseModel):
     model_id: int = Field(gt=0)
     idea_count: Literal[1, 3, 5] = 3
     variant_count: Literal[2, 3] = 3
-    audience: str = Field(default="关注 AI 与服装设计的从业者", max_length=300)
-    instruction: str = Field(default="", max_length=2000)
+    audience: str = Field(default="电商、服装行业、AI、时尚行业、营销行业、美工、后期从业者", max_length=300)
+    instruction: str = Field(default="符合小红书爆款文案的调性，文案尽可能精简、抓眼球", max_length=2000)
 
 
 class CreativeCollectRequest(BaseModel):
