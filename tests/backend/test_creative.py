@@ -123,6 +123,7 @@ def test_search_paginates_deduplicates_and_preserves_filters(env, limit):
     assert len(notes) == len({n["note_id"] for n in notes}) == limit
     assert all(n["raw"] == {} for n in notes)
     assert all(options["sort_type_choice"] == 4 and options["note_time"] == 1 for _, options in FakeAdapter.calls)
+    assert len({options["search_id"] for _, options in FakeAdapter.calls}) == 1
     assert env.client.get(f"/api/xhs/creative/runs/{run['id']}", headers=env.other_headers).status_code == 404
     assert env.client.get("/api/xhs/creative/runs", headers=env.other_headers).json()["items"] == []
 
@@ -396,3 +397,43 @@ def test_export_failure_does_not_lose_analysis_and_can_be_retried(env, monkeypat
 def test_export_rejects_runs_without_analysis(env):
     result = collect_for_analysis(env)
     assert env.client.post(f"/api/xhs/creative/runs/{result['id']}/export", headers=env.headers).status_code == 400
+
+
+def test_later_page_exception_preserves_first_page(env, monkeypatch):
+    original = FakeAdapter.search_note
+    def page_failure(self, keyword, **options):
+        if options["page"] > 1:
+            raise TimeoutError("private transport detail")
+        return original(self, keyword, **options)
+    monkeypatch.setattr(FakeAdapter, "search_note", page_failure)
+    response = env.client.post("/api/xhs/creative/search", headers=env.headers, json={
+        "account_id": env.account_id, "keyword": "AI", "limit": 50,
+    })
+    assert response.status_code == 200
+    result = response.json()
+    assert len(result["payload"]["items"]) == 20
+    assert any("实际获得 20 篇" in w for w in result["payload"]["warnings"])
+    assert "private transport detail" not in str(result)
+
+
+def test_generic_task_retry_cannot_leave_creative_task_pending_forever(env):
+    with env.factory() as db:
+        task = Task(user_id=env.user_id, platform="xhs", task_type="creative_collect", status="failed", payload={})
+        db.add(task); db.commit()
+        task_id = task.id
+    assert env.client.post(f"/api/tasks/{task_id}/retry", headers=env.headers).status_code == 400
+    with env.factory() as db:
+        assert db.get(Task, task_id).status == "failed"
+
+
+def test_login_challenge_stops_collection_without_calling_model(env, monkeypatch):
+    calls = []
+    def challenge(_self, url):
+        calls.append(url)
+        return False, "请登录完成验证码验证", {}
+    monkeypatch.setattr(FakeAdapter, "get_note_info", challenge)
+    result = collect_for_analysis(env, {"model_id": env.model_id})
+    assert result["status"] == "failed"
+    assert len(calls) == 1
+    assert "重新验证" in result["payload"]["error"]
+    assert not FakeTextClient.calls

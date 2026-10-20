@@ -43,6 +43,9 @@ def search(
     db.commit()
     try:
         items, warnings = search_samples(adapter_factory(cookies), payload)
+        db.refresh(task)
+        if task.status == "cancelled":
+            return serialize_task(task)
         task.payload = {**task.payload, "items": items, "warnings": warnings}
         task.status = "completed"
         task.progress = 100

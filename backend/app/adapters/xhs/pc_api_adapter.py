@@ -26,6 +26,7 @@ class XhsPcApiAdapter:
         note_range: int = 0,
         pos_distance: int = 0,
         geo: str = "",
+        search_id: str | None = None,
     ) -> Any:
         with direct_xhs_request_env():
             return self._api().search_note(
@@ -37,6 +38,7 @@ class XhsPcApiAdapter:
                 note_range=note_range,
                 pos_distance=pos_distance,
                 geo=geo,
+                search_id=search_id,
             )
 
     def get_note_info(self, url: str) -> Any:

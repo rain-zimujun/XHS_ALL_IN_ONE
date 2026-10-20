@@ -17,6 +17,7 @@ const timeOptions = [
   { value: 0, label: "不限时间" }, { value: 1, label: "一天内" },
   { value: 2, label: "一周内" }, { value: 3, label: "半年内" },
 ];
+const statusNames: Record<string, string> = { pending: "等待中", running: "进行中", completed: "已完成", failed: "失败", cancelled: "已停止" };
 
 export function HotContentPage() {
   const [accounts, setAccounts] = useState<PlatformAccount[]>([]);
@@ -114,6 +115,13 @@ export function HotContentPage() {
   async function openHistory(id: number) {
     try {
       const item = await fetchCreativeRun(id);
+      const savedSearch = item.payload.search;
+      setAccountId(savedSearch.account_id); setKeyword(savedSearch.keyword); setLimit(savedSearch.limit);
+      setSort(savedSearch.sort_type_choice); setNoteTime(savedSearch.note_time); setNoteType(savedSearch.note_type);
+      if (item.payload.analysis) {
+        setModelId(item.payload.analysis.model_id); setIdeaCount(item.payload.analysis.idea_count);
+        setAudience(item.payload.analysis.audience); setInstruction(item.payload.analysis.instruction);
+      }
       if (item.task_type === "creative_search") { setCollection(null); setRun(item); setSelected((item.payload.items || []).map(n => n.note_id)); }
       else { setRun(null); setSelected([]); setCollection(item); }
     } catch { setError("历史任务加载失败。"); }
@@ -182,7 +190,7 @@ export function HotContentPage() {
         </Space>
       </Card>
       <Card title="3. AI 创作设置" extra={<Button onClick={() => void loadModels()} icon={<ReloadOutlined />}>刷新模型</Button>}>
-        {!models.length && <Alert type="info" title="先在模型配置中添加文字模型" description="使用已有的文字模型 API 配置；只生成文案和图片提示词，不调用生图接口。" style={{ marginBottom: 16 }} />}
+        {!models.length && <Alert type="info" title="先添加文字模型" description={<span>前往 <Link to="/models">模型配置</Link> 添加文字模型 API；只生成文案和图片提示词，不调用生图接口。</span>} style={{ marginBottom: 16 }} />}
         <Form layout="vertical" disabled={starting || collecting || searching}>
           <Row gutter={16}>
             <Col xs={24} md={12}><Form.Item label="文字模型"><Select aria-label="文字模型" value={modelId} onChange={setModelId} placeholder="选择文字模型" options={models.map(m => ({ value: m.id, label: `${m.name} · ${m.model_name}`, disabled: !m.has_api_key || !m.base_url }))} /></Form.Item></Col>
@@ -197,8 +205,8 @@ export function HotContentPage() {
         </Form>
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>点击生成会将样本文字发送给所选模型服务，按其规则计费；格式校验失败最多重试一次。刷新页面后可从历史任务继续查看，不会自动发布。停止任务无法撤回已发出的模型请求。</Paragraph>
       </Card>
-      {collection && <Card title={`创作任务 #${collection.id}`} extra={collecting && <Button onClick={() => void stopTask()}>停止任务</Button>}>
-        <Text>{collection.payload.stage || collection.status}</Text>
+      {collection && <Card title={`创作任务 #${collection.id} · ${collection.payload.search.keyword}`} extra={collecting && <Button onClick={() => void stopTask()}>停止任务</Button>}>
+        <Text>{collection.payload.stage || statusNames[collection.status] || collection.status}</Text>
         <Progress percent={collection.progress} status={collection.status === "failed" ? "exception" : collecting ? "active" : "normal"} />
         <Paragraph>已保存 {collection.payload.sources?.length || 0} 篇正文，失败 {collection.payload.failures?.length || 0} 篇。</Paragraph>
         {collection.payload.error && <Alert type="error" title={collection.payload.error} />}
@@ -206,7 +214,7 @@ export function HotContentPage() {
       </Card>}
       {collection?.payload.result && <CreativeResults key={collection.id} run={collection} onUpdate={setCollection} />}
       <Card title="历史任务" extra={<Button onClick={() => void loadHistory()} icon={<ReloadOutlined />}>刷新</Button>}>
-        <Space wrap>{history.map(item => <Button key={item.id} disabled={collecting || starting || searching} onClick={() => void openHistory(item.id)}>#{item.id} {item.keyword} · {item.task_type === "creative_search" ? "搜索" : item.task_type === "creative_analysis" ? "分析" : "采集/创作"} · {item.status}</Button>)}</Space>
+        <Space wrap>{history.map(item => <Button key={item.id} disabled={collecting || starting || searching} onClick={() => void openHistory(item.id)}>#{item.id} {item.keyword} · {item.task_type === "creative_search" ? "搜索" : item.task_type === "creative_analysis" ? "分析" : "采集/创作"} · {statusNames[item.status] || item.status}</Button>)}</Space>
         {!history.length && <Text type="secondary">完成搜索或采集后，会保留历史记录。</Text>}
       </Card>
     </Space>

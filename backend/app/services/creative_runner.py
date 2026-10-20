@@ -92,6 +92,7 @@ def collect_samples(task_id: int, session_factory, adapter_factory, client_facto
                 checkpoint(db, task, stage=f"采集中 {i + 1}/{len(candidates)}")
                 if i:
                     time.sleep(1)
+                    checkpoint(db, task)
                 authentication_failed = False
                 try:
                     success, message, raw = adapter.get_note_info(candidate["note_url"])

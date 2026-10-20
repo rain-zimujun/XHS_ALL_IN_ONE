@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 from backend.app.api.platforms.xhs.crawl import _data_items
 from backend.app.api.platforms.xhs.pc import _normalize_search_item
 from backend.app.schemas.creative import CreativeSearchRequest
+from xhs_utils.xhs_pc.params import generate_search_id
 
 
 def valid_note_url(url: str) -> bool:
@@ -22,13 +23,21 @@ def search_samples(adapter, request: CreativeSearchRequest) -> tuple[list[dict],
     items: list[dict] = []
     seen: set[str] = set()
     warnings: list[str] = []
+    search_id = generate_search_id()
     for page in range(1, 6):
         if page > 1:
             time.sleep(1)
-        success, _, raw = adapter.search_note(
-            request.keyword, page=page, sort_type_choice=request.sort_type_choice,
-            note_type=request.note_type, note_time=request.note_time,
-        )
+        try:
+            success, _, raw = adapter.search_note(
+                request.keyword, page=page, sort_type_choice=request.sort_type_choice,
+                note_type=request.note_type, note_time=request.note_time,
+                search_id=search_id,
+            )
+        except Exception:
+            if not items:
+                raise
+            warnings.append("后续搜索页请求异常，已保留成功获得的结果；可稍后重新搜索。")
+            break
         if not success:
             if not items:
                 raise ValueError("搜索失败，请检查小红书账号状态或稍后重试。")
@@ -36,6 +45,9 @@ def search_samples(adapter, request: CreativeSearchRequest) -> tuple[list[dict],
             break
         previous_count = len(items)
         for raw_item in _data_items(raw):
+            # Search may also return suggestions or user cards rather than notes.
+            if raw_item.get("model_type") in ("hot_query", "query", "user", "ads"):
+                continue
             note = _normalize_search_item(raw_item)
             note_id = str(note["note_id"])
             if not note_id or note_id in seen or not valid_note_url(note["note_url"]):

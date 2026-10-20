@@ -159,6 +159,8 @@ def retry_task(
     db: Session = Depends(get_db),
 ):
     task = _get_owned_task(db, current_user, task_id)
+    if task.task_type.startswith("creative_"):
+        raise HTTPException(400, "请在热点创作页面重新搜索、采集或使用已保存的正文重新生成。")
     if task.status in {"failed", "exhausted"}:
         task.status = "pending"
         task.progress = 0
