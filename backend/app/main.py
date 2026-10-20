@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.app.api import accounts, ai, auth, auto_tasks, drafts, files, keyword_groups, login_sessions, model_configs, notes, notifications, publish, tags, tasks
 from backend.app.api.platforms import registry
-from backend.app.api.platforms.xhs import analytics, crawl, creator, monitoring, pc
+from backend.app.api.platforms.xhs import analytics, crawl, creator, creative, monitoring, pc
 from backend.app.core.config import get_settings
 from backend.app.core.database import init_db
 from backend.app.services.scheduler_service import run_due_auto_tasks, shutdown_due_publish_scheduler, start_due_publish_scheduler
@@ -64,6 +64,7 @@ def create_app() -> FastAPI:
     app.include_router(pc.router, prefix="/api")
     app.include_router(creator.router, prefix="/api")
     app.include_router(crawl.router, prefix="/api")
+    app.include_router(creative.router, prefix="/api")
     app.include_router(monitoring.router, prefix="/api")
     app.include_router(auto_tasks.router, prefix="/api")
 

@@ -54,6 +54,7 @@ const { Title, Text } = Typography;
 const mainNavItems: MenuProps["items"] = [
   { key: "/platforms/xhs/dashboard", icon: <DashboardOutlined />, label: "总览" },
   { key: "/platforms/xhs/accounts", icon: <SafetyCertificateOutlined />, label: "账号矩阵" },
+  { key: "/platforms/xhs/hot-content", icon: <RobotOutlined />, label: "热点创作" },
   { key: "/platforms/xhs/discovery", icon: <SearchOutlined />, label: "笔记发现" },
   { key: "/platforms/xhs/crawler", icon: <CloudDownloadOutlined />, label: "数据抓取" },
   { key: "/platforms/xhs/keywords", icon: <KeyOutlined />, label: "关键词组" },

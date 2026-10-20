@@ -2,6 +2,7 @@ import axios from "axios";
 import { message } from "antd";
 
 import { fallbackPlatforms } from "./platforms";
+import type { CreativeSearch, CreativeRun, CreativeHistoryItem } from "../types/creative";
 import type {
   AuthPayload,
   AutoTask,
@@ -81,6 +82,18 @@ const http = axios.create({
   baseURL: "/api",
   timeout: 120000,
 });
+
+export async function searchCreativeNotes(payload: CreativeSearch): Promise<CreativeRun> {
+  return (await http.post<CreativeRun>("/xhs/creative/search", payload, { timeout: 240000 })).data;
+}
+
+export async function fetchCreativeRun(id: number): Promise<CreativeRun> {
+  return (await http.get<CreativeRun>(`/xhs/creative/runs/${id}`)).data;
+}
+
+export async function fetchCreativeHistory(): Promise<CreativeHistoryItem[]> {
+  return (await http.get<{ items: CreativeHistoryItem[] }>("/xhs/creative/runs")).data.items;
+}
 
 const REFRESH_TOKEN_KEY = "spider_xhs_refresh_token";
 let accessToken: string | null = null;
