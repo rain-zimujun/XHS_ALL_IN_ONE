@@ -46,7 +46,8 @@ def fail_task(db, task, exc, message):
     db.refresh(task)
     if task.status != "cancelled":
         task.status = "failed"
-        task.payload = {**task.payload, "error": str(exc) if isinstance(exc, CreativeError) else message}
+        task.error_type = exc.code if isinstance(exc, CreativeError) else "creative_failed"
+        task.payload = {**task.payload, "stage": "任务失败", "error": str(exc) if isinstance(exc, CreativeError) else message}
     task.finished_at = shanghai_now()
     db.commit()
 

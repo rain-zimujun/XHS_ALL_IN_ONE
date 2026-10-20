@@ -29,7 +29,7 @@ async function main() {
         const items = Array.from({ length: searchBody.limit }, (_, i) => ({
           note_id: `note-${i}`, note_url: `https://www.xiaohongshu.com/explore/note-${i}`,
           title: `服装设计样本 ${i + 1}`, content: "完整的测试正文", author_name: "模拟作者",
-          cover_url: "", likes: 100 + i, collects: 50, comments: 10, timestamp: 1792400000,
+          cover_url: "", likes: 100 + i, collects: 50, comments: 10, timestamp: 0,
         }));
         searchRun = makeRun(101, "creative_search", { search: searchBody, items, warnings: [] });
         return reply(searchRun);
@@ -41,7 +41,9 @@ async function main() {
       }
       if (path === "/api/xhs/creative/runs/102") {
         pollCount++;
-        const sources = searchRun.payload.items.filter(n => collectBody.note_ids.includes(n.note_id));
+        const sources = searchRun.payload.items.filter(n => collectBody.note_ids.includes(n.note_id)).map((n, i) => ({
+          ...n, timestamp: i === 2 ? 0 : i % 2 ? 1792306914 : 1792306914000, captured_at: "2026-10-20T10:00:00",
+        }));
         collectedRun = makeRun(102, "creative_collect", {
           search: searchBody, analysis: collectBody.analysis, sources, stage: "创作方案已生成",
           result: { summary: "多篇样本关注 AI 服装设计流程", patterns: ["拆解步骤", "对比方案"],
@@ -73,6 +75,7 @@ async function main() {
     await page.getByText("最多收藏", { exact: true }).last().click();
     await page.getByRole("button", { name: /搜索 30 篇内容/ }).click();
     await page.getByText("已选 30 / 30 篇", { exact: true }).waitFor();
+    assert.ok((await page.locator('tr[data-row-key="note-1"]').innerText()).includes("待采集补全"));
     assert.equal(searchBody.sort_type_choice, 4);
     assert.equal(searchBody.keyword, "AI 模特穿搭");
     assert.equal(searchBody.limit, 30);
@@ -85,6 +88,11 @@ async function main() {
     assert.equal(collectBody.analysis.model_id, 2);
     assert.equal(collectBody.analysis.instruction, "偏向实操教程，不夸张承诺");
     assert.ok(pollCount >= 1);
+    // The existing search table is hydrated during polling, before any reload.
+    assert.ok((await page.locator('tr[data-row-key="note-1"]').innerText()).includes("2026/10/18"));
+    assert.ok((await page.locator('tr[data-row-key="note-2"]').innerText()).includes("2026/10/18"));
+    assert.ok((await page.locator('tr[data-row-key="note-3"]').innerText()).includes("详情未提供时间"));
+    assert.ok((await page.locator('tr[data-row-key="note-0"]').innerText()).includes("待采集补全"));
     assert.equal(await page.getByText("生图提示词", { exact: true }).count(), 3);
     const downloadPromise = page.waitForEvent("download");
     await page.getByRole("button", { name: "下载 HTML 阅读版", exact: true }).click();
@@ -95,12 +103,14 @@ async function main() {
     assert.equal(await page.getByText("生图提示词", { exact: true }).count(), 3);
     assert.equal(await page.getByLabel("搜索关键词").inputValue(), "AI 模特穿搭");
     assert.equal(await page.getByLabel("创作要求").inputValue(), "偏向实操教程，不夸张承诺");
+    assert.ok((await page.locator('tr[data-row-key="note-1"]').innerText()).includes("2026/10/18"));
+    assert.equal(await page.locator("tbody .ant-checkbox-input").count(), 0);
     if (process.env.XHS_TEST_SCREENSHOT) {
       await page.getByTestId("creative-results").scrollIntoViewIfNeeded();
       await page.screenshot({ path: process.env.XHS_TEST_SCREENSHOT, fullPage: true });
     }
     assert.deepEqual(errors, []);
-    console.log("浏览器验证通过：筛选 30 篇、取消勾选、一键采集生成、3 套方案与提示词、报告下载、刷新后恢复历史。全部使用模拟接口。");
+    console.log("浏览器验证通过：筛选 30 篇、取消勾选、一键生成、发布时间回填、秒/毫秒时间、报告下载、刷新恢复已采集样本。全部使用模拟接口。");
   } finally {
     await browser.close();
   }

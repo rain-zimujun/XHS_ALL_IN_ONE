@@ -2,9 +2,11 @@ import json
 from types import SimpleNamespace
 
 import pytest
+import requests
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
+from urllib3.exceptions import ReadTimeoutError
 
 from backend.app.api.platforms.xhs.pc import get_xhs_pc_api_adapter_factory
 from backend.app.api import files as files_api
@@ -16,6 +18,7 @@ from backend.app.schemas.creative import CreativeSearchRequest
 from backend.app.services import creative_report, creative_runner, creative_service
 from backend.app.services.creative_analysis import get_creative_text_client_factory
 from backend.app.services.creative_runner import recover_interrupted_runs
+from backend.app.services.ai_service import OpenAICompatibleTextClient
 
 
 def valid_analysis(count=1, ids=None):
@@ -64,6 +67,7 @@ class FakeAdapter:
         note_id = url.rsplit("/", 1)[-1]
         return True, "", {"data": {"items": [{"id": note_id, "note_card": {
             "title": f"AI 服装案例 {note_id}", "desc": "这是一篇完整正文，介绍服装设计流程与 AI 试衣效果。",
+            "time": 1792306914000,
             "interact_info": {"liked_count": 120, "collected_count": 60},
         }}]}}
 
@@ -437,3 +441,123 @@ def test_login_challenge_stops_collection_without_calling_model(env, monkeypatch
     assert len(calls) == 1
     assert "重新验证" in result["payload"]["error"]
     assert not FakeTextClient.calls
+
+
+def model_response(content=None, status=200):
+    response = requests.Response()
+    response.status_code = status
+    response.encoding = "utf-8"
+    response._content = json.dumps({"choices": [{"message": {"content": content or json.dumps(valid_analysis())}}]}).encode("utf-8")
+    return response
+
+
+def test_creative_request_uses_three_minute_read_timeout_and_allows_slow_provider(env, monkeypatch):
+    calls = []
+    def slow_provider(_url, **kwargs):
+        calls.append(kwargs)
+        timeout = kwargs["timeout"]
+        read_timeout = timeout[1] if isinstance(timeout, tuple) else timeout
+        # Simulate a 90-second provider without waiting or making a billable call.
+        if read_timeout < 90:
+            raise requests.ReadTimeout("fixture-key-private")
+        return model_response()
+    monkeypatch.setattr("backend.app.services.ai_service.requests.post", slow_provider)
+    app.dependency_overrides[get_creative_text_client_factory] = lambda: OpenAICompatibleTextClient
+    result = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": 1})
+    assert result["status"] == "completed"
+    assert len(calls) == 1
+    assert calls[0]["timeout"] == (10, 180)
+    assert len(result["payload"]["result"]["ideas"]) == 1
+
+
+def test_other_text_workflows_keep_their_existing_timeout(monkeypatch):
+    calls = []
+    def post(_url, **kwargs):
+        calls.append(kwargs)
+        return model_response("普通文本")
+    monkeypatch.setattr("backend.app.services.ai_service.requests.post", post)
+    result = OpenAICompatibleTextClient()._complete(
+        model_config=SimpleNamespace(base_url="https://example.invalid/v1", model_name="mock"),
+        api_key="fixture", system_prompt="system", user_prompt="user",
+    )
+    assert result == "普通文本"
+    assert calls[0]["timeout"] == 60
+
+
+@pytest.mark.parametrize("separate_analysis", [False, True])
+@pytest.mark.parametrize("kind,expected_type,expected_message", [
+    ("read", "ai_read_timeout", "3 分钟 / 180 秒"),
+    ("wrapped_read", "ai_read_timeout", "3 分钟 / 180 秒"),
+    ("connect", "ai_connect_timeout", "10 秒"),
+    ("network", "ai_network_error", "连接中断"),
+    ("http", "ai_http_error", "HTTP 429"),
+    ("html", "ai_response_invalid", "HTTP 200 不代表有效生成结果"),
+])
+def test_transport_failures_are_safe_specific_and_not_retried(env, monkeypatch, separate_analysis, kind, expected_type, expected_message):
+    calls = []
+    def bad_provider(_url, **kwargs):
+        calls.append(kwargs)
+        if kind == "read":
+            raise requests.ReadTimeout("fixture-key-private")
+        if kind == "wrapped_read":
+            raise requests.ConnectionError(ReadTimeoutError(None, "/private", "fixture-key-private"))
+        if kind == "connect":
+            raise requests.ConnectTimeout("fixture-key-private")
+        if kind == "network":
+            raise requests.ConnectionError("fixture-key-private")
+        response = model_response(status=429 if kind == "http" else 200)
+        response._content = b"<!doctype html><html>fixture-key-private</html>"
+        return response
+    monkeypatch.setattr("backend.app.services.ai_service.requests.post", bad_provider)
+    app.dependency_overrides[get_creative_text_client_factory] = lambda: OpenAICompatibleTextClient
+    options = {"model_id": env.model_id, "idea_count": 1}
+    if separate_analysis:
+        collection = collect_for_analysis(env)
+        pending = env.client.post("/api/xhs/creative/analyze", headers=env.headers, json={
+            "collection_task_id": collection["id"], **options,
+        }).json()
+        result = env.client.get(f"/api/xhs/creative/runs/{pending['id']}", headers=env.headers).json()
+    else:
+        result = collect_for_analysis(env, options)
+    assert result["status"] == "failed"
+    assert result["error_type"] == expected_type
+    assert result["payload"]["stage"] == "任务失败"
+    assert expected_message in result["payload"]["error"]
+    assert "fixture-key-private" not in str(result)
+    assert len(result["payload"]["sources"]) == 3
+    assert len(calls) == 1
+
+
+def test_search_history_backfills_existing_detail_times_without_rewriting_snapshot(env):
+    collection = collect_for_analysis(env)
+    parent_id = collection["parent_task_id"]
+    with env.factory() as db:
+        snapshot = db.get(Task, parent_id)
+        assert all(n["timestamp"] == 0 for n in snapshot.payload["items"])
+    result = env.client.get(f"/api/xhs/creative/runs/{parent_id}", headers=env.headers).json()
+    notes = result["payload"]["items"]
+    assert all(n["timestamp"] == 1792306914000 for n in notes[:3])
+    assert all(n["timestamp"] == 0 for n in notes[3:])
+    assert [n["note_id"] for n in notes] == [f"note-{i}" for i in range(20)]
+    # Enrichment also applies to a new search of already-collected notes.
+    assert search_for_collection(env)["payload"]["items"][0]["timestamp"] == 1792306914000
+    with env.factory() as db:
+        assert all(n["timestamp"] == 0 for n in db.get(Task, parent_id).payload["items"])
+
+
+def test_time_backfill_never_uses_another_users_notes_or_overwrites_search_time(env):
+    search = search_for_collection(env)
+    with env.factory() as db:
+        other = db.scalar(select(User).where(User.username == "other-user"))
+        other_account = PlatformAccount(user_id=other.id, platform="xhs", sub_type="pc", nickname="他人账号", external_user_id="other")
+        db.add(other_account); db.flush()
+        db.add(Note(user_id=other.id, platform_account_id=other_account.id, platform="xhs", note_id="note-0", raw_json={"timestamp": 1792306914000}))
+        db.add(Note(user_id=env.user_id, platform_account_id=env.account_id, platform="xhs", note_id="note-1", raw_json={"timestamp": 1792306914000}))
+        task = db.get(Task, search["id"])
+        items = [dict(n) for n in task.payload["items"]]
+        items[1]["timestamp"] = 1792200000000
+        task.payload = {**task.payload, "items": items}
+        db.commit()
+    result = env.client.get(f"/api/xhs/creative/runs/{search['id']}", headers=env.headers).json()
+    assert result["payload"]["items"][0]["timestamp"] == 0
+    assert result["payload"]["items"][1]["timestamp"] == 1792200000000

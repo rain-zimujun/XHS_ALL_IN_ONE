@@ -132,6 +132,7 @@ class OpenAICompatibleTextClient:
         system_prompt: str,
         user_prompt: str,
         temperature: float = 0.7,
+        timeout: float | tuple[float, float] = 60,
     ) -> str:
         if not model_config.base_url:
             raise ValueError("Text model base_url is required")
@@ -152,7 +153,7 @@ class OpenAICompatibleTextClient:
                 ],
                 "temperature": temperature,
             },
-            timeout=60,
+            timeout=timeout,
         )
         response.raise_for_status()
         payload = _load_json_response(response)

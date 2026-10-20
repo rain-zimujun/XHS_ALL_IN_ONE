@@ -3,17 +3,59 @@ from __future__ import annotations
 
 import json
 
+import requests
 from sqlalchemy import select
+from urllib3.exceptions import ReadTimeoutError
 
 from backend.app.core.security import decrypt_text
 from backend.app.models import ModelConfig
 from backend.app.schemas.creative import CreativeAnalysisOptions, CreativeAnalysisResult
 from backend.app.services.ai_service import OpenAICompatibleTextClient
 
+AI_CONNECT_TIMEOUT_SECONDS = 10
+AI_READ_TIMEOUT_SECONDS = 180
+
 
 class CreativeError(Exception):
     """Only controlled, user-safe messages may use this exception."""
 
+    def __init__(self, message: str, code: str = "creative_error"):
+        super().__init__(message)
+        self.code = code
+
+
+def is_read_timeout(exc: Exception) -> bool:
+    # requests can wrap a body-read timeout in ConnectionError after HTTP 200.
+    pending, seen = [exc], set()
+    while pending:
+        current = pending.pop()
+        if id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, (requests.ReadTimeout, ReadTimeoutError)):
+            return True
+        pending.extend(item for item in (current.__cause__, current.__context__, *current.args) if isinstance(item, Exception))
+    return False
+
+
+def request_analysis(client, **kwargs) -> str:
+    try:
+        return client._complete(**kwargs, timeout=(AI_CONNECT_TIMEOUT_SECONDS, AI_READ_TIMEOUT_SECONDS))
+    except requests.ConnectTimeout as exc:
+        raise CreativeError("连接模型服务超时（10 秒），请检查网络或中转服务。采集数据已保留。", "ai_connect_timeout") from exc
+    except (requests.Timeout, requests.ConnectionError) as exc:
+        if is_read_timeout(exc):
+            raise CreativeError(
+                "等待模型响应超时（3 分钟 / 180 秒）。中转站仍可能完成请求并计费，请先核对其记录，避免立即重复提交；采集数据已保留。",
+                "ai_read_timeout",
+            ) from exc
+        raise CreativeError("模型请求超时或连接中断，未收到完整结果。请核对网络和中转记录；采集数据已保留。", "ai_network_error") from exc
+    except requests.HTTPError as exc:
+        status = exc.response.status_code if exc.response is not None else None
+        label = f"（HTTP {status}）" if isinstance(status, int) else ""
+        raise CreativeError(f"模型服务返回错误{label}，请检查模型权限、额度或服务状态；采集数据已保留。", "ai_http_error") from exc
+    except ValueError as exc:
+        raise CreativeError("模型服务已响应，但返回格式或正文无法解析。请核对 Base URL 和接口兼容性；HTTP 200 不代表有效生成结果。采集数据已保留。", "ai_response_invalid") from exc
 
 def get_creative_text_client_factory():
     return OpenAICompatibleTextClient
@@ -62,8 +104,9 @@ def analyze_sources(db, user_id: int, search: dict, sources: list[dict], options
     client = client_factory()
     source_ids = {n["note_id"] for n in sources}
     for attempt in range(2):
-        on_checkpoint(f"AI 综合分析中（第 {attempt + 1}/2 次）")
-        raw = client._complete(
+        on_checkpoint(f"AI 综合分析中（第 {attempt + 1}/2 次，读取超时 3 分钟）")
+        raw = request_analysis(
+            client,
             model_config=model, api_key=api_key, system_prompt=system_prompt,
             user_prompt=user_prompt + ("\n上次输出未通过结构或引用校验。请严格遵守 JSON schema、方案数量和来源 ID。" if attempt else ""),
             temperature=0.6,

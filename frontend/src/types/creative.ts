@@ -13,6 +13,7 @@ export type CreativeRun = Omit<TaskRecord, "payload"> & {
   payload: {
     search: CreativeSearch;
     items?: XhsSearchNote[];
+    selected_notes?: XhsSearchNote[];
     warnings?: string[];
     error?: string;
     stage?: string;

@@ -84,6 +84,7 @@ export type XhsSearchNote = {
   shares: number;
   type: string;
   timestamp?: number | string;
+  captured_at?: string;
   image_urls?: string[];
   video_url?: string;
   video_addr?: string;

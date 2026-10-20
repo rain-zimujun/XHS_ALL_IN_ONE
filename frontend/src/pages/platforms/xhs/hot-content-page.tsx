@@ -7,6 +7,7 @@ import { analyzeCreativeCollection, cancelCreativeRun, collectCreativeNotes, fet
 import type { ModelConfig, PlatformAccount, XhsSearchNote } from "../../../types";
 import type { CreativeAnalysisOptions, CreativeHistoryItem, CreativeRun, CreativeSearch } from "../../../types/creative";
 import { CreativeResults } from "./creative-results";
+import { creativeSamples, formatPublicationTime } from "../../../lib/creative-samples";
 
 const { Title, Text, Paragraph } = Typography;
 const sortOptions = [
@@ -143,7 +144,7 @@ export function HotContentPage() {
     finally { setSearching(false); }
   }
 
-  const notes = run?.payload.items || [];
+  const notes = creativeSamples(run, collection);
   return (
     <Space orientation="vertical" size={20} style={{ width: "100%" }}>
       <div>
@@ -168,24 +169,25 @@ export function HotContentPage() {
           </Space>
         </Form>
       </Card>
-      <Card title="2. 选取分析样本" extra={<Tag color="blue">已选 {selected.length} / {notes.length} 篇</Tag>}>
+      <Card title={run || !collection ? "2. 选取分析样本" : "2. 已采集样本"} extra={<Tag color="blue">{run || !collection ? `已选 ${selected.length} / ${notes.length} 篇` : `已采集 ${collection.payload.sources?.length || 0} / ${notes.length} 篇`}</Tag>}>
         {run && <Paragraph type="secondary">本批结果：{run.payload.search.keyword} · {sortOptions.find(o => o.value === run.payload.search.sort_type_choice)?.label} · {timeOptions.find(o => o.value === run.payload.search.note_time)?.label}</Paragraph>}
+        <Paragraph type="secondary">搜索接口可能不提供发布时间；采集详情后会自动补全。缺失时间不代表采集失败。</Paragraph>
         {run?.payload.warnings?.map(w => <Alert key={w} type="warning" title={w} style={{ marginBottom: 12 }} />)}
         <Table<XhsSearchNote>
           rowKey="note_id" dataSource={notes} loading={searching} scroll={{ x: 760 }}
           pagination={{ pageSize: 10, showSizeChanger: false }}
           locale={{ emptyText: <Empty description={searching ? "正在搜索…" : "输入关键词搜索后，内容会出现在这里"} /> }}
-          rowSelection={{ selectedRowKeys: selected, onChange: keys => setSelected(keys.map(String)), getCheckboxProps: () => ({ disabled: collecting || starting }) }}
+          rowSelection={run ? { selectedRowKeys: selected, onChange: keys => setSelected(keys.map(String)), getCheckboxProps: () => ({ disabled: collecting || starting }) } : undefined}
           columns={[
             { title: "笔记", key: "note", render: (_, note) => <Space align="start">{note.cover_url && <img src={note.cover_url} referrerPolicy="no-referrer" alt="笔记封面" style={{ width: 48, height: 64, objectFit: "cover", borderRadius: 4 }} />}<div><a href={note.note_url} target="_blank" rel="noreferrer">{note.title || "无标题笔记"}</a><br /><Text type="secondary">{note.author_name}</Text></div></Space> },
             { title: "点赞", dataIndex: "likes", width: 90 },
             { title: "收藏", dataIndex: "collects", width: 90 },
             { title: "评论", dataIndex: "comments", width: 90 },
-            { title: "发布时间", key: "time", width: 130, render: (_, note) => { const n = Number(note.timestamp); return n > 0 && Number.isFinite(n) ? new Date(n > 1e12 ? n : n * 1000).toLocaleDateString("zh-CN") : "暂未返回"; } },
+            { title: "发布时间", key: "time", width: 150, render: (_, note) => formatPublicationTime(note) },
           ]}
         />
         <Space wrap>
-          <Button onClick={() => void startCollection()} loading={starting} disabled={searching || collecting || selected.length < 3}>仅采集选中的 {selected.length} 篇正文</Button>
+          {run && <Button onClick={() => void startCollection()} loading={starting} disabled={searching || collecting || selected.length < 3}>仅采集选中的 {selected.length} 篇正文</Button>}
           <Text type="secondary">至少选 3 篇用于综合分析；采集正文和互动数据，图片由你们自行准备。</Text>
         </Space>
       </Card>
@@ -203,10 +205,10 @@ export function HotContentPage() {
             {collection && (collection.payload.sources?.length || 0) >= 3 && <Button onClick={() => void analyzeAgain()} disabled={!modelId || collecting || searching} loading={starting}>使用已采集正文重新生成</Button>}
           </Space>
         </Form>
-        <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>点击生成会将样本文字发送给所选模型服务，按其规则计费；格式校验失败最多重试一次。刷新页面后可从历史任务继续查看，不会自动发布。停止任务无法撤回已发出的模型请求。</Paragraph>
+        <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>点击生成会将样本文字发送给所选模型服务，按其规则计费；每次模型请求的读取超时为 3 分钟，超时不会自动重试，格式校验失败最多重试一次。刷新页面后可从历史任务继续查看，不会自动发布。停止任务无法撤回已发出的模型请求。</Paragraph>
       </Card>
       {collection && <Card title={`创作任务 #${collection.id} · ${collection.payload.search.keyword}`} extra={collecting && <Button onClick={() => void stopTask()}>停止任务</Button>}>
-        <Text>{collection.payload.stage || statusNames[collection.status] || collection.status}</Text>
+        <Text>{collection.status === "failed" || collection.status === "cancelled" ? statusNames[collection.status] : collection.payload.stage || statusNames[collection.status] || collection.status}</Text>
         <Progress percent={collection.progress} status={collection.status === "failed" ? "exception" : collecting ? "active" : "normal"} />
         <Paragraph>已保存 {collection.payload.sources?.length || 0} 篇正文，失败 {collection.payload.failures?.length || 0} 篇。</Paragraph>
         {collection.payload.error && <Alert type="error" title={collection.payload.error} />}

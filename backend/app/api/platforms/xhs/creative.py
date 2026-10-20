@@ -9,7 +9,7 @@ from backend.app.api.tasks import serialize_task
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
 from backend.app.core.time import shanghai_now
-from backend.app.models import Task, User
+from backend.app.models import Note, Task, User
 from backend.app.schemas.creative import CreativeAnalyzeRequest, CreativeCollectRequest, CreativeSearchRequest
 from backend.app.services.creative_analysis import CreativeError, get_creative_text_client_factory, owned_text_model
 from backend.app.services.creative_runner import analyze_collection, collect_samples
@@ -17,6 +17,36 @@ from backend.app.services.creative_report import export_report
 from backend.app.services.creative_service import search_samples
 
 router = APIRouter(prefix="/xhs/creative", tags=["xhs-creative"])
+
+
+def has_timestamp(value) -> bool:
+    try:
+        return not isinstance(value, bool) and 0 < float(value) <= 8640000000000000
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def serialize_creative_task(db: Session, task: Task) -> dict:
+    result = serialize_task(task)
+    if task.task_type != "creative_search":
+        return result
+    items = (task.payload or {}).get("items", [])
+    missing = [n["note_id"] for n in items if not has_timestamp(n.get("timestamp"))]
+    if not missing:
+        return result
+    # Read-through enrichment also repairs the display of existing search history.
+    # Never mutate the saved search snapshot or read another user's notes.
+    saved = dict(db.execute(select(Note.note_id, Note.raw_json).where(
+        Note.user_id == task.user_id, Note.platform == "xhs", Note.note_id.in_(missing),
+    )).all())
+    enriched = []
+    for note in items:
+        detail = saved.get(note["note_id"]) or {}
+        if not has_timestamp(note.get("timestamp")) and has_timestamp(detail.get("timestamp")):
+            note = {**note, "timestamp": detail["timestamp"]}
+        enriched.append(note)
+    result["payload"] = {**result["payload"], "items": enriched}
+    return result
 
 
 def owned_task(db: Session, user: User, task_id: int, task_type: str | None = None) -> Task:
@@ -57,7 +87,7 @@ def search(
         raise HTTPException(502, task.payload["error"]) from exc
     task.finished_at = shanghai_now()
     db.commit()
-    return serialize_task(task)
+    return serialize_creative_task(db, task)
 
 
 @router.get("/runs")
@@ -74,7 +104,7 @@ def history(current_user: User = Depends(get_current_user), db: Session = Depend
 
 @router.get("/runs/{task_id}")
 def detail(task_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    return serialize_task(owned_task(db, current_user, task_id))
+    return serialize_creative_task(db, owned_task(db, current_user, task_id))
 
 
 @router.post("/collect", status_code=202)
