@@ -39,6 +39,7 @@ export function HotContentPage() {
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [modelId, setModelId] = useState<number>();
   const [ideaCount, setIdeaCount] = useState<1 | 3 | 5>(3);
+  const [variantCount, setVariantCount] = useState<2 | 3>(3);
   const [audience, setAudience] = useState("关注 AI 与服装设计的从业者");
   const [instruction, setInstruction] = useState("");
   const collecting = collection?.status === "running" || collection?.status === "pending";
@@ -86,7 +87,7 @@ export function HotContentPage() {
   }, [collection?.id, collecting]);
 
   function analysisOptions(): CreativeAnalysisOptions | undefined {
-    return modelId ? { model_id: modelId, idea_count: ideaCount, audience, instruction } : undefined;
+    return modelId ? { model_id: modelId, idea_count: ideaCount, variant_count: variantCount, audience, instruction } : undefined;
   }
 
   async function startCollection(withAnalysis = false) {
@@ -121,6 +122,7 @@ export function HotContentPage() {
       setSort(savedSearch.sort_type_choice); setNoteTime(savedSearch.note_time); setNoteType(savedSearch.note_type);
       if (item.payload.analysis) {
         setModelId(item.payload.analysis.model_id); setIdeaCount(item.payload.analysis.idea_count);
+        setVariantCount(item.payload.analysis.variant_count || 3);
         setAudience(item.payload.analysis.audience); setInstruction(item.payload.analysis.instruction);
       }
       if (item.task_type === "creative_search") { setCollection(null); setRun(item); setSelected((item.payload.items || []).map(n => n.note_id)); }
@@ -196,15 +198,17 @@ export function HotContentPage() {
         <Form layout="vertical" disabled={starting || collecting || searching}>
           <Row gutter={16}>
             <Col xs={24} md={12}><Form.Item label="文字模型"><Select aria-label="文字模型" value={modelId} onChange={setModelId} placeholder="选择文字模型" options={models.map(m => ({ value: m.id, label: `${m.name} · ${m.model_name}`, disabled: !m.has_api_key || !m.base_url }))} /></Form.Item></Col>
-            <Col xs={24} md={12}><Form.Item label="方案数量"><Select aria-label="方案数量" value={ideaCount} onChange={setIdeaCount} options={[1, 3, 5].map(value => ({ value, label: `${value} 套方案` }))} /></Form.Item></Col>
+            <Col xs={12} md={6}><Form.Item label="标题数量"><Select aria-label="标题数量" value={ideaCount} onChange={setIdeaCount} options={[1, 3, 5].map(value => ({ value, label: `${value} 个标题` }))} /></Form.Item></Col>
+            <Col xs={12} md={6}><Form.Item label="每个标题的文案数"><Select aria-label="每个标题的文案数" value={variantCount} onChange={setVariantCount} options={[2, 3].map(value => ({ value, label: `${value} 个版本` }))} /></Form.Item></Col>
             <Col span={24}><Form.Item label="目标受众"><Input aria-label="目标受众" maxLength={300} value={audience} onChange={e => setAudience(e.target.value)} /></Form.Item></Col>
             <Col span={24}><Form.Item label="创作要求"><Input.TextArea aria-label="创作要求" rows={3} maxLength={2000} value={instruction} onChange={e => setInstruction(e.target.value)} placeholder="例如：面向女装品牌主理人；偏实操教程；避免夸张效果承诺；配图以 3:4 竖图为主。" /></Form.Item></Col>
           </Row>
           <Space wrap>
-            <Button type="primary" onClick={() => void startCollection(true)} loading={starting} disabled={!modelId || !run || selected.length < 3 || collecting || searching}>采集并生成 {ideaCount} 套方案</Button>
+            <Button type="primary" onClick={() => void startCollection(true)} loading={starting} disabled={!modelId || !run || selected.length < 3 || collecting || searching}>采集并生成 {ideaCount} 个标题 × {variantCount} 版文案</Button>
             {collection && (collection.payload.sources?.length || 0) >= 3 && <Button onClick={() => void analyzeAgain()} disabled={!modelId || collecting || searching} loading={starting}>使用已采集正文重新生成</Button>}
           </Space>
         </Form>
+        <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>正文参考本批有效样本的共同语气、开头、分段与互动方式，保持原创。每个标题对应 {variantCount} 版不同文案，每版都有独立配图建议与提示词；共生成 {ideaCount * variantCount} 版，数量越多通常耗时和费用越高。</Paragraph>
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>点击生成会将样本文字发送给所选模型服务，按其规则计费；每次模型请求的读取超时为 3 分钟，超时不会自动重试，格式校验失败最多重试一次。刷新页面后可从历史任务继续查看，不会自动发布。停止任务无法撤回已发出的模型请求。</Paragraph>
       </Card>
       {collection && <Card title={`创作任务 #${collection.id} · ${collection.payload.search.keyword}`} extra={collecting && <Button onClick={() => void stopTask()}>停止任务</Button>}>

@@ -9,8 +9,16 @@ async function main() {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
-    await page.addInitScript(() => localStorage.setItem("spider_xhs_refresh_token", "browser-test-only"));
-    let searchBody, collectBody, searchRun, collectedRun, pollCount = 0;
+    await page.addInitScript(() => {
+      localStorage.setItem("spider_xhs_refresh_token", "browser-test-only");
+      Object.defineProperty(navigator, "clipboard", { value: { writeText: async text => {
+        if (window.__rejectCopy) throw new Error("mock clipboard denied");
+        window.__copiedText = text;
+      } } });
+    });
+    const variantCount = Number(process.env.XHS_TEST_VARIANTS || 3);
+    assert.ok([2, 3].includes(variantCount));
+    let searchBody, collectBody, searchRun, collectedRun, legacyRun, pollCount = 0, collectCalls = 0;
     const makeRun = (id, task_type, payload, status = "completed") => ({
       id, platform: "xhs", task_type, status, progress: status === "completed" ? 100 : 0,
       payload, created_at: "2026-10-20T10:00:00", started_at: null, finished_at: null, parent_task_id: null,
@@ -35,6 +43,7 @@ async function main() {
         return reply(searchRun);
       }
       if (path === "/api/xhs/creative/collect") {
+        collectCalls++;
         collectBody = request.postDataJSON();
         collectedRun = makeRun(102, "creative_collect", { search: searchBody, analysis: collectBody.analysis, stage: "等待采集" }, "pending");
         return reply(collectedRun);
@@ -46,23 +55,36 @@ async function main() {
         }));
         collectedRun = makeRun(102, "creative_collect", {
           search: searchBody, analysis: collectBody.analysis, sources, stage: "创作方案已生成",
-          result: { summary: "多篇样本关注 AI 服装设计流程", patterns: ["拆解步骤", "对比方案"],
+          result: { summary: "多篇样本关注 AI 服装设计流程", patterns: ["拆解步骤", "对比方案"], style_summary: "问题开头、口语短句、分段清晰，结尾邀请讨论。",
             ideas: Array.from({ length: collectBody.analysis.idea_count }, (_, i) => ({
-              title: `AI 服装创作方案 ${i + 1}`, alternative_titles: ["备选一", "备选二", "备选三"],
-              body: "这是原创文案测试结果，图片由用户自行准备。", tags: ["AI服装", "服装设计"],
+              title: `AI 服装创作方案 ${i + 1}`,
               reason: "基于多篇样本的共同特点", source_note_ids: sources.slice(0, 2).map(n => n.note_id),
-              cover_text: "AI 设计流程", image_plan: [{ purpose: "封面", composition: "3:4 竖图，顶部留白", prompt: "fashion sketch, neutral background, 3:4", negative_prompt: "logo, watermark, text" }],
+              variants: Array.from({ length: collectBody.analysis.variant_count }, (_, v) => ({
+                label: ["问题拆解", "步骤清单", "对比讨论"][v], body: `标题 ${i + 1} 的文案 ${v + 1}，图片由用户自行准备。`,
+                tags: [`标题${i + 1}`, `版本${v + 1}`], cover_text: `封面 ${i + 1}-${v + 1}`,
+                image_plan: [{ purpose: "封面", composition: `配图 ${i + 1}-${v + 1}：3:4 竖图，顶部留白`, prompt: `concept ${i + 1}, version ${v + 1}, fashion sketch, 3:4`, negative_prompt: "logo, watermark, text" }],
+              })),
             })) },
-          analysis_metadata: { model_name: "test-model", sample_count: sources.length, excerpt_chars_per_note: 800, disclaimer: "仅供创作参考，不保证流量。" },
+          analysis_metadata: { model_name: "test-model", sample_count: sources.length, excerpt_chars_per_note: 800, excerpt_strategy: "head_and_tail", disclaimer: "仅供创作参考，不保证流量。" },
           report_directory: "/mock/exports", report_files: [
             { file_name: "xhs-report-u1-test.html", download_url: "/api/files/exports/xhs-report-u1-test.html" },
             { file_name: "xhs-report-u1-test.json", download_url: "/api/files/exports/xhs-report-u1-test.json" },
           ],
         });
+        legacyRun = JSON.parse(JSON.stringify(collectedRun));
+        legacyRun.id = 100;
+        delete legacyRun.payload.analysis.variant_count;
+        delete legacyRun.payload.result.style_summary;
+        legacyRun.payload.result.ideas = [{
+          title: "旧版标题", reason: "旧版推荐理由", source_note_ids: sources.slice(0, 2).map(n => n.note_id),
+          ...collectedRun.payload.result.ideas[0].variants[0], body: "旧版正文原样保留，不补造额外版本。", alternative_titles: ["旧备选一", "旧备选二", "旧备选三"],
+        }];
         return reply(collectedRun);
       }
+      if (path === "/api/xhs/creative/runs/100") return reply(legacyRun);
       if (path === "/api/xhs/creative/runs/101") return reply(searchRun);
-      if (path === "/api/xhs/creative/runs") return reply({ items: [collectedRun, searchRun].filter(Boolean).map(run => ({ ...run, keyword: run.payload.search.keyword })) });
+      if (path === "/api/xhs/creative/runs/102/export") return reply(collectedRun);
+      if (path === "/api/xhs/creative/runs") return reply({ items: [collectedRun, searchRun, legacyRun].filter(Boolean).map(run => ({ ...run, keyword: run.payload.search.keyword })) });
       if (path === "/api/files/exports/xhs-report-u1-test.html") return route.fulfill({ contentType: "text/html", body: "<!doctype html><h1>模拟报告</h1>" });
       throw new Error(`未模拟的接口：${request.method()} ${path}`);
     });
@@ -82,25 +104,55 @@ async function main() {
     await page.locator('tr[data-row-key="note-0"] .ant-checkbox-input').uncheck();
     await page.getByText("已选 29 / 30 篇", { exact: true }).waitFor();
     await page.getByLabel("创作要求").fill("偏向实操教程，不夸张承诺");
-    await page.getByRole("button", { name: "采集并生成 3 套方案", exact: true }).click();
+    if (variantCount === 2) {
+      await page.getByLabel("每个标题的文案数").click();
+      await page.getByText("2 个版本", { exact: true }).last().click();
+    }
+    await page.getByRole("button", { name: `采集并生成 3 个标题 × ${variantCount} 版文案`, exact: true }).click();
     await page.getByTestId("creative-results").waitFor();
     assert.equal(collectBody.note_ids.length, 29);
     assert.equal(collectBody.analysis.model_id, 2);
     assert.equal(collectBody.analysis.instruction, "偏向实操教程，不夸张承诺");
+    assert.equal(collectBody.analysis.variant_count, variantCount);
     assert.ok(pollCount >= 1);
     // The existing search table is hydrated during polling, before any reload.
     assert.ok((await page.locator('tr[data-row-key="note-1"]').innerText()).includes("2026/10/18"));
     assert.ok((await page.locator('tr[data-row-key="note-2"]').innerText()).includes("2026/10/18"));
     assert.ok((await page.locator('tr[data-row-key="note-3"]').innerText()).includes("详情未提供时间"));
     assert.ok((await page.locator('tr[data-row-key="note-0"]').innerText()).includes("待采集补全"));
-    assert.equal(await page.getByText("生图提示词", { exact: true }).count(), 3);
+    assert.equal(await page.getByText("生图提示词", { exact: true }).count(), 1);
+    assert.equal(await page.getByRole("tab").count(), variantCount);
+    // Every title/variant pair has its own matching body, image advice, prompt and copy payload.
+    for (let i = 0; i < 3; i++) {
+      await page.getByTestId(`creative-title-${i}`).click();
+      assert.equal(await page.getByTestId(`creative-title-${i}`).getAttribute("aria-pressed"), "true");
+      await page.getByTestId("creative-body").filter({ hasText: `标题 ${i + 1} 的文案 1` }).waitFor();
+      for (let v = 0; v < variantCount; v++) {
+        await page.getByRole("tab", { name: `文案 ${v + 1} · ${["问题拆解", "步骤清单", "对比讨论"][v]}`, exact: true }).click();
+        const variant = collectedRun.payload.result.ideas[i].variants[v];
+        await page.getByTestId("creative-body").filter({ hasText: variant.body }).waitFor();
+        const images = await page.getByTestId("creative-images").innerText();
+        assert.ok(images.includes(variant.image_plan[0].composition));
+        assert.ok(images.includes(variant.image_plan[0].prompt));
+        assert.equal((await page.getByTestId("creative-selected-title").innerText()).trim(), collectedRun.payload.result.ideas[i].title);
+        await page.getByRole("button", { name: "复制完整笔记", exact: true }).click();
+        assert.equal(await page.evaluate(() => window.__copiedText), [collectedRun.payload.result.ideas[i].title, variant.body, variant.tags.map(t => `#${t}`).join(" ")].join("\n\n"));
+      }
+    }
+    // Re-export changes download state only, not the current selection.
+    await page.getByRole("button", { name: "重新导出报告", exact: true }).click();
+    assert.ok((await page.getByTestId("creative-body").innerText()).includes(`标题 3 的文案 ${variantCount}`));
+    await page.getByText("样本分析与文案风格依据", { exact: true }).click();
+    await page.getByText("问题开头、口语短句、分段清晰，结尾邀请讨论。", { exact: true }).waitFor();
     const downloadPromise = page.waitForEvent("download");
     await page.getByRole("button", { name: "下载 HTML 阅读版", exact: true }).click();
     assert.equal((await downloadPromise).suggestedFilename(), "xhs-report-u1-test.html");
     await page.reload();
     await page.getByRole("button", { name: /#102 AI 模特穿搭/ }).click();
     await page.getByTestId("creative-results").waitFor();
-    assert.equal(await page.getByText("生图提示词", { exact: true }).count(), 3);
+    assert.equal(await page.getByText("生图提示词", { exact: true }).count(), 1);
+    assert.equal(await page.getByRole("tab").count(), variantCount);
+    await page.getByText(`${variantCount} 个版本`, { exact: true }).waitFor();
     assert.equal(await page.getByLabel("搜索关键词").inputValue(), "AI 模特穿搭");
     assert.equal(await page.getByLabel("创作要求").inputValue(), "偏向实操教程，不夸张承诺");
     assert.ok((await page.locator('tr[data-row-key="note-1"]').innerText()).includes("2026/10/18"));
@@ -109,8 +161,24 @@ async function main() {
       await page.getByTestId("creative-results").scrollIntoViewIfNeeded();
       await page.screenshot({ path: process.env.XHS_TEST_SCREENSHOT, fullPage: true });
     }
+    // Narrow screens and legacy saved data keep the real content without fake extra choices.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByTestId("creative-title-1").click();
+    await page.getByTestId("creative-body").filter({ hasText: "标题 2 的文案 1" }).waitFor();
+    const bodyBox = await page.getByTestId("creative-body").boundingBox();
+    const imageBox = await page.getByTestId("creative-images").boundingBox();
+    assert.ok(bodyBox && imageBox && imageBox.y > bodyBox.y);
+    await page.setViewportSize({ width: 1440, height: 1000 });
+    await page.getByRole("button", { name: /#100 AI 模特穿搭/ }).click();
+    await page.getByText("这是旧版结果，仅保留原有的 1 版文案和配图。", { exact: true }).waitFor();
+    assert.equal(await page.getByRole("tab").count(), 1);
+    assert.ok((await page.getByTestId("creative-body").innerText()).includes("旧版正文原样保留"));
+    await page.evaluate(() => { window.__rejectCopy = true; });
+    await page.getByRole("button", { name: "复制完整笔记", exact: true }).click();
+    await page.getByText("浏览器未允许复制，请选中正文手动复制。", { exact: true }).waitFor();
+    assert.equal(collectCalls, 1);
     assert.deepEqual(errors, []);
-    console.log("浏览器验证通过：筛选 30 篇、取消勾选、一键生成、发布时间回填、秒/毫秒时间、报告下载、刷新恢复已采集样本。全部使用模拟接口。");
+    console.log(`浏览器验证通过：筛选 30 篇、采集生成、3 个标题 × ${variantCount} 版的正文与配图联动、完整复制、风格依据、时间回填、报告、历史和旧版兼容、窄屏。全部使用模拟接口。`);
   } finally {
     await browser.close();
   }

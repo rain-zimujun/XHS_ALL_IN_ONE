@@ -19,6 +19,7 @@ class CreativeAnalysisOptions(BaseModel):
 
     model_id: int = Field(gt=0)
     idea_count: Literal[1, 3, 5] = 3
+    variant_count: Literal[2, 3] = 3
     audience: str = Field(default="关注 AI 与服装设计的从业者", max_length=300)
     instruction: str = Field(default="", max_length=2000)
 
@@ -45,17 +46,23 @@ class CreativeImagePlan(BaseModel):
     negative_prompt: ShortText
 
 
+class CreativeVariant(BaseModel):
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    label: str = Field(min_length=1, max_length=40, description="该版本的表达角度或写法，需符合样本风格")
+    body: str = Field(min_length=1, max_length=6000)
+    tags: list[ShortText] = Field(min_length=1, max_length=10)
+    cover_text: ShortText
+    image_plan: list[CreativeImagePlan] = Field(min_length=1, max_length=6)
+
+
 class CreativeIdea(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     title: str = Field(min_length=1, max_length=80)
-    alternative_titles: list[ShortText] = Field(min_length=3, max_length=3)
-    body: str = Field(min_length=1, max_length=6000)
-    tags: list[ShortText] = Field(min_length=1, max_length=10)
     reason: ShortText
     source_note_ids: list[ShortText] = Field(min_length=2, max_length=50)
-    cover_text: ShortText
-    image_plan: list[CreativeImagePlan] = Field(min_length=1, max_length=6)
+    variants: list[CreativeVariant] = Field(min_length=2, max_length=3)
 
 
 class CreativeAnalysisResult(BaseModel):
@@ -63,4 +70,5 @@ class CreativeAnalysisResult(BaseModel):
 
     summary: str = Field(min_length=1, max_length=4000)
     patterns: list[ShortText] = Field(min_length=1, max_length=8)
+    style_summary: str = Field(min_length=1, max_length=2000, description="从本批正文归纳的开头、语气、分段、表情、话题和互动结尾特点")
     ideas: list[CreativeIdea] = Field(min_length=1, max_length=5)

@@ -17,22 +17,28 @@ from backend.app.models import AccountCookieVersion, ModelConfig, Note, Platform
 from backend.app.schemas.creative import CreativeSearchRequest
 from backend.app.services import creative_report, creative_runner, creative_service
 from backend.app.services.creative_analysis import get_creative_text_client_factory
+from backend.app.services.creative_analysis import style_excerpt
 from backend.app.services.creative_runner import recover_interrupted_runs
 from backend.app.services.ai_service import OpenAICompatibleTextClient
 
 
-def valid_analysis(count=1, ids=None):
+def valid_analysis(count=1, ids=None, variant_count=3):
     return {
         "summary": "样本主要关注 AI 服装流程，不能代表全站趋势。", "patterns": ["步骤拆解", "效果对比"],
+        "style_summary": "本批样本多用问题开头、口语短句和分步骤短段落，结尾邀请讨论；不编造亲测经历。",
         "ideas": [{
-            "title": f"AI 服装设计流程 {i + 1}", "alternative_titles": ["从草图到服装", "AI 试衣流程", "设计师的 AI 工具箱"],
-            "body": "先准备服装草图，再比较不同方案。具体效果需自行验证。", "tags": ["AI服装", "服装设计"],
+            "title": f"AI 服装设计流程 {i + 1}",
             "reason": "多篇样本都关注可重复的设计步骤。", "source_note_ids": ids or ["note-0", "note-1"],
-            "cover_text": "AI 服装设计流程", "image_plan": [{
-                "purpose": "封面对比", "composition": "左侧草图，右侧服装，3:4 竖图，顶部留白。",
-                "prompt": "Editorial fashion concept sheet, sketch and garment side by side, neutral background, vertical 3:4, no text",
-                "negative_prompt": "watermark, logo, text, distorted anatomy",
-            }],
+            "variants": [{
+                "label": ["问题拆解", "步骤清单", "对比讨论"][v % 3],
+                "body": f"标题 {i + 1} 的第 {v + 1} 版正文：先准备服装草图，再比较不同方案。具体效果需自行验证。",
+                "tags": ["AI服装", "服装设计"], "cover_text": f"封面 {i + 1}-{v + 1}",
+                "image_plan": [{
+                    "purpose": "封面对比", "composition": f"版本 {i + 1}-{v + 1}：左侧草图，右侧服装，3:4 竖图，顶部留白。",
+                    "prompt": f"Concept {i + 1}, version {v + 1}, fashion sketch and garment side by side, neutral background, vertical 3:4, no text",
+                    "negative_prompt": "watermark, logo, text, distorted anatomy",
+                }],
+            } for v in range(variant_count)],
         } for i in range(count)],
     }
 
@@ -43,7 +49,7 @@ class FakeTextClient:
     def _complete(self, **kwargs):
         self.calls.append(kwargs)
         prompt = json.loads(kwargs["user_prompt"].split("\n上次输出")[0])
-        return json.dumps(valid_analysis(prompt["required_idea_count"]), ensure_ascii=False)
+        return json.dumps(valid_analysis(prompt["required_idea_count"], variant_count=prompt["required_variant_count_per_idea"]), ensure_ascii=False)
 
 
 class FakeAdapter:
@@ -242,15 +248,22 @@ def collect_for_analysis(env, options=None):
 
 
 @pytest.mark.parametrize("count", [1, 3, 5])
-def test_one_click_collects_and_generates_validated_ideas(env, count):
-    result = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": count})
+@pytest.mark.parametrize("variant_count", [2, 3])
+def test_one_click_collects_and_generates_validated_ideas(env, count, variant_count):
+    result = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": count, "variant_count": variant_count})
     assert result["status"] == "completed"
     assert result["progress"] == 100
     assert len(result["payload"]["result"]["ideas"]) == count
+    assert all(len(idea["variants"]) == variant_count for idea in result["payload"]["result"]["ideas"])
+    assert result["payload"]["analysis"]["variant_count"] == variant_count
+    assert result["payload"]["result"]["style_summary"]
     assert result["payload"]["analysis_metadata"]["sample_count"] == 3
     assert "fixture-key-private" not in str(result)
     assert len(FakeTextClient.calls) == 1
     assert "不可信" in FakeTextClient.calls[0]["system_prompt"]
+    assert "模仿这些表达习惯" in FakeTextClient.calls[0]["system_prompt"]
+    assert "不是写作大纲" in FakeTextClient.calls[0]["system_prompt"]
+    assert "image_plan" in FakeTextClient.calls[0]["system_prompt"]
     assert "base_url" not in FakeTextClient.calls[0]["user_prompt"]
     with env.factory() as db:
         assert not db.scalars(select(PublishJob)).all()
@@ -290,6 +303,134 @@ def test_ai_invalid_output_can_be_repaired_on_second_attempt(env, monkeypatch):
     monkeypatch.setattr(FakeTextClient, "_complete", lambda *_a, **_kw: next(responses))
     result = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": 1})
     assert result["status"] == "completed"
+
+
+@pytest.mark.parametrize("problem", ["one", "four", "wrong_count", "missing_body", "missing_images", "missing_prompt", "duplicate_body", "duplicate_label", "duplicate_title", "missing_style"])
+def test_new_results_require_distinct_complete_variants(env, monkeypatch, problem):
+    generated = valid_analysis(count=3)
+    variants = generated["ideas"][0]["variants"]
+    if problem == "one":
+        del variants[1:]
+    elif problem == "four":
+        variants.append(dict(variants[0]))
+    elif problem == "wrong_count":
+        variants.pop()
+    elif problem == "missing_body":
+        variants[0].pop("body")
+    elif problem == "missing_images":
+        variants[0]["image_plan"] = []
+    elif problem == "missing_prompt":
+        variants[0]["image_plan"][0].pop("prompt")
+    elif problem == "duplicate_body":
+        variants[1]["body"] = "\n" + variants[0]["body"] + "  "
+    elif problem == "duplicate_label":
+        variants[1]["label"] = variants[0]["label"]
+    elif problem == "duplicate_title":
+        generated["ideas"][1]["title"] = generated["ideas"][0]["title"]
+    elif problem == "missing_style":
+        generated.pop("style_summary")
+    calls = []
+    def respond(*_args, **kwargs):
+        calls.append(kwargs)
+        return json.dumps(generated)
+    monkeypatch.setattr(FakeTextClient, "_complete", respond)
+    run = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": 3})
+    assert run["status"] == "failed"
+    assert len(calls) == 2
+    assert len(run["payload"]["sources"]) == 3
+    assert "result" not in run["payload"]
+
+
+@pytest.mark.parametrize("count", [0, 1, 4])
+def test_invalid_variant_count_is_rejected_before_model_or_collection(env, count):
+    search = search_for_collection(env)
+    before = len(FakeAdapter.calls)
+    response = env.client.post("/api/xhs/creative/collect", headers=env.headers, json={
+        "search_task_id": search["id"], "note_ids": ["note-0", "note-1", "note-2"],
+        "analysis": {"model_id": env.model_id, "variant_count": count},
+    })
+    assert response.status_code == 422
+    assert len(FakeAdapter.calls) == before
+    assert not FakeTextClient.calls
+
+
+def test_long_style_excerpt_keeps_opening_and_ending_within_budget():
+    text = "问题开头✨\n" + "中间正文" * 1000 + "\n你怎么看？#服装设计"
+    for limit in (480, 800, 1200, 1800):
+        excerpt = style_excerpt(text, limit)
+        assert len(excerpt) == limit
+        assert excerpt.startswith("问题开头✨\n")
+        assert excerpt.endswith("你怎么看？#服装设计")
+        assert "中段省略" in excerpt
+    assert style_excerpt("一篇短文\n原样保留。", 480) == "一篇短文\n原样保留。"
+
+
+@pytest.mark.parametrize("count", [20, 30, 50])
+def test_style_analysis_uses_every_selected_successful_sample(env, monkeypatch, count):
+    original = FakeAdapter.get_note_info
+    def long_note(self, url):
+        success, message, payload = original(self, url)
+        payload["data"]["items"][0]["note_card"]["desc"] = "问题开头✨\n" + "中间正文" * 1000 + "\n你怎么看？#服装设计"
+        return success, message, payload
+    monkeypatch.setattr(FakeAdapter, "get_note_info", long_note)
+    search = env.client.post("/api/xhs/creative/search", headers=env.headers, json={
+        "account_id": env.account_id, "keyword": "AI 服装", "limit": count,
+    }).json()
+    response = env.client.post("/api/xhs/creative/collect", headers=env.headers, json={
+        "search_task_id": search["id"], "note_ids": [n["note_id"] for n in search["payload"]["items"]],
+        "analysis": {"model_id": env.model_id, "idea_count": 1},
+    })
+    run = env.client.get(f"/api/xhs/creative/runs/{response.json()['id']}", headers=env.headers).json()
+    assert run["status"] == "completed"
+    prompt = json.loads(FakeTextClient.calls[0]["user_prompt"])
+    evidence = prompt["sources"]
+    assert len(evidence) == count
+    assert {n["note_id"] for n in evidence} == {n["note_id"] for n in run["payload"]["sources"]}
+    assert sum(len(n["body_excerpt"]) for n in evidence) <= 24000
+    assert all(n["body_excerpt"].startswith("问题开头✨") and n["body_excerpt"].endswith("#服装设计") for n in evidence)
+    assert run["payload"]["analysis_metadata"]["excerpt_strategy"] == "head_and_tail"
+    assert all("中段省略" not in n["content"] for n in run["payload"]["sources"])
+
+
+def test_legacy_single_body_result_stays_readable_and_can_be_exported(env):
+    run = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": 1})
+    old_result = valid_analysis()
+    old_result.pop("style_summary")
+    idea = old_result["ideas"][0]
+    variant = idea.pop("variants")[0]
+    variant.pop("label")
+    idea.update(variant)
+    idea["alternative_titles"] = ["旧标题一", "旧标题二", "旧标题三"]
+    idea["body"] = '旧正文<script>alert("old")</script>'
+    with env.factory() as db:
+        task = db.get(Task, run["id"])
+        old_options = {k: v for k, v in task.payload["analysis"].items() if k != "variant_count"}
+        task.payload = {**task.payload, "result": old_result, "analysis": old_options}
+        db.commit()
+    calls = len(FakeTextClient.calls)
+    saved = env.client.get(f"/api/xhs/creative/runs/{run['id']}", headers=env.headers).json()
+    assert saved["payload"]["result"] == old_result
+    exported = env.client.post(f"/api/xhs/creative/runs/{run['id']}/export", headers=env.headers)
+    assert exported.status_code == 200
+    for file in exported.json()["payload"]["report_files"]:
+        response = env.client.get(file["download_url"], headers=env.headers)
+        if file["file_name"].endswith(".json"):
+            assert response.json()["schema_version"] == 1
+            assert response.json()["result"] == old_result
+        else:
+            assert "旧版结果" in response.text
+            assert "旧标题一" in response.text
+            assert "&lt;script&gt;" in response.text
+            assert "<script>" not in response.text
+            assert response.text.count("<h4>正文文案</h4>") == 1
+    assert len(FakeTextClient.calls) == calls
+    regenerated = env.client.post("/api/xhs/creative/analyze", headers=env.headers, json={
+        "collection_task_id": run["id"], "model_id": env.model_id, "idea_count": 1, "variant_count": 2,
+    }).json()
+    current = env.client.get(f"/api/xhs/creative/runs/{regenerated['id']}", headers=env.headers).json()
+    assert current["status"] == "completed"
+    assert len(current["payload"]["result"]["ideas"][0]["variants"]) == 2
+    assert env.client.get(f"/api/xhs/creative/runs/{run['id']}", headers=env.headers).json()["payload"]["result"] == old_result
 
 
 def test_ai_provider_errors_are_masked_and_sources_retained(env, monkeypatch):
@@ -359,17 +500,24 @@ def test_reports_are_generated_with_full_sources_and_owner_only_downloads(env):
         if file["file_name"].endswith(".json"):
             document = response.json()
             assert document["result"] == result["payload"]["result"]
+            assert document["schema_version"] == 2
             assert len(document["sources"]) == 3
             assert "完整正文" in document["sources"][0]["content"]
             assert "raw" not in document["sources"][0]
         else:
             assert response.headers["content-type"].startswith("text/html")
             assert "生图提示词" in response.text
+            for variant in result["payload"]["result"]["ideas"][0]["variants"]:
+                assert variant["body"] in response.text
+                assert variant["image_plan"][0]["prompt"] in response.text
+            assert "文案风格依据" in response.text
 
 
 def test_html_report_escapes_untrusted_ai_and_source_text(env, monkeypatch):
     malicious = valid_analysis()
-    malicious["ideas"][0]["body"] = '<script>alert("unsafe")</script><img src=x onerror=alert(1)>'
+    malicious["ideas"][0]["variants"][0]["body"] = '<script>alert("unsafe")</script><img src=x onerror=alert(1)>'
+    malicious["ideas"][0]["variants"][1]["image_plan"][0]["prompt"] = '<img src=x onerror=alert(1)>'
+    malicious["style_summary"] = '<script>alert("style")</script>'
     monkeypatch.setattr(FakeTextClient, "_complete", lambda *_a, **_kw: json.dumps(malicious))
     result = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": 1})
     report = next(f for f in result["payload"]["report_files"] if f["file_name"].endswith(".html"))
