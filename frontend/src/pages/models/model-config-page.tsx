@@ -16,6 +16,7 @@ import {
   Card,
   Checkbox,
   Col,
+  Collapse,
   Empty,
   Form,
   Input,
@@ -77,6 +78,7 @@ export function ModelConfigPage() {
   const [error, setError] = useState<string | null>(null);
   const [testingId, setTestingId] = useState<number | null>(null);
   const [testResults, setTestResults] = useState<Record<number, { status: string; message: string }>>({});
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const grouped = useMemo(
     () => ({
@@ -215,7 +217,7 @@ export function ModelConfigPage() {
       <PageHeader
         eyebrow="Model Routing"
         title="模型配置"
-        description="为改写、生成、封面和图片处理配置用户级文本与图片模型，后续 AI 任务会从默认配置解析调用参数。"
+        description="热点创作只需配置文本模型，用来生成标题、正文和配图提示词；不需要配置图片模型。"
         action={
           <Button
             icon={<ReloadOutlined />}
@@ -227,7 +229,9 @@ export function ModelConfigPage() {
         }
       />
 
-      <Alert
+      <Collapse style={{ marginBottom: 16 }} activeKey={showAdvanced ? ["advanced"] : []}
+        onChange={keys => setShowAdvanced(keys.includes("advanced"))}
+        items={[{ key: "advanced", label: "高级模型功能（图片模型与服务参考）", children: <Alert
         type="info"
         showIcon
         style={{ marginBottom: 16 }}
@@ -237,7 +241,7 @@ export function ModelConfigPage() {
           <Typography.Link href="https://www.volcengine.com/product/doubao" target="_blank" rel="noreferrer">火山引擎（豆包）</Typography.Link> — 字节跳动大模型平台，Base URL: <Typography.Text code>https://ark.cn-beijing.volces.com/api/v3</Typography.Text><br />
           <Typography.Link href="https://bailian.console.aliyun.com/" target="_blank" rel="noreferrer">阿里云百炼</Typography.Link> — 通义千问系列，Base URL: <Typography.Text code>https://dashscope.aliyuncs.com/compatible-mode/v1</Typography.Text>
         </>}
-      />
+      /> }]} />
 
       {error && (
         <Alert
@@ -264,13 +268,13 @@ export function ModelConfigPage() {
             title={
               <Space>
                 {editingId ? <EditOutlined /> : <PlusOutlined />}
-                <span>{editingId ? "编辑模型" : "新增模型"}</span>
+                <span>{editingId ? "编辑" : "新增"}{typeLabel(form.model_type)}</span>
               </Space>
             }
             extra={editingId ? <Button size="small" onClick={handleCancelEdit}>取消编辑</Button> : undefined}
             style={cardStyle}
           >
-            <Segmented
+            {(showAdvanced || form.model_type === "image") && <Segmented
               value={form.model_type}
               options={[
                 { label: "文本模型", value: "text" },
@@ -285,7 +289,7 @@ export function ModelConfigPage() {
               }
               block
               style={{ marginBottom: 20 }}
-            />
+            />}
 
             <form onSubmit={handleSubmit}>
               <Form layout="vertical" component="div">
@@ -369,8 +373,8 @@ export function ModelConfigPage() {
 
         <Col xs={24} lg={16}>
           <Row gutter={[16, 16]}>
-            {(["text", "image"] as ModelType[]).map((type) => (
-              <Col xs={24} md={12} key={type}>
+            {((showAdvanced ? ["text", "image"] : ["text"]) as ModelType[]).map((type) => (
+              <Col xs={24} md={showAdvanced ? 12 : 24} key={type}>
                 <Card
                   title={
                     <Space>

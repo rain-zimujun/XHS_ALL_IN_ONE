@@ -1,4 +1,4 @@
-import { Drawer, Segmented, message } from "antd";
+import { Collapse, Drawer, Segmented, Space, Typography, message } from "antd";
 import { useState } from "react";
 
 import type { PlatformAccount } from "../../types";
@@ -29,9 +29,10 @@ const loginMethodOptions = [
 export function AddAccountDrawer({ open, onClose, onBound }: AddAccountDrawerProps) {
   const [accountType, setAccountType] = useState<AccountType>("pc");
   const [method, setMethod] = useState<LoginMethod>("qr");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
   function handleConfirmed(account: PlatformAccount) {
-    const actionText = account.action === "updated" ? "已更新到账号矩阵" : "已加入账号矩阵";
+    const actionText = account.action === "updated" ? "绑定信息已更新" : "已完成绑定";
     message.success(`${account.nickname || "账号"} ${actionText}`);
     onBound();
   }
@@ -56,26 +57,16 @@ export function AddAccountDrawer({ open, onClose, onBound }: AddAccountDrawerPro
         body: { background: "#141414", padding: 24 },
       }}
     >
-      <div style={{ marginBottom: 20 }}>
-        <Segmented
-          block
-          value={accountType}
-          options={accountTypeOptions}
-          onChange={(val) => setAccountType(val as AccountType)}
-        />
-      </div>
-
-      <div style={{ marginBottom: 24 }}>
-        <Segmented
-          block
-          value={method}
-          options={loginMethodOptions}
-          onChange={(val) => setMethod(val as LoginMethod)}
-        />
-      </div>
+      <Typography.Paragraph type="secondary">热点创作默认使用 PC 扫码登录。当前：{accountType === "pc" ? "PC 账号" : "Creator 账号"} · {loginMethodOptions.find(option => option.value === method)?.label}。</Typography.Paragraph>
+      <Collapse size="small" style={{ marginBottom: 24 }} activeKey={advancedOpen ? ["advanced"] : []}
+        onChange={keys => setAdvancedOpen(keys.includes("advanced"))}
+        items={[{ key: "advanced", label: "高级登录选项", children: <Space orientation="vertical" style={{ width: "100%" }} size={16}>
+          <Segmented block value={accountType} options={accountTypeOptions} onChange={val => setAccountType(val as AccountType)} />
+          <Segmented block value={method} options={loginMethodOptions} onChange={val => setMethod(val as LoginMethod)} />
+        </Space> }]} />
 
       {method === "qr" ? (
-        <QrLoginPanel accountType={accountType} onConfirmed={handleConfirmed} />
+        <QrLoginPanel accountType={accountType} onConfirmed={handleConfirmed} showAdvanced={advancedOpen} />
       ) : method === "cookie" ? (
         <CookieImportPanel accountType={accountType} onImported={handleConfirmed} />
       ) : (

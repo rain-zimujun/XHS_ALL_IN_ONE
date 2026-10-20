@@ -2,7 +2,7 @@ import {
   ArrowRightOutlined,
   DatabaseOutlined,
   LockOutlined,
-  RadarChartOutlined,
+  FileTextOutlined,
   RobotOutlined,
   UserOutlined,
 } from "@ant-design/icons";
@@ -16,7 +16,6 @@ import {
   Row,
   Segmented,
   Space,
-  Statistic,
   Typography,
 } from "antd";
 import { type FormEvent, useState } from "react";
@@ -81,7 +80,7 @@ export function LoginPage() {
       const from = (
         location.state as { from?: { pathname?: string } } | null
       )?.from?.pathname;
-      navigate(from || "/platform-select", { replace: true });
+      navigate(from || "/platforms/xhs/hot-content", { replace: true });
     } catch (caughtError) {
       setError(
         errorMessage(
@@ -145,7 +144,7 @@ export function LoginPage() {
                 Spider_XHS
               </Text>
               <Text strong style={{ fontSize: 14 }}>
-                Operations OS
+                热点创作工作台
               </Text>
             </div>
           </Space>
@@ -158,53 +157,24 @@ export function LoginPage() {
               lineHeight: 1.4,
             }}
           >
-            小红书运营，从抓取到发布一屏推进。
+            从热点选题，到自己的文案与配图方案。
           </Title>
           <Paragraph
             type="secondary"
             style={{ fontSize: 15, marginBottom: 40 }}
           >
-            数据发现、内容库、AI
-            改写、账号矩阵和 Creator
-            发布统一在一个工作区里完成。
+            绑定小红书账号，搜索筛选内容，让 AI 综合分析并生成标题、正文和配图提示词。图片由你准备，发布由你决定。
           </Paragraph>
 
           <Row gutter={24}>
             <Col span={8}>
-              <Statistic
-                title={
-                  <Space size={4}>
-                    <DatabaseOutlined />
-                    <span>今日抓取</span>
-                  </Space>
-                }
-                value={128}
-                valueStyle={{ color: "#fff", fontSize: 28 }}
-              />
+              <Space orientation="vertical"><DatabaseOutlined style={{ fontSize: 24, color: "#4e8ff7" }} /><Text>搜索筛选</Text><Text type="secondary">20 / 30 / 50 篇</Text></Space>
             </Col>
             <Col span={8}>
-              <Statistic
-                title={
-                  <Space size={4}>
-                    <RobotOutlined />
-                    <span>AI 草稿</span>
-                  </Space>
-                }
-                value={14}
-                valueStyle={{ color: "#fff", fontSize: 28 }}
-              />
+              <Space orientation="vertical"><RobotOutlined style={{ fontSize: 24, color: "#4e8ff7" }} /><Text>AI 创作</Text><Text type="secondary">文案与配图建议</Text></Space>
             </Col>
             <Col span={8}>
-              <Statistic
-                title={
-                  <Space size={4}>
-                    <RadarChartOutlined />
-                    <span>待发布</span>
-                  </Space>
-                }
-                value={7}
-                valueStyle={{ color: "#fff", fontSize: 28 }}
-              />
+              <Space orientation="vertical"><FileTextOutlined style={{ fontSize: 24, color: "#4e8ff7" }} /><Text>报告留存</Text><Text type="secondary">下载与历史回看</Text></Space>
             </Col>
           </Row>
         </Col>

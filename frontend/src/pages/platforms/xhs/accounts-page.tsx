@@ -138,10 +138,10 @@ export function XhsAccountsPage() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <div>
             <Title level={3} style={{ margin: 0, color: "rgba(255,255,255,0.88)" }}>
-              账号矩阵
+              账号绑定
             </Title>
             <Text style={{ color: "rgba(255,255,255,0.45)", marginTop: 4, display: "block" }}>
-              管理 PC 与 Creator 账号、Cookie 状态、健康检查和账号作用域。
+              热点创作使用小红书 PC 账号，扫码绑定后即可搜索和采集；已有账号仍可在这里管理。
             </Text>
           </div>
           <Button type="primary" icon={<PlusOutlined />} onClick={() => setDrawerOpen(true)}>

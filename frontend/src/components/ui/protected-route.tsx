@@ -37,6 +37,7 @@ export function ProtectedRoute({ children }: RouteGuardProps) {
 
 export function PublicOnlyRoute({ children }: RouteGuardProps) {
   const auth = useAuth();
+  const location = useLocation();
 
   if (auth.isChecking) {
     return (
@@ -55,7 +56,8 @@ export function PublicOnlyRoute({ children }: RouteGuardProps) {
   }
 
   if (auth.isAuthenticated) {
-    return <Navigate to="/platform-select" replace />;
+    const from = (location.state as { from?: { pathname?: string } } | null)?.from?.pathname;
+    return <Navigate to={from || "/platforms/xhs/hot-content"} replace />;
   }
 
   return <>{children}</>;

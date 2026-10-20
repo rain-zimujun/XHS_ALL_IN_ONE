@@ -152,7 +152,7 @@ export function HotContentPage() {
         <Text type="secondary">搜索与你有关的热门内容，选取样本，再生成自己的标题、文案与配图方案。</Text>
       </div>
       {error && <Alert type="error" title={error} closable onClose={() => setError("")} />}
-      {!loadingAccounts && !accounts.length && <Alert type="info" title="先绑定小红书账号" description={<span>在 <Link to="/platforms/xhs/accounts">账号矩阵</Link> 添加 PC 账号并扫码登录，再回来搜索。</span>} />}
+      {!loadingAccounts && !accounts.length && <Alert type="info" title="先绑定小红书账号" description={<span>在 <Link to="/platforms/xhs/accounts">账号绑定</Link> 添加 PC 账号并扫码登录，再回来搜索。</span>} />}
       <Card title="1. 搜索内容" extra={<Button icon={<ReloadOutlined />} onClick={() => void loadAccounts()} loading={loadingAccounts}>刷新账号</Button>}>
         <Form layout="vertical" onFinish={() => void search()} disabled={searching || collecting || starting}>
           <Row gutter={16}>

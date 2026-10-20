@@ -11,9 +11,10 @@ const { Text, Link: AntLink } = Typography;
 type QrLoginPanelProps = {
   accountType: "pc" | "creator";
   onConfirmed: (account: PlatformAccount) => void;
+  showAdvanced?: boolean;
 };
 
-export function QrLoginPanel({ accountType, onConfirmed }: QrLoginPanelProps) {
+export function QrLoginPanel({ accountType, onConfirmed, showAdvanced = false }: QrLoginPanelProps) {
   const [session, setSession] = useState<XhsQrLoginSession | null>(null);
   const [statusText, setStatusText] = useState("准备生成二维码");
   const [isLoading, setIsLoading] = useState(false);
@@ -134,7 +135,7 @@ export function QrLoginPanel({ accountType, onConfirmed }: QrLoginPanelProps) {
         ) : null}
       </div>
 
-      {accountType === "pc" ? (
+      {accountType === "pc" && showAdvanced ? (
         <Checkbox
           checked={syncCreator}
           onChange={(event) => setSyncCreator(event.target.checked)}

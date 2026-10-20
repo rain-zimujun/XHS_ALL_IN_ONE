@@ -1,5 +1,6 @@
 import {
   AimOutlined,
+  AppstoreOutlined,
   BarChartOutlined,
   BellOutlined,
   CloudDownloadOutlined,
@@ -52,9 +53,13 @@ const { Sider, Header, Content } = Layout;
 const { Title, Text } = Typography;
 
 const mainNavItems: MenuProps["items"] = [
-  { key: "/platforms/xhs/dashboard", icon: <DashboardOutlined />, label: "总览" },
-  { key: "/platforms/xhs/accounts", icon: <SafetyCertificateOutlined />, label: "账号矩阵" },
   { key: "/platforms/xhs/hot-content", icon: <RobotOutlined />, label: "热点创作" },
+  { key: "/platforms/xhs/accounts", icon: <SafetyCertificateOutlined />, label: "账号绑定" },
+  { key: "/models", icon: <KeyOutlined />, label: "模型配置" },
+];
+
+const advancedNavItems: MenuProps["items"] = [
+  { key: "/platforms/xhs/dashboard", icon: <DashboardOutlined />, label: "总览" },
   { key: "/platforms/xhs/discovery", icon: <SearchOutlined />, label: "笔记发现" },
   { key: "/platforms/xhs/crawler", icon: <CloudDownloadOutlined />, label: "数据抓取" },
   { key: "/platforms/xhs/keywords", icon: <KeyOutlined />, label: "关键词组" },
@@ -66,12 +71,9 @@ const mainNavItems: MenuProps["items"] = [
   { key: "/platforms/xhs/drafts", icon: <FileTextOutlined />, label: "草稿工坊" },
   { key: "/platforms/xhs/publish", icon: <SendOutlined />, label: "发布中心" },
   { key: "/platforms/xhs/auto-ops", icon: <ThunderboltOutlined />, label: "自动运营" },
-];
-
-const footerNavItems: MenuProps["items"] = [
   { key: "/tasks", icon: <ScheduleOutlined />, label: "任务中心" },
-  { key: "/models", icon: <RobotOutlined />, label: "模型配置" },
   { key: "/settings", icon: <SettingOutlined />, label: "设置" },
+  { key: "/platform-select", icon: <AppstoreOutlined />, label: "平台选择" },
 ];
 
 function levelColor(level: string): string {
@@ -86,8 +88,16 @@ export function AppShell() {
   const navigate = useNavigate();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(false);
+  const [openKeys, setOpenKeys] = useState<string[]>([]);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
+
+  useEffect(() => {
+    // Direct links remain usable and reveal their entry without opening features.
+    if (advancedNavItems?.some(item => item && "key" in item && item.key === location.pathname)) {
+      setOpenKeys(["advanced"]);
+    }
+  }, [location.pathname]);
 
   const loadNotifications = useCallback(async () => {
     try {
@@ -159,28 +169,30 @@ export function AppShell() {
           {/* Logo */}
           <div
             style={{ padding: collapsed ? "14px 0" : "14px 16px", display: "flex", alignItems: "center", justifyContent: collapsed ? "center" : "space-between", borderBottom: "1px solid #303030", flexShrink: 0, cursor: "pointer" }}
-            onClick={() => navigate("/platform-select")}
+            onClick={() => navigate("/platforms/xhs/hot-content")}
           >
             <Space align="center" size={collapsed ? 0 : 8}>
               <img src="/logo.jpg" alt="Logo" style={{ width: 28, height: 28, borderRadius: 6, objectFit: "cover", flexShrink: 0 }} />
               {!collapsed && <span style={{ fontWeight: 600, fontSize: 14, color: "rgba(255,255,255,.85)" }}>Spider XHS</span>}
             </Space>
-            {!collapsed && <Button type="text" size="small" icon={<MenuFoldOutlined />} onClick={(e) => { e.stopPropagation(); setCollapsed(true); }} style={{ color: "rgba(255,255,255,.35)" }} />}
+            {!collapsed && <Button aria-label="收起侧栏" type="text" size="small" icon={<MenuFoldOutlined />} onClick={(e) => { e.stopPropagation(); setCollapsed(true); }} style={{ color: "rgba(255,255,255,.35)" }} />}
           </div>
           {collapsed && (
             <div style={{ textAlign: "center", padding: "6px 0", borderBottom: "1px solid #262626", flexShrink: 0 }}>
-              <Button type="text" size="small" icon={<MenuUnfoldOutlined />} onClick={() => setCollapsed(false)} style={{ color: "rgba(255,255,255,.35)" }} />
+              <Button aria-label="展开侧栏" type="text" size="small" icon={<MenuUnfoldOutlined />} onClick={() => setCollapsed(false)} style={{ color: "rgba(255,255,255,.35)" }} />
             </div>
           )}
 
           {/* Main nav — scrollable */}
           <div style={{ flex: 1, overflowY: "auto", overflowX: "hidden" }}>
-            <Menu theme="dark" mode="inline" selectedKeys={selectedKeys} onClick={handleMenuClick} items={mainNavItems} style={{ borderRight: 0 }} />
+            {!collapsed && <div style={{ padding: "16px 24px 8px", color: "rgba(255,255,255,.4)", fontSize: 12 }}>搜索 · 创作 · 报告</div>}
+            <Menu theme="dark" mode="inline" selectedKeys={selectedKeys} openKeys={openKeys} onOpenChange={setOpenKeys} onClick={handleMenuClick}
+              items={[...(mainNavItems || []), { type: "divider" }, { key: "advanced", icon: <AppstoreOutlined />, label: "高级功能", children: advancedNavItems }]}
+              style={{ borderRight: 0 }} />
           </div>
 
           {/* Footer — pinned to bottom */}
           <div style={{ flexShrink: 0, borderTop: "1px solid #303030" }}>
-            <Menu theme="dark" mode="inline" selectedKeys={selectedKeys} onClick={handleMenuClick} items={footerNavItems} style={{ borderRight: 0 }} />
             <div style={{ padding: collapsed ? "8px 0" : "8px 16px", borderTop: "1px solid #262626", display: "flex", alignItems: "center", gap: 8, justifyContent: collapsed ? "center" : "flex-start" }}>
               <Avatar size={22} icon={<UserOutlined />} style={{ background: "#1668dc", flexShrink: 0, fontSize: 11 }}>{(auth.user?.username ?? "U")[0].toUpperCase()}</Avatar>
               {!collapsed && (
