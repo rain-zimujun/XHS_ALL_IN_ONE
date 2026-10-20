@@ -107,6 +107,10 @@ export async function cancelCreativeRun(id: number): Promise<CreativeRun> {
   return (await http.post<CreativeRun>(`/xhs/creative/runs/${id}/cancel`)).data;
 }
 
+export async function exportCreativeReport(id: number): Promise<CreativeRun> {
+  return (await http.post<CreativeRun>(`/xhs/creative/runs/${id}/export`)).data;
+}
+
 const REFRESH_TOKEN_KEY = "spider_xhs_refresh_token";
 let accessToken: string | null = null;
 

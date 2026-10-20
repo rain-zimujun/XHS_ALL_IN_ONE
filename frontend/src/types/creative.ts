@@ -20,6 +20,9 @@ export type CreativeRun = Omit<TaskRecord, "payload"> & {
     failures?: { note_id: string; title: string; reason: string }[];
     analysis?: CreativeAnalysisOptions | null;
     result?: CreativeResult;
+    report_files?: { file_name: string; download_url: string }[];
+    report_directory?: string;
+    export_error?: string | null;
     analysis_metadata?: { model_name: string; sample_count: number; excerpt_chars_per_note: number; disclaimer: string };
   };
 };

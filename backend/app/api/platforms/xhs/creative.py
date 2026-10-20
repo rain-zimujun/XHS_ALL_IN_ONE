@@ -13,6 +13,7 @@ from backend.app.models import Task, User
 from backend.app.schemas.creative import CreativeAnalyzeRequest, CreativeCollectRequest, CreativeSearchRequest
 from backend.app.services.creative_analysis import CreativeError, get_creative_text_client_factory, owned_text_model
 from backend.app.services.creative_runner import analyze_collection, collect_samples
+from backend.app.services.creative_report import export_report
 from backend.app.services.creative_service import search_samples
 
 router = APIRouter(prefix="/xhs/creative", tags=["xhs-creative"])
@@ -138,4 +139,18 @@ def cancel(task_id: int, current_user: User = Depends(get_current_user), db: Ses
         task.finished_at = shanghai_now()
         task.payload = {**task.payload, "stage": "已停止"}
         db.commit()
+    return serialize_task(task)
+
+
+@router.post("/runs/{task_id}/export")
+def export(task_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    task = owned_task(db, current_user, task_id)
+    if task.status in ("pending", "running") or not task.payload.get("result"):
+        raise HTTPException(400, "请先完成 AI 分析。")
+    try:
+        report = export_report(task)
+    except Exception as exc:
+        raise HTTPException(500, "报告导出失败，请检查本地输出目录是否可写。") from exc
+    task.payload = {**task.payload, **report}
+    db.commit()
     return serialize_task(task)

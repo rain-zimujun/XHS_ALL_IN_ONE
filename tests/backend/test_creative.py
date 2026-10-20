@@ -7,12 +7,13 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from backend.app.api.platforms.xhs.pc import get_xhs_pc_api_adapter_factory
+from backend.app.api import files as files_api
 from backend.app.core.database import Base, get_db
 from backend.app.core.security import create_access_token, encrypt_text
 from backend.app.main import app
 from backend.app.models import AccountCookieVersion, ModelConfig, Note, PlatformAccount, PublishJob, Task, User
 from backend.app.schemas.creative import CreativeSearchRequest
-from backend.app.services import creative_service
+from backend.app.services import creative_report, creative_runner, creative_service
 from backend.app.services.creative_analysis import get_creative_text_client_factory
 from backend.app.services.creative_runner import recover_interrupted_runs
 
@@ -93,6 +94,9 @@ def env(tmp_path, monkeypatch):
     app.dependency_overrides[get_xhs_pc_api_adapter_factory] = lambda: FakeAdapter
     app.dependency_overrides[get_creative_text_client_factory] = lambda: FakeTextClient
     monkeypatch.setattr(creative_service.time, "sleep", lambda _: None)
+    report_settings = SimpleNamespace(storage_dir=tmp_path / "storage")
+    monkeypatch.setattr(creative_report, "get_settings", lambda: report_settings)
+    monkeypatch.setattr(files_api, "get_settings", lambda: report_settings)
     FakeAdapter.calls = []
     FakeTextClient.calls = []
     yield SimpleNamespace(
@@ -335,3 +339,60 @@ def test_startup_marks_interrupted_creative_runs_without_touching_other_tasks(en
         assert db.get(Task, creative_id).status == "failed"
         assert db.get(Task, creative_id).payload["sources"] == [{"note_id": "saved"}]
         assert db.get(Task, unrelated_id).status == "pending"
+
+
+def test_reports_are_generated_with_full_sources_and_owner_only_downloads(env):
+    result = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": 1})
+    files = result["payload"]["report_files"]
+    assert len(files) == 2
+    for file in files:
+        response = env.client.get(file["download_url"], headers=env.headers)
+        assert response.status_code == 200
+        assert "fixture-key-private" not in response.text
+        assert env.client.get(file["download_url"], headers=env.other_headers).status_code == 404
+        assert env.client.get(file["download_url"]).status_code == 401
+        if file["file_name"].endswith(".json"):
+            document = response.json()
+            assert document["result"] == result["payload"]["result"]
+            assert len(document["sources"]) == 3
+            assert "完整正文" in document["sources"][0]["content"]
+            assert "raw" not in document["sources"][0]
+        else:
+            assert response.headers["content-type"].startswith("text/html")
+            assert "生图提示词" in response.text
+
+
+def test_html_report_escapes_untrusted_ai_and_source_text(env, monkeypatch):
+    malicious = valid_analysis()
+    malicious["ideas"][0]["body"] = '<script>alert("unsafe")</script><img src=x onerror=alert(1)>'
+    monkeypatch.setattr(FakeTextClient, "_complete", lambda *_a, **_kw: json.dumps(malicious))
+    result = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": 1})
+    report = next(f for f in result["payload"]["report_files"] if f["file_name"].endswith(".html"))
+    text = env.client.get(report["download_url"], headers=env.headers).text
+    assert "<script>" not in text
+    assert "<img src=x" not in text
+    assert "&lt;script&gt;" in text
+    assert "Content-Security-Policy" in text
+    assert "javascript:" not in creative_report.source_link({"note_id": "id", "title": '<img src=x>', "note_url": 'javascript:alert(1)'})
+
+
+def test_export_failure_does_not_lose_analysis_and_can_be_retried(env, monkeypatch):
+    def disk_fail(_task):
+        raise PermissionError("private-directory-detail")
+    monkeypatch.setattr(creative_runner, "export_report", disk_fail)
+    result = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": 1})
+    assert result["status"] == "completed"
+    assert result["payload"]["result"]
+    assert result["payload"]["export_error"]
+    assert "private-directory-detail" not in str(result)
+    url = f"/api/xhs/creative/runs/{result['id']}/export"
+    assert env.client.post(url, headers=env.other_headers).status_code == 404
+    retry = env.client.post(url, headers=env.headers)
+    assert retry.status_code == 200
+    assert len(retry.json()["payload"]["report_files"]) == 2
+    assert retry.json()["payload"]["export_error"] is None
+
+
+def test_export_rejects_runs_without_analysis(env):
+    result = collect_for_analysis(env)
+    assert env.client.post(f"/api/xhs/creative/runs/{result['id']}/export", headers=env.headers).status_code == 400

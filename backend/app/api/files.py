@@ -35,6 +35,8 @@ class ResizeImageRequest(BaseModel):
 
 
 def _export_media_type(file_name: str) -> str:
+    if file_name.endswith(".html"):
+        return "text/html; charset=utf-8"
     if file_name.endswith(".csv"):
         return "text/csv; charset=utf-8"
     return "application/json"

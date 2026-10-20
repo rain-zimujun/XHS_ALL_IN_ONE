@@ -8,6 +8,7 @@ from backend.app.api.platforms.xhs.pc import _get_owned_pc_account_cookies, _nor
 from backend.app.core.time import shanghai_now
 from backend.app.models import Note, Task, User
 from backend.app.services.creative_analysis import CreativeError, analyze_sources
+from backend.app.services.creative_report import export_report
 
 
 class RunCancelled(Exception):
@@ -33,6 +34,11 @@ def generate_for_task(db, task, client_factory):
         task.payload["analysis"], client_factory, update_stage,
     )
     checkpoint(db, task, result=result, analysis_metadata=metadata, stage="创作方案已生成")
+    try:
+        report = export_report(task)
+    except Exception:
+        report = {"export_error": "报告文件生成失败，创作方案已保存，可在结果区重新导出。"}
+    checkpoint(db, task, **report)
 
 
 def fail_task(db, task, exc, message):
