@@ -1,4 +1,4 @@
-"""Structured, evidence-linked outputs for the creative agents (M3–M6)."""
+"""Structured, evidence-linked outputs for the creative agents."""
 from __future__ import annotations
 
 from typing import Annotated, Literal
@@ -169,4 +169,26 @@ class TopicReviewResponse(AgentOutputModel):
     input_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     summary: str = Field(min_length=1, max_length=1500)
     reviews: list[TopicJudgement] = Field(min_length=1, max_length=5)
+    limitations: list[FindingText] = Field(min_length=1, max_length=8)
+
+
+class TitleCandidate(AgentOutputModel):
+    candidate_id: str = Field(pattern=r"^title_[a-z0-9_]{1,60}$")
+    title: str = Field(min_length=1, max_length=40)
+    angle: FindingText
+    reader_value: FindingText
+    promise: FindingText
+    support_points: list[FindingText] = Field(min_length=1, max_length=8)
+    rationale: FindingText
+
+
+class IdeaTitleCandidates(AgentOutputModel):
+    idea_id: str = Field(pattern=r"^idea_[a-z0-9_]{1,39}$", max_length=40)
+    candidates: list[TitleCandidate] = Field(min_length=5, max_length=8)
+
+
+class TitleCandidates(AgentOutputModel):
+    topic_revision: int = Field(ge=1, strict=True)
+    input_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    ideas: list[IdeaTitleCandidates] = Field(min_length=1, max_length=5)
     limitations: list[FindingText] = Field(min_length=1, max_length=8)

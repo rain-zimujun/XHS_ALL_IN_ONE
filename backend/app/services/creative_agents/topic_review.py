@@ -159,13 +159,9 @@ def validate_topic_review(result: TopicReviewResponse, payload: dict[str, Any]) 
             raise AgentValidationError("未通过的选题必须附带具体问题定位和修改要求")
 
 
-def _run_prepared(payload: dict[str, Any], complete: Callable[..., str], on_progress) -> tuple[AgentRun, dict[str, Any]]:
-    run = run_agent(
-        TOPIC_REVIEW_AGENT, input_payload=payload, output_model=TopicReviewResponse,
-        complete=complete, on_progress=on_progress,
-        validate_output=lambda result: validate_topic_review(result, payload),
-    )
-    raw = run.output
+def decide_topic_review(raw: TopicReviewResponse, payload: dict[str, Any]) -> TopicReviewResult:
+    """Recompute the decision from validated judgements, including at handoff."""
+    validate_topic_review(raw, payload)
     by_id = {review.idea_id: review for review in raw.reviews}
     decisions, approved, needs_revision = [], [], []
     for idea in payload["topic_brief"]["ideas"]:
@@ -173,22 +169,49 @@ def _run_prepared(payload: dict[str, Any], complete: Callable[..., str], on_prog
         quality = _quality_for(judgement)
         decisions.append(TopicReviewDecision(judgement=judgement, quality=quality))
         (approved if quality.passed else needs_revision).append(judgement.idea_id)
-    result = TopicReviewResult(
+    return TopicReviewResult(
         topic_revision=raw.topic_revision, input_fingerprint=raw.input_fingerprint,
         summary=raw.summary, reviews=decisions, approved_idea_ids=approved,
         revision_required_idea_ids=needs_revision,
         status="revision_required" if needs_revision else "passed", limitations=raw.limitations,
     )
+
+
+def verified_topic_review(value: dict[str, Any] | TopicReviewResult, payload: dict[str, Any]) -> TopicReviewResult:
+    """Content binding is not authentication; callers still own task provenance."""
+    try:
+        stored = TopicReviewResult.model_validate(value.model_dump() if isinstance(value, TopicReviewResult) else value)
+        raw = TopicReviewResponse(
+            topic_revision=stored.topic_revision, input_fingerprint=stored.input_fingerprint,
+            summary=stored.summary, reviews=[item.judgement for item in stored.reviews],
+            limitations=stored.limitations,
+        )
+        computed = decide_topic_review(raw, payload)
+        if stored.model_dump(mode="json") != computed.model_dump(mode="json") or computed.status != "passed":
+            raise ValueError("unapproved review")
+        return computed
+    except (ValidationError, ValueError, AgentValidationError) as exc:
+        raise CreativeError("选题尚未通过评审，或评审与当前内容不一致，请先完成当前版本的评审。", "topic_review_not_approved") from exc
+
+
+def _run_prepared(payload: dict[str, Any], complete: Callable[..., str], on_progress) -> tuple[AgentRun, dict[str, Any]]:
+    run = run_agent(
+        TOPIC_REVIEW_AGENT, input_payload=payload, output_model=TopicReviewResponse,
+        complete=complete, on_progress=on_progress,
+        validate_output=lambda result: validate_topic_review(result, payload),
+    )
+    raw = run.output
+    result = decide_topic_review(raw, payload)
     metadata = {
         "agent_schema_version": TOPIC_REVIEW_SCHEMA_VERSION,
         "prompt_version": TOPIC_REVIEW_PROMPT_VERSION,
         "review_policy_version": TOPIC_REVIEW_POLICY_VERSION,
         "topic_revision": raw.topic_revision, "input_fingerprint": raw.input_fingerprint,
         "requested_idea_count": payload["requested_idea_count"],
-        "reviewed_count": len(decisions), "approved_count": len(approved),
-        "revision_required_count": len(needs_revision), "request_count": len(run.attempts),
+        "reviewed_count": len(result.reviews), "approved_count": len(result.approved_idea_ids),
+        "revision_required_count": len(result.revision_required_idea_ids), "request_count": len(run.attempts),
         "quality_review_status": result.status,
-        "downstream_ready": not needs_revision,
+        "downstream_ready": result.status == "passed",
         "disclaimer": "模型评分是辅助判断，程序仅校验结构、引用和通过规则；尚未进行真实质量校准，不保证事实正确或流量效果。",
     }
     return AgentRun(stage=run.stage, name=run.name, output=result, attempts=run.attempts), metadata
