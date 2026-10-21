@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Score = Field(ge=0, le=10)
 ReviewKind = Literal["topic", "title", "copy", "final"]
+REVIEW_PASS_THRESHOLD = 6.5
 
 
 @dataclass(frozen=True)
@@ -116,7 +117,7 @@ def assess_review(kind: ReviewKind, scores: list[QualityScore], blocking_issues:
         if criterion and criterion.blocking and score.score < criterion.minimum:
             blocking.append(f"{criterion.label}低于 {criterion.minimum:g} 分")
     overall = weighted_score(kind, scores)
-    passed = not blocking and overall >= 6.5
+    passed = not blocking and overall >= REVIEW_PASS_THRESHOLD
     return QualityReview(
         kind=kind,
         scores=scores,

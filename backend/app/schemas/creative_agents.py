@@ -1,4 +1,4 @@
-"""Structured, evidence-linked outputs for the creative agents (M3–M5)."""
+"""Structured, evidence-linked outputs for the creative agents (M3–M6)."""
 from __future__ import annotations
 
 from typing import Annotated, Literal
@@ -127,3 +127,46 @@ class TopicBrief(AgentOutputModel):
     summary: str = Field(min_length=1, max_length=1500)
     ideas: list[TopicIdea] = Field(min_length=1, max_length=5)
     selection_limits: list[FindingText] = Field(min_length=1, max_length=8)
+
+
+TopicCriterion = Literal["reader_value", "specificity", "fit", "novelty", "evidence"]
+TopicReviewField = Literal[
+    "topic", "primary_segment_id", "content_type", "reader_promise", "core_angle",
+    "must_cover", "source_note_ids", "evidence", "boundaries", "differentiator",
+]
+
+
+class TopicCriterionScore(AgentOutputModel):
+    criterion: TopicCriterion
+    score: float = Field(ge=0, le=10, strict=True, allow_inf_nan=False)
+    comment: FindingText
+    fields: list[TopicReviewField] = Field(min_length=1, max_length=5)
+    note_ids: list[NoteId] = Field(default_factory=list, max_length=8)
+
+
+class TopicReviewIssue(AgentOutputModel):
+    criterion: TopicCriterion
+    severity: Literal["blocking", "suggestion"]
+    field: TopicReviewField
+    quote: str = Field(min_length=1, max_length=180, description="问题字段中的连续原文，不能改写或跨数组项拼接")
+    problem: FindingText
+    revision_instruction: FindingText
+    note_ids: list[NoteId] = Field(default_factory=list, max_length=8)
+    related_idea_ids: list[str] = Field(default_factory=list, max_length=4)
+
+
+class TopicJudgement(AgentOutputModel):
+    idea_id: str = Field(min_length=1, max_length=40, pattern=r"^idea_[a-z0-9_]{1,39}$")
+    scores: list[TopicCriterionScore] = Field(min_length=5, max_length=5)
+    issues: list[TopicReviewIssue] = Field(max_length=8)
+    preserve: list[FindingText] = Field(min_length=1, max_length=5)
+
+
+class TopicReviewResponse(AgentOutputModel):
+    """Model judgement only: pass/fail, totals and selection are program-owned."""
+
+    topic_revision: int = Field(ge=1, strict=True)
+    input_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    summary: str = Field(min_length=1, max_length=1500)
+    reviews: list[TopicJudgement] = Field(min_length=1, max_length=5)
+    limitations: list[FindingText] = Field(min_length=1, max_length=8)
