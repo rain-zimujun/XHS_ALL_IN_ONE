@@ -1,4 +1,4 @@
-"""Structured, evidence-linked outputs for the creative agents (M3/M4)."""
+"""Structured, evidence-linked outputs for the creative agents (M3–M5)."""
 from __future__ import annotations
 
 from typing import Annotated, Literal
@@ -98,3 +98,32 @@ class AudienceBrief(AgentOutputModel):
     format_recommendations: list[AudienceFormatRecommendation] = Field(min_length=1, max_length=8)
     avoid_assumptions: list[FindingText] = Field(default_factory=list, max_length=8)
     limitations: list[FindingText] = Field(min_length=1, max_length=8)
+
+
+TopicContentType = Literal["作品展示", "灵感分享", "行业观察", "方法说明", "教程", "案例拆解"]
+
+
+class TopicEvidence(AgentOutputModel):
+    basis: Literal["sample_pattern", "sample_observation", "user_requirement"]
+    note_ids: list[NoteId] = Field(default_factory=list, max_length=8, description="本条依据的不同来源；用户要求不附样本 ID")
+    statement: FindingText
+
+
+class TopicIdea(AgentOutputModel):
+    idea_id: str = Field(min_length=1, max_length=40, pattern=r"^idea_[a-z0-9_]{1,39}$")
+    primary_segment_id: str = Field(min_length=1, max_length=40, pattern=r"^[a-z][a-z0-9_]{1,39}$")
+    topic: str = Field(min_length=1, max_length=120)
+    content_type: TopicContentType
+    reader_promise: FindingText
+    core_angle: FindingText
+    must_cover: list[FindingText] = Field(min_length=1, max_length=8)
+    source_note_ids: list[NoteId] = Field(min_length=2, max_length=8, description="至少两个不同来源，与 evidence 的来源合集一致")
+    evidence: list[TopicEvidence] = Field(min_length=1, max_length=5)
+    boundaries: list[FindingText] = Field(min_length=1, max_length=6)
+    differentiator: FindingText
+
+
+class TopicBrief(AgentOutputModel):
+    summary: str = Field(min_length=1, max_length=1500)
+    ideas: list[TopicIdea] = Field(min_length=1, max_length=5)
+    selection_limits: list[FindingText] = Field(min_length=1, max_length=8)
