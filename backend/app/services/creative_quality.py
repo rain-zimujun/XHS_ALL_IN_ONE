@@ -83,7 +83,8 @@ class QualityReview(BaseModel):
     scores: list[QualityScore] = Field(min_length=1, max_length=12)
     overall_score: float = Score
     passed: bool
-    blocking_issues: list[str] = Field(default_factory=list, max_length=12)
+    # Explicit issues plus rubric-generated blockers can exceed twelve.
+    blocking_issues: list[str] = Field(default_factory=list, max_length=24)
     revision_instructions: list[str] = Field(default_factory=list, max_length=12)
     reviewer_notes: str = Field(default="", max_length=2000)
 
