@@ -192,3 +192,38 @@ class TitleCandidates(AgentOutputModel):
     input_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     ideas: list[IdeaTitleCandidates] = Field(min_length=1, max_length=5)
     limitations: list[FindingText] = Field(min_length=1, max_length=8)
+
+
+class ItemCriterionScore(AgentOutputModel):
+    criterion: str = Field(min_length=1, max_length=60)
+    score: float = Field(ge=0, le=10, strict=True, allow_inf_nan=False)
+    comment: FindingText
+    fields: list[str] = Field(min_length=1, max_length=8)
+    note_ids: list[NoteId] = Field(default_factory=list, max_length=8)
+
+
+class ItemReviewIssue(AgentOutputModel):
+    criterion: str = Field(min_length=1, max_length=60)
+    severity: Literal["blocking", "suggestion"]
+    field: str = Field(min_length=1, max_length=80)
+    quote: str = Field(min_length=1, max_length=180)
+    problem: FindingText
+    revision_instruction: FindingText
+    note_ids: list[NoteId] = Field(default_factory=list, max_length=8)
+    related_item_ids: list[str] = Field(default_factory=list, max_length=8)
+
+
+class ItemJudgement(AgentOutputModel):
+    item_id: str = Field(min_length=1, max_length=80)
+    scores: list[ItemCriterionScore] = Field(min_length=1, max_length=12)
+    issues: list[ItemReviewIssue] = Field(max_length=8)
+    preserve: list[FindingText] = Field(min_length=1, max_length=5)
+    comparison: FindingText
+
+
+class ItemReviewResponse(AgentOutputModel):
+    revision: int = Field(ge=1, strict=True)
+    input_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    summary: str = Field(min_length=1, max_length=1500)
+    reviews: list[ItemJudgement] = Field(min_length=1, max_length=40)
+    limitations: list[FindingText] = Field(min_length=1, max_length=8)
