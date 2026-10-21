@@ -227,3 +227,24 @@ class ItemReviewResponse(AgentOutputModel):
     summary: str = Field(min_length=1, max_length=1500)
     reviews: list[ItemJudgement] = Field(min_length=1, max_length=40)
     limitations: list[FindingText] = Field(min_length=1, max_length=8)
+
+
+class CopyVariant(AgentOutputModel):
+    variant_id: str = Field(pattern=r"^copy_[a-z0-9_]{1,60}$")
+    label: str = Field(min_length=1, max_length=40)
+    body: str = Field(min_length=1, max_length=3000)
+    tags: list[Annotated[str, Field(min_length=1, max_length=40)]] = Field(min_length=1, max_length=10)
+    covered_points: list[FindingText] = Field(min_length=1, max_length=8)
+    source_note_ids: list[NoteId] = Field(min_length=2, max_length=8)
+
+
+class IdeaCopyVariants(AgentOutputModel):
+    idea_id: str = Field(pattern=r"^idea_[a-z0-9_]{1,39}$", max_length=40)
+    candidate_id: str = Field(pattern=r"^title_[a-z0-9_]{1,60}$")
+    variants: list[CopyVariant] = Field(min_length=2, max_length=3)
+
+
+class CopyVariants(AgentOutputModel):
+    input_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    ideas: list[IdeaCopyVariants] = Field(min_length=1, max_length=5)
+    limitations: list[FindingText] = Field(min_length=1, max_length=8)
