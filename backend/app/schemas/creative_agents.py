@@ -248,3 +248,27 @@ class CopyVariants(AgentOutputModel):
     input_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
     ideas: list[IdeaCopyVariants] = Field(min_length=1, max_length=5)
     limitations: list[FindingText] = Field(min_length=1, max_length=8)
+
+
+class ImagePlanItem(AgentOutputModel):
+    purpose: FindingText
+    composition: str = Field(min_length=1, max_length=1000)
+    aspect_ratio: Literal["3:4", "1:1", "4:3", "9:16", "16:9"]
+    search_description: FindingText
+    prompt: str = Field(min_length=1, max_length=3000)
+    negative_prompt: str = Field(min_length=1, max_length=1000)
+
+
+class VariantImagePlan(AgentOutputModel):
+    idea_id: str = Field(pattern=r"^idea_[a-z0-9_]{1,39}$", max_length=40)
+    candidate_id: str = Field(pattern=r"^title_[a-z0-9_]{1,60}$")
+    variant_id: str = Field(pattern=r"^copy_[a-z0-9_]{1,60}$")
+    cover_text: str = Field(min_length=1, max_length=80)
+    image_plan: list[ImagePlanItem] = Field(min_length=1, max_length=6)
+    material_notes: list[FindingText] = Field(min_length=1, max_length=6)
+
+
+class ImagePlans(AgentOutputModel):
+    input_fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
+    variants: list[VariantImagePlan] = Field(min_length=2, max_length=15)
+    limitations: list[FindingText] = Field(min_length=1, max_length=8)
