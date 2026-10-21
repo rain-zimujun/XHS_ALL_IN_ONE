@@ -20,6 +20,7 @@ export type CreativeRun = Omit<TaskRecord, "payload"> & {
     sources?: XhsSearchNote[];
     failures?: { note_id: string; title: string; reason: string }[];
     analysis?: CreativeAnalysisOptions | null;
+    pipeline?: CreativePipeline;
     result?: CreativeResult;
     report_files?: { file_name: string; download_url: string }[];
     report_directory?: string;
@@ -30,10 +31,34 @@ export type CreativeRun = Omit<TaskRecord, "payload"> & {
 
 export type CreativeAnalysisOptions = {
   model_id: number;
+  workflow?: "legacy" | "multi_agent";
   idea_count: 1 | 3 | 5;
   variant_count?: 2 | 3;
   audience: string;
   instruction: string;
+};
+
+export type CreativeStageStatus = "pending" | "running" | "completed" | "failed" | "skipped" | "revision_required" | "invalidated" | "cancelled";
+export type CreativePipeline = {
+  schema_version: number;
+  status: "pending" | "running" | "completed" | "failed" | "cancelled" | "revision_required";
+  current_stage: string | null;
+  activity: string;
+  request_count: number;
+  max_requests: number;
+  max_quality_revisions: number;
+  error_code?: string | null;
+  stages: Record<string, {
+    stage: string;
+    status: CreativeStageStatus;
+    revision: number;
+    quality_revisions: number;
+    attempts: { attempt: number; status: string; started_at: string; finished_at?: string | null; error?: string | null }[];
+    output: Record<string, unknown> | null;
+    review_result: Record<string, unknown> | null;
+    history: { role: string; revision: number; output: Record<string, unknown>; target_ids: string[]; finished_at: string }[];
+    error?: string | null;
+  }>;
 };
 
 export type CreativeImagePlan = { purpose: string; composition: string; prompt: string; negative_prompt: string };

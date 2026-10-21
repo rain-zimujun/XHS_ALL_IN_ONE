@@ -1,5 +1,5 @@
 import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, Col, Empty, Form, Input, Progress, Row, Select, Space, Table, Tag, Typography } from "antd";
+import { Alert, Button, Card, Col, Collapse, Empty, Form, Input, Progress, Row, Select, Space, Table, Tag, Typography } from "antd";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -7,6 +7,7 @@ import { analyzeCreativeCollection, cancelCreativeRun, collectCreativeNotes, fet
 import type { ModelConfig, PlatformAccount, XhsSearchNote } from "../../../types";
 import type { CreativeAnalysisOptions, CreativeHistoryItem, CreativeRun, CreativeSearch } from "../../../types/creative";
 import { CreativeResults } from "./creative-results";
+import { CreativePipelineProgress } from "./creative-pipeline";
 import { creativeSamples, formatPublicationTime } from "../../../lib/creative-samples";
 
 const { Title, Text, Paragraph } = Typography;
@@ -40,6 +41,7 @@ export function HotContentPage() {
   const [modelId, setModelId] = useState<number>();
   const [ideaCount, setIdeaCount] = useState<1 | 3 | 5>(3);
   const [variantCount, setVariantCount] = useState<2 | 3>(3);
+  const [workflow, setWorkflow] = useState<"legacy" | "multi_agent">("multi_agent");
   const [audience, setAudience] = useState("电商、服装行业、AI、时尚行业、营销行业、美工、后期从业者");
   const [instruction, setInstruction] = useState("符合小红书爆款文案的调性，文案尽可能精简、抓眼球");
   const collecting = collection?.status === "running" || collection?.status === "pending";
@@ -87,7 +89,7 @@ export function HotContentPage() {
   }, [collection?.id, collecting]);
 
   function analysisOptions(): CreativeAnalysisOptions | undefined {
-    return modelId ? { model_id: modelId, idea_count: ideaCount, variant_count: variantCount, audience, instruction } : undefined;
+    return modelId ? { model_id: modelId, idea_count: ideaCount, variant_count: variantCount, audience, instruction, workflow } : undefined;
   }
 
   async function startCollection(withAnalysis = false) {
@@ -123,6 +125,7 @@ export function HotContentPage() {
       if (item.payload.analysis) {
         setModelId(item.payload.analysis.model_id); setIdeaCount(item.payload.analysis.idea_count);
         setVariantCount(item.payload.analysis.variant_count || 3);
+        setWorkflow(item.payload.analysis.workflow || "multi_agent");
         setAudience(item.payload.analysis.audience); setInstruction(item.payload.analysis.instruction);
       }
       if (item.task_type === "creative_search") { setCollection(null); setRun(item); setSelected((item.payload.items || []).map(n => n.note_id)); }
@@ -203,17 +206,24 @@ export function HotContentPage() {
             <Col span={24}><Form.Item label="目标受众"><Input aria-label="目标受众" maxLength={300} value={audience} onChange={e => setAudience(e.target.value)} /></Form.Item></Col>
             <Col span={24}><Form.Item label="创作要求"><Input.TextArea aria-label="创作要求" rows={3} maxLength={2000} value={instruction} onChange={e => setInstruction(e.target.value)} placeholder="默认写可直接发布的作品／灵感分享，参考样本口吻，不夹带制作指导。可补充：语气自然、少用术语；需要教程时请明确写出。" /></Form.Item></Col>
           </Row>
+          <Collapse style={{ marginBottom: 16 }} items={[{ key: "workflow", label: "高级生成选项", children: <Form.Item label="生成方式">
+            <Select aria-label="生成方式" value={workflow} onChange={setWorkflow} options={[
+              { value: "multi_agent", label: "多 Agent 分阶段创作与评审（推荐）" }, { value: "legacy", label: "旧版一次综合生成（对照用）" },
+            ]} />
+          </Form.Item> }]} />
           <Space wrap>
             <Button type="primary" onClick={() => void startCollection(true)} loading={starting} disabled={!modelId || !run || selected.length < 3 || collecting || searching}>采集并生成 {ideaCount} 个标题 × {variantCount} 版文案</Button>
             {collection && (collection.payload.sources?.length || 0) >= 3 && <Button onClick={() => void analyzeAgain()} disabled={!modelId || collecting || searching} loading={starting}>使用已采集正文重新生成</Button>}
           </Space>
         </Form>
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>正文参考本批有效样本的共同语气、开头、分段与互动方式，保持原创。每个标题对应 {variantCount} 版不同文案，每版都有独立配图建议与提示词；共生成 {ideaCount * variantCount} 版，数量越多通常耗时和费用越高。</Paragraph>
+        {workflow === "multi_agent" && <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>当前使用多 Agent：样本 → 受众 → 选题 → 标题 → 正文 → 配图 → 终审。首次全部通过通常为 10 次模型请求；每个生产阶段最多质量返工 2 次，任务总计最多 36 次请求，30 分钟后不再开始新请求。模型评分仅供参考，仍需人工确认。</Paragraph>}
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>点击生成会将样本文字发送给所选模型服务，按其规则计费；每次模型请求的读取超时为 3 分钟，超时不会自动重试，格式校验失败最多重试一次。刷新页面后可从历史任务继续查看，不会自动发布。停止任务无法撤回已发出的模型请求。</Paragraph>
       </Card>
       {collection && <Card title={`创作任务 #${collection.id} · ${collection.payload.search.keyword}`} extra={collecting && <Button onClick={() => void stopTask()}>停止任务</Button>}>
         <Text>{collection.status === "failed" || collection.status === "cancelled" ? statusNames[collection.status] : collection.payload.stage || statusNames[collection.status] || collection.status}</Text>
         <Progress percent={collection.progress} status={collection.status === "failed" ? "exception" : collecting ? "active" : "normal"} />
+        {collection.payload.pipeline && <CreativePipelineProgress pipeline={collection.payload.pipeline} />}
         <Paragraph>已保存 {collection.payload.sources?.length || 0} 篇正文，失败 {collection.payload.failures?.length || 0} 篇。</Paragraph>
         {collection.payload.error && <Alert type="error" title={collection.payload.error} />}
         {collection.payload.failures?.map(f => <Paragraph key={f.note_id} type="secondary">{f.title || f.note_id}：{f.reason}</Paragraph>)}

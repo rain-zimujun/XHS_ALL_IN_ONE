@@ -23,6 +23,15 @@ async function main() {
       id, platform: "xhs", task_type, status, progress: status === "completed" ? 100 : 0,
       payload, created_at: "2026-10-20T10:00:00", started_at: null, finished_at: null, parent_task_id: null,
     });
+    const makePipeline = (running = false) => ({
+      schema_version: 2, status: running ? "running" : "completed", current_stage: running ? "copy" : null,
+      activity: running ? "文案 Agent（第 1/2 次）" : "多 Agent 创作及评审完成", request_count: running ? 7 : 10,
+      max_requests: 36, max_quality_revisions: 2,
+      stages: Object.fromEntries(["sample_analysis", "audience", "topic", "title", "copy", "image", "final_review"].map((stage, i) => [stage, {
+        stage, status: running && i >= 4 ? i === 4 ? "running" : "pending" : "completed", revision: running && i >= 4 ? 0 : 1,
+        quality_revisions: 0, attempts: [], output: null, review_result: null, history: [],
+      }])),
+    });
     await page.route("**/api/**", async route => {
       const request = route.request();
       const path = new URL(request.url()).pathname;
@@ -50,11 +59,14 @@ async function main() {
       }
       if (path === "/api/xhs/creative/runs/102") {
         pollCount++;
+        if (pollCount === 1) return reply(makeRun(102, "creative_collect", {
+          ...collectedRun.payload, pipeline: makePipeline(true), stage: "文案 Agent（第 1/2 次）",
+        }, "running"));
         const sources = searchRun.payload.items.filter(n => collectBody.note_ids.includes(n.note_id)).map((n, i) => ({
           ...n, timestamp: i === 2 ? 0 : i % 2 ? 1792306914 : 1792306914000, captured_at: "2026-10-20T10:00:00",
         }));
         collectedRun = makeRun(102, "creative_collect", {
-          search: searchBody, analysis: collectBody.analysis, sources, stage: "创作方案已生成",
+          search: searchBody, analysis: collectBody.analysis, sources, stage: "创作方案已生成", pipeline: makePipeline(),
           result: { summary: "多篇样本关注 AI 服装设计流程", patterns: ["拆解步骤", "对比方案"], style_summary: "问题开头、口语短句、分段清晰，结尾邀请讨论。",
             ideas: Array.from({ length: collectBody.analysis.idea_count }, (_, i) => ({
               title: `AI 服装创作方案 ${i + 1}`,
@@ -73,6 +85,8 @@ async function main() {
         });
         legacyRun = JSON.parse(JSON.stringify(collectedRun));
         legacyRun.id = 100;
+        delete legacyRun.payload.pipeline;
+        delete legacyRun.payload.analysis.workflow;
         delete legacyRun.payload.analysis.variant_count;
         delete legacyRun.payload.result.style_summary;
         legacyRun.payload.result.ideas = [{
@@ -111,7 +125,10 @@ async function main() {
       await page.getByText("2 个版本", { exact: true }).last().click();
     }
     await page.getByRole("button", { name: `采集并生成 3 个标题 × ${variantCount} 版文案`, exact: true }).click();
+    await page.getByTestId("creative-stage-copy").filter({ hasText: "进行中" }).waitFor();
     await page.getByTestId("creative-results").waitFor();
+    assert.equal(collectBody.analysis.workflow, "multi_agent");
+    assert.ok((await page.getByTestId("creative-pipeline").innerText()).includes("10 / 36"));
     assert.equal(collectBody.note_ids.length, 29);
     assert.equal(collectBody.analysis.model_id, 2);
     assert.equal(collectBody.analysis.instruction, "偏向实操教程，不夸张承诺");
