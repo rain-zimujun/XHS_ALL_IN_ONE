@@ -12,6 +12,7 @@ from backend.app.models import ModelConfig
 from backend.app.schemas.creative import CreativeAnalysisOptions, CreativeAnalysisResult
 from backend.app.services.ai_service import OpenAICompatibleTextClient
 from backend.app.services.creative_copy import has_editorial_leak, normalize_result_copy
+from backend.app.services.structured_output import json_schema_response_format
 
 AI_CONNECT_TIMEOUT_SECONDS = 10
 AI_READ_TIMEOUT_SECONDS = 180
@@ -128,12 +129,13 @@ def analyze_sources(db, user_id: int, search: dict, sources: list[dict], options
         "封面文字由用户排版叠加，不要求生图模型直接渲染汉字。"
         "严格输出符合所给 schema 的 JSON 对象，不输出 Markdown 或额外说明。"
     )
+    response_format = json_schema_response_format(CreativeAnalysisResult)
     user_prompt = json.dumps({
         "keyword": search["keyword"], "audience": config.audience,
         "requirements": config.instruction, "required_idea_count": config.idea_count,
         "required_variant_count_per_idea": config.variant_count,
         "evidence_excerpt_chars_per_note": excerpt_limit, "excerpt_strategy": "head_and_tail",
-        "sources": evidence, "output_schema": CreativeAnalysisResult.model_json_schema(),
+        "sources": evidence, "output_schema": response_format["json_schema"]["schema"],
     }, ensure_ascii=False)
     client = client_factory()
     source_ids = {n["note_id"] for n in sources}
@@ -145,6 +147,7 @@ def analyze_sources(db, user_id: int, search: dict, sources: list[dict], options
             model_config=model, api_key=api_key, system_prompt=system_prompt,
             user_prompt=user_prompt + ("\n上次输出未通过校验。" + repair_hint if attempt else ""),
             temperature=0.6,
+            response_format=response_format,
         )
         on_checkpoint("正在校验方案结构与引用来源")
         try:

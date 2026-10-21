@@ -14,6 +14,7 @@ from typing import Any, Callable
 from pydantic import BaseModel, ValidationError
 
 from backend.app.services.creative_pipeline import PipelineStage
+from backend.app.services.structured_output import json_schema_response_format
 
 
 class AgentValidationError(Exception):
@@ -81,7 +82,8 @@ def run_agent(
 ) -> AgentRun:
     if spec.max_attempts < 1:
         raise ValueError("max_attempts must be positive")
-    schema = output_model.model_json_schema()
+    response_format = json_schema_response_format(output_model)
+    schema = response_format["json_schema"]["schema"]
     user_prompt = json.dumps({"input": input_payload, "output_schema": schema}, ensure_ascii=False)
     repair = ""
     traces: list[AgentAttemptTrace] = []
@@ -94,6 +96,7 @@ def run_agent(
                 system_prompt=spec.system_prompt,
                 user_prompt=user_prompt + repair,
                 temperature=spec.temperature,
+                response_format=response_format,
             )
             result = output_model.model_validate(parse_json_object(raw))
             if validate_output:

@@ -133,6 +133,7 @@ class OpenAICompatibleTextClient:
         user_prompt: str,
         temperature: float = 0.7,
         timeout: float | tuple[float, float] = 60,
+        response_format: dict[str, Any] | None = None,
     ) -> str:
         if not model_config.base_url:
             raise ValueError("Text model base_url is required")
@@ -142,17 +143,20 @@ class OpenAICompatibleTextClient:
             raise ValueError("Text model api_key is required")
 
         endpoint = f"{model_config.base_url.rstrip('/')}/chat/completions"
+        request_payload = {
+            "model": model_config.model_name,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            "temperature": temperature,
+        }
+        if response_format is not None:
+            request_payload["response_format"] = response_format
         response = requests.post(
             endpoint,
             headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            json={
-                "model": model_config.model_name,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                "temperature": temperature,
-            },
+            json=request_payload,
             timeout=timeout,
         )
         response.raise_for_status()

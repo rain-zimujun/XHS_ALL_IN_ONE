@@ -713,6 +713,11 @@ def test_creative_request_uses_three_minute_read_timeout_and_allows_slow_provide
     assert result["status"] == "completed"
     assert len(calls) == 1
     assert calls[0]["timeout"] == (10, 180)
+    response_format = calls[0]["json"]["response_format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["strict"] is True
+    assert response_format["json_schema"]["name"] == "CreativeAnalysisResult"
+    assert response_format["json_schema"]["schema"] == json.loads(calls[0]["json"]["messages"][1]["content"])["output_schema"]
     assert len(result["payload"]["result"]["ideas"]) == 1
 
 
@@ -728,6 +733,7 @@ def test_other_text_workflows_keep_their_existing_timeout(monkeypatch):
     )
     assert result == "普通文本"
     assert calls[0]["timeout"] == 60
+    assert "response_format" not in calls[0]["json"]
 
 
 @pytest.mark.parametrize("separate_analysis", [False, True])

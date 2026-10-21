@@ -66,6 +66,11 @@ def test_orchestrator_validates_json_and_retries_with_targeted_context():
     assert len(run.attempts) == 2
     assert "上一次输出未通过" in prompts[1]["user_prompt"]
     assert '"topic": "AI 服装"' in prompts[0]["user_prompt"]
+    assert prompts[0]["response_format"] == prompts[1]["response_format"]
+    response_format = prompts[0]["response_format"]
+    assert response_format["type"] == "json_schema"
+    assert response_format["json_schema"]["strict"] is True
+    assert response_format["json_schema"]["schema"] == json.loads(prompts[0]["user_prompt"])["output_schema"]
 
 
 def test_orchestrator_returns_trace_when_attempts_exhausted():
