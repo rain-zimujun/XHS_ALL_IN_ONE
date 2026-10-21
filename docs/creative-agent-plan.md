@@ -100,6 +100,15 @@
 
 ## 4. 读者需求 Agent
 
+### 当前实现状态（2026-10-21）
+
+- 已新增 `backend/app/services/creative_agents/reader_needs.py`，复用 M3 的结构化调度器与模型传输边界。
+- 已新增 `AudienceBrief`、受众分组、共性需求和内容形式建议 Schema；用户原始受众词必须完整覆盖，输出不能添加未提供的受众词。
+- 每个受众分组包含工作场景、主要使用场景、关注点、可提供的内容价值、适合形式、依据和不确定性；`sample_evidence` 只能引用 M3 已验证的 note_id，`user_requirement` 不得伪造样本来源，`hypothesis` 必须明确标记。
+- 代码检查受众词覆盖、segment ID、引用 ID、证据类型和共性需求置信度；结构或依据问题最多触发一次修复。受众整理不等于市场调研，也不产生标题、正文或配图。
+- 提供 `run_reader_needs()` 离线入口和 `analyze_reader_needs()` 模型传输入口；没有新增 API、页面或任务数据库写入，旧生成流程不变。
+- 当前结果的 `quality_review_status` 为 `not_reviewed`，受众需求 Agent 尚未接入实际评委和完整管线。
+
 ### 定位
 
 把宽泛的受众描述转成可用于选题的读者场景，回答“这个人为什么愿意花时间看”。
