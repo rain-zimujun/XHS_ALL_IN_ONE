@@ -9,6 +9,9 @@ async function main() {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
+    page.on("console", message => {
+      if (message.type() === "error" && message.text().includes("same key")) errors.push(message.text());
+    });
     await page.addInitScript(() => {
       localStorage.setItem("spider_xhs_refresh_token", "browser-test-only");
       Object.defineProperty(navigator, "clipboard", { value: { writeText: async text => {
@@ -18,14 +21,15 @@ async function main() {
     });
     const variantCount = Number(process.env.XHS_TEST_VARIANTS || 3);
     assert.ok([2, 3].includes(variantCount));
-    let searchBody, collectBody, searchRun, collectedRun, legacyRun, pollCount = 0, collectCalls = 0;
+    let searchBody, collectBody, searchRun, collectedRun, legacyRun, failedRun, pollCount = 0, collectCalls = 0;
     const makeRun = (id, task_type, payload, status = "completed") => ({
       id, platform: "xhs", task_type, status, progress: status === "completed" ? 100 : 0,
       payload, created_at: "2026-10-20T10:00:00", started_at: null, finished_at: null, parent_task_id: null,
     });
     const review = (kind, overall_score) => ({
-      kind, scores: [], overall_score, passed: overall_score >= 7, blocking_issues: [], revision_instructions: [],
+      kind, scores: [{ criterion: kind === "title" ? "hook" : kind === "copy" ? "opening" : "image_fit", score: overall_score, comment: "具体细节支持表达" }], overall_score, passed: overall_score >= 7, blocking_issues: [], revision_instructions: [],
     });
+    const decision = (id, quality, issues = []) => ({ judgement: { item_id: id, issues, preserve: [`保留 ${id} 的细节`], comparison: "各版本切入角度不同" }, quality });
     const makePipeline = (running = false) => ({
       schema_version: 2, status: running ? "running" : "completed", current_stage: running ? "copy" : null,
       activity: running ? "文案 Agent（第 1/2 次）" : "多 Agent 创作及评审完成", request_count: running ? 7 : 10,
@@ -72,14 +76,15 @@ async function main() {
           search: searchBody, analysis: collectBody.analysis, sources, stage: "创作方案已生成", pipeline: makePipeline(),
           result: { summary: "多篇样本关注 AI 服装设计流程", patterns: ["拆解步骤", "对比方案"], style_summary: "问题开头、口语短句、分段清晰，结尾邀请讨论。",
             ideas: Array.from({ length: collectBody.analysis.idea_count }, (_, i) => ({
-              idea_id: `idea_${i + 1}`,
+              idea_id: `idea_${i + 1}`, candidate_id: `title_${i + 1}`,
               title: `AI 服装创作方案 ${i + 1}`,
               reason: "基于多篇样本的共同特点", source_note_ids: sources.slice(0, 2).map(n => n.note_id),
               quality: { title: review("title", [7, 9, 8][i]) },
               variants: Array.from({ length: collectBody.analysis.variant_count }, (_, v) => ({
+                variant_id: `copy_${i + 1}_${v + 1}`,
                 label: ["问题拆解", "步骤清单", "对比讨论"][v], body: `标题 ${i + 1} 的文案 ${v + 1}：雾白的衣摆和轻盈的线条，有海风吹过的感觉。`,
                 tags: [`标题${i + 1}`, `版本${v + 1}`], cover_text: `封面 ${i + 1}-${v + 1}`,
-                quality: { copy: review("copy", [7, 8, 6][i]), final: review("final", [8, 6.5, 9][i]) },
+                quality: { copy: review("copy", [7, 8, 6][i] + v / 10), final: review("final", [8, 6.5, 9][i] + v / 10) },
                 image_plan: [{ purpose: "封面", composition: `配图 ${i + 1}-${v + 1}：3:4 竖图，顶部留白`, prompt: `concept ${i + 1}, version ${v + 1}, fashion sketch, 3:4`, negative_prompt: "logo, watermark, text" }],
               })),
             })) },
@@ -89,6 +94,22 @@ async function main() {
             { file_name: "xhs-report-u1-test.json", download_url: "/api/files/exports/xhs-report-u1-test.json" },
           ],
         });
+        const ideas = collectedRun.payload.result.ideas;
+        const stages = collectedRun.payload.pipeline.stages;
+        stages.title.review_result = { review: { reviews: ideas.map(idea => decision(idea.candidate_id, idea.quality.title)) } };
+        stages.copy.review_result = { reviews: ideas.flatMap(idea => idea.variants.map(v => decision(v.variant_id, v.quality.copy))) };
+        stages.final_review.review_result = { reviews: ideas.flatMap(idea => idea.variants.map(v => decision(v.variant_id, v.quality.final))) };
+        failedRun = JSON.parse(JSON.stringify(collectedRun));
+        failedRun.id = 99; failedRun.status = "failed"; delete failedRun.payload.result;
+        failedRun.payload.pipeline.status = "revision_required";
+        const failedStage = failedRun.payload.pipeline.stages.final_review;
+        failedStage.status = "revision_required";
+        failedStage.review_result = { summary: "配图缺少支撑，需人工处理", reviews: [decision("copy_1_1", { ...review("final", 9), passed: false }, [{
+          criterion: "image_fit", severity: "blocking", field: "cover_text", quote: "封面 1-1", problem: "缺少素材依据 <script>window.__reviewXss = true</script>", revision_instruction: "调整封面表达，不写效果承诺", responsible_stage: "image",
+        }])] };
+        failedStage.history = [{ role: "reviewer", revision: 1, output: failedStage.review_result, target_ids: [], finished_at: "2026-10-21T01:00:00Z" }];
+        failedRun.payload.pipeline.stages.image.quality_revisions = 2;
+        failedRun.payload.pipeline.stages.image.history = [{ role: "producer", revision: 2, output: {}, target_ids: ["copy_1_1"], finished_at: "2026-10-21T01:00:00Z" }];
         legacyRun = JSON.parse(JSON.stringify(collectedRun));
         legacyRun.id = 100;
         delete legacyRun.payload.pipeline;
@@ -106,9 +127,10 @@ async function main() {
         return reply(collectedRun);
       }
       if (path === "/api/xhs/creative/runs/100") return reply(legacyRun);
+      if (path === "/api/xhs/creative/runs/99") return reply(failedRun);
       if (path === "/api/xhs/creative/runs/101") return reply(searchRun);
       if (path === "/api/xhs/creative/runs/102/export") return reply(collectedRun);
-      if (path === "/api/xhs/creative/runs") return reply({ items: [collectedRun, searchRun, legacyRun].filter(Boolean).map(run => ({ ...run, keyword: run.payload.search.keyword })) });
+      if (path === "/api/xhs/creative/runs") return reply({ items: [collectedRun, searchRun, legacyRun, failedRun].filter(Boolean).map(run => ({ ...run, keyword: run.payload.search.keyword })) });
       if (path === "/api/files/exports/xhs-report-u1-test.html") return route.fulfill({ contentType: "text/html", body: "<!doctype html><h1>模拟报告</h1>" });
       throw new Error(`未模拟的接口：${request.method()} ${path}`);
     });
@@ -191,6 +213,11 @@ async function main() {
         await page.getByRole("tab", { name: `文案 ${v + 1} · ${["问题拆解", "步骤清单", "对比讨论"][v]}`, exact: true }).click();
         const variant = collectedRun.payload.result.ideas[i].variants[v];
         await page.getByTestId("creative-body").filter({ hasText: variant.body }).waitFor();
+        assert.ok((await page.getByTestId("quality-正文").innerText()).includes(variant.quality.copy.overall_score.toFixed(1)));
+        assert.ok((await page.getByTestId("quality-终审").innerText()).includes(variant.quality.final.overall_score.toFixed(1)));
+        assert.equal(await page.getByTestId("creative-review-detail").filter({ visible: true }).count(), 0);
+        await page.getByText("当前文案评审详情（正文与终审）", { exact: true }).click();
+        await page.getByText(`建议保留：保留 ${variant.variant_id} 的细节`, { exact: true }).first().waitFor();
         const images = await page.getByTestId("creative-images").innerText();
         assert.ok(images.includes(variant.image_plan[0].composition));
         assert.ok(images.includes(variant.image_plan[0].prompt));
@@ -200,8 +227,9 @@ async function main() {
         await page.getByRole("button", { name: "复制完整笔记", exact: true }).click();
         assert.equal(await page.evaluate(() => window.__copiedText), [collectedRun.payload.result.ideas[i].title, variant.body, variant.tags.map(t => `#${t}`).join(" ")].join("\n\n"));
         const copied = await page.evaluate(() => window.__copiedText);
-        assert.ok(!copied.includes("配图建议") && !copied.includes("生图提示词") && !copied.includes("推荐理由"));
+        assert.ok(!copied.includes("配图建议") && !copied.includes("生图提示词") && !copied.includes("推荐理由") && !copied.includes("保留") && !copied.includes("评审"));
         assert.ok(variant.tags.every(tag => copied.split(`#${tag}`).length === 2));
+        await page.getByText("当前文案评审详情（正文与终审）", { exact: true }).click();
       }
     }
     // Re-export changes download state only, not the current selection.
@@ -236,7 +264,8 @@ async function main() {
     await page.setViewportSize({ width: 1440, height: 1000 });
     await page.getByRole("button", { name: /#100 AI 模特穿搭/ }).click();
     await page.getByText("这是旧版结果，仅保留原有的 1 版文案和配图。", { exact: true }).waitFor();
-    assert.equal(await page.getByRole("tab").count(), 1);
+    await page.getByRole("tab", { name: "文案 1 · 原有文案", exact: true }).waitFor();
+    assert.equal(await page.getByTestId("creative-results").getByRole("tab").count(), 1);
     assert.ok((await page.getByTestId("creative-body").innerText()).includes("旧版正文原样保留"));
     await page.getByLabel("评分筛选依据").click();
     await page.getByText("按标题评分筛选", { exact: true }).last().click();
@@ -251,6 +280,20 @@ async function main() {
     await page.evaluate(() => { window.__rejectCopy = true; });
     await page.getByRole("button", { name: "复制完整笔记", exact: true }).click();
     await page.getByText("浏览器未允许复制，请选中正文手动复制。", { exact: true }).waitFor();
+    await page.getByRole("button", { name: /#99 AI 模特穿搭/ }).click();
+    assert.equal(await page.getByTestId("creative-results").count(), 0);
+    const audit = page.getByTestId("creative-review-audit");
+    assert.equal(await audit.getByText("配图缺少支撑，需人工处理", { exact: true }).count(), 0);
+    await audit.getByText("分析与评审详情 · 问题及返工记录", { exact: true }).click();
+    await audit.getByText("终审 · 版本 1 · 质量返工 0 次", { exact: true }).click();
+    await audit.getByText("配图缺少支撑，需人工处理", { exact: true }).waitFor();
+    await audit.getByText("对象 copy_1_1 · 待修改 · 9.00 分", { exact: true }).click();
+    await audit.getByText("负责修改：配图", { exact: true }).waitFor();
+    await audit.getByText("修改建议：调整封面表达，不写效果承诺", { exact: true }).waitFor();
+    assert.equal(await page.evaluate(() => window.__reviewXss), undefined);
+    await audit.getByText("配图 · 版本 1 · 质量返工 2 次", { exact: true }).click();
+    await audit.getByTestId("review-stage-image").getByText("历史过程（1 条，仅供追溯）", { exact: true }).click();
+    await audit.getByText("本次修改对象：copy_1_1", { exact: true }).waitFor();
     assert.equal(collectCalls, 1);
     assert.deepEqual(errors, []);
     console.log(`浏览器验证通过：筛选 30 篇、采集生成、3 个标题 × ${variantCount} 版的正文与配图联动、完整复制、风格依据、时间回填、报告、历史和旧版兼容、窄屏。全部使用模拟接口。`);

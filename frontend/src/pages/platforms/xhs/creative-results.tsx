@@ -2,8 +2,10 @@ import { Alert, Button, Card, Col, Collapse, Row, Select, Space, Tabs, Tag, Typo
 import { useState } from "react";
 
 import { downloadExportFile, exportCreativeReport } from "../../../lib/api";
+import { currentDecision } from "../../../lib/creative-reviews";
+import { ReviewDetails } from "./creative-reviews";
 
-import type { CreativeIdea, CreativeQualityReview, CreativeRun, CreativeVariant } from "../../../types/creative";
+import type { CreativeIdea, CreativePipeline, CreativeQualityReview, CreativeRun, CreativeVariant } from "../../../types/creative";
 
 const { Paragraph, Title, Text } = Typography;
 
@@ -55,7 +57,7 @@ function VariantContent({ title, variant }: { title: string; variant: CreativeVa
   </Row>;
 }
 
-function IdeaContent({ idea, sources }: { idea: CreativeIdea; sources: NonNullable<CreativeRun["payload"]["sources"]> }) {
+function IdeaContent({ idea, sources, pipeline }: { idea: CreativeIdea; sources: NonNullable<CreativeRun["payload"]["sources"]>; pipeline?: CreativePipeline }) {
   const legacy = !idea.variants;
   const variants: CreativeVariant[] = idea.variants || [{
     label: "原有文案", body: idea.body, tags: idea.tags, cover_text: idea.cover_text, image_plan: idea.image_plan,
@@ -74,10 +76,17 @@ function IdeaContent({ idea, sources }: { idea: CreativeIdea; sources: NonNullab
             <QualityBadge label="终审" review={variant.quality?.final} />
           </Space>
           <VariantContent title={idea.title} variant={variant} />
+          {variant.quality && <Collapse style={{ marginTop: 16 }} items={[{ key: "review", label: "当前文案评审详情（正文与终审）", children: <>
+            <Title level={5}>正文评审</Title>
+            <ReviewDetails quality={variant.quality.copy} decision={currentDecision(pipeline, "copy", variant.variant_id)} />
+            <Title level={5}>最终评审</Title>
+            <ReviewDetails quality={variant.quality.final} decision={currentDecision(pipeline, "final_review", variant.variant_id)} />
+          </> }]} />}
         </>,
       }))} />
       {variants.some(variant => variant.quality) && <Text type="secondary">正文和终审评分对应当前文案版本。</Text>}
     </Card>
+    {idea.quality?.title && <Collapse items={[{ key: "title-review", label: "当前标题评审详情", children: <ReviewDetails quality={idea.quality.title} decision={currentDecision(pipeline, "title", idea.candidate_id)} /> }]} />}
     <Collapse items={[{
       key: "references", label: "推荐理由与参考来源", children: <>
         <Paragraph>{idea.reason}</Paragraph>
@@ -165,7 +174,7 @@ export function CreativeResults({ run, onUpdate }: { run: CreativeRun; onUpdate:
         {!visibleIdeas.length && <Col span={24}><Text type="secondary">没有达到当前分数条件的标题。</Text></Col>}
       </Row>
     </Card>
-    {idea && <IdeaContent key={`${run.id}-${selectedIndex}`} idea={idea} sources={sources} />}
+    {idea && <IdeaContent key={`${run.id}-${selectedIndex}`} idea={idea} sources={sources} pipeline={run.payload.pipeline} />}
     <Collapse items={[{
       key: "analysis", label: "样本分析与文案风格依据", children: <>
         <Title level={5}>本批样本的文案风格</Title>

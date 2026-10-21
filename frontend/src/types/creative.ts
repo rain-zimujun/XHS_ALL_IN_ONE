@@ -61,9 +61,28 @@ export type CreativePipeline = {
   }>;
 };
 
+export type CreativeReviewIssue = {
+  criterion: string;
+  severity: "blocking" | "suggestion";
+  field: string;
+  quote: string;
+  problem: string;
+  revision_instruction: string;
+  responsible_stage?: "topic" | "title" | "copy" | "image" | null;
+};
+
+export type CreativeReviewDecision = {
+  itemId: string;
+  issues: CreativeReviewIssue[];
+  preserve: string[];
+  comparison: string;
+  quality: CreativeQualityReview;
+};
+
 export type CreativeImagePlan = { purpose: string; composition: string; prompt: string; negative_prompt: string };
 
 export type CreativeVariant = {
+  variant_id?: string;
   label: string;
   body: string;
   tags: string[];
@@ -84,6 +103,7 @@ export type CreativeQualityReview = {
 
 type CreativeIdeaBase = {
   idea_id?: string;
+  candidate_id?: string;
   title: string;
   reason: string;
   source_note_ids: string[];

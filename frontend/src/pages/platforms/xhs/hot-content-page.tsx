@@ -8,6 +8,7 @@ import type { ModelConfig, PlatformAccount, XhsSearchNote } from "../../../types
 import type { CreativeAnalysisOptions, CreativeHistoryItem, CreativeRun, CreativeSearch } from "../../../types/creative";
 import { CreativeResults } from "./creative-results";
 import { CreativePipelineProgress } from "./creative-pipeline";
+import { CreativeReviewAudit } from "./creative-reviews";
 import { creativeSamples, formatPublicationTime } from "../../../lib/creative-samples";
 
 const { Title, Text, Paragraph } = Typography;
@@ -228,7 +229,8 @@ export function HotContentPage() {
         {collection.payload.error && <Alert type="error" title={collection.payload.error} />}
         {collection.payload.failures?.map(f => <Paragraph key={f.note_id} type="secondary">{f.title || f.note_id}：{f.reason}</Paragraph>)}
       </Card>}
-      {collection?.payload.result && <CreativeResults key={collection.id} run={collection} onUpdate={setCollection} />}
+      {collection?.payload.result && <CreativeResults key={`results-${collection.id}`} run={collection} onUpdate={setCollection} />}
+      {collection?.payload.pipeline && <CreativeReviewAudit key={`audit-${collection.id}`} pipeline={collection.payload.pipeline} />}
       <Card title="历史任务" extra={<Button onClick={() => void loadHistory()} icon={<ReloadOutlined />}>刷新</Button>}>
         <Space wrap>{history.map(item => <Button key={item.id} disabled={collecting || starting || searching} onClick={() => void openHistory(item.id)}>#{item.id} {item.keyword} · {item.task_type === "creative_search" ? "搜索" : item.task_type === "creative_analysis" ? "分析" : "采集/创作"} · {statusNames[item.status] || item.status}</Button>)}</Space>
         {!history.length && <Text type="secondary">完成搜索或采集后，会保留历史记录。</Text>}
