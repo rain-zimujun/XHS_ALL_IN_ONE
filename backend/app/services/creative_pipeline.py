@@ -12,8 +12,8 @@ from backend.app.services.creative_quality import QualityReview
 PipelineStage = Literal[
     "sample_analysis", "audience", "topic", "title", "copy", "image", "final_review"
 ]
-StageStatus = Literal["pending", "running", "completed", "failed", "skipped"]
-PIPELINE_SCHEMA_VERSION = 1
+StageStatus = Literal["pending", "running", "completed", "failed", "skipped", "revision_required", "invalidated", "cancelled"]
+PIPELINE_SCHEMA_VERSION = 2
 PIPELINE_STAGE_ORDER: tuple[PipelineStage, ...] = (
     "sample_analysis", "audience", "topic", "title", "copy", "image", "final_review"
 )
@@ -38,19 +38,30 @@ class CreativeStageState(BaseModel):
 
     stage: PipelineStage
     status: StageStatus = "pending"
-    attempts: list[AgentAttempt] = Field(default_factory=list, max_length=3)
+    attempts: list[AgentAttempt] = Field(default_factory=list, max_length=36)
     output: dict[str, Any] | None = None
     review: QualityReview | None = None
     error: str | None = None
+    revision: int = 0
+    quality_revisions: int = 0
+    review_result: dict[str, Any] | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    history: list[dict[str, Any]] = Field(default_factory=list, max_length=36)
 
 
 class CreativePipelineState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: int = PIPELINE_SCHEMA_VERSION
-    status: Literal["pending", "running", "completed", "failed", "cancelled"] = "pending"
+    status: Literal["pending", "running", "completed", "failed", "cancelled", "revision_required"] = "pending"
     current_stage: PipelineStage | None = None
     stages: dict[str, CreativeStageState]
+    request_count: int = 0
+    max_requests: int = 36
+    max_quality_revisions: int = 2
+    activity: str = "等待生成"
+    error_code: str | None = None
+    updated_at: str | None = None
 
 
 def new_pipeline_state() -> dict[str, Any]:

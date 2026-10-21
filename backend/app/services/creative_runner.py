@@ -9,10 +9,11 @@ from backend.app.core.time import shanghai_now
 from backend.app.models import Note, Task, User
 from backend.app.services.creative_analysis import CreativeError, analyze_sources
 from backend.app.services.creative_report import export_report
+from backend.app.services.creative_workflow import analyze_multi_agent
+from backend.app.services.creative_agents.revision import PipelineCancelled
 
 
-class RunCancelled(Exception):
-    pass
+RunCancelled = PipelineCancelled
 
 
 def checkpoint(db, task: Task, **updates):
@@ -29,10 +30,27 @@ def generate_for_task(db, task, client_factory):
         task.progress = 85
         db.commit()
 
-    result, metadata = analyze_sources(
-        db, task.user_id, task.payload["search"], task.payload["sources"],
-        task.payload["analysis"], client_factory, update_stage,
-    )
+    def save_pipeline(state):
+        db.refresh(task)
+        if task.status == "cancelled" and state["status"] != "cancelled":
+            raise RunCancelled()
+        task.payload = {**task.payload, "pipeline": state, "stage": state["activity"]}
+        done = sum(item["status"] == "completed" for item in state["stages"].values())
+        start = 75 if task.task_type == "creative_collect" else 0
+        task.progress = max(task.progress, start + round(done / 7 * (95 - start)))
+        db.commit()
+
+    # An old saved/pending task without a workflow flag keeps its original behavior.
+    if task.payload["analysis"].get("workflow") == "multi_agent":
+        result, metadata = analyze_multi_agent(
+            db, task.user_id, task.payload["search"], task.payload["sources"],
+            task.payload["analysis"], client_factory, save_pipeline,
+        )
+    else:
+        result, metadata = analyze_sources(
+            db, task.user_id, task.payload["search"], task.payload["sources"],
+            task.payload["analysis"], client_factory, update_stage,
+        )
     checkpoint(db, task, result=result, analysis_metadata=metadata, stage="创作方案已生成")
     try:
         report = export_report(task)
@@ -151,4 +169,11 @@ def recover_interrupted_runs(session_factory):
             task.status = "failed"
             task.finished_at = shanghai_now()
             task.payload = {**(task.payload or {}), "error": "服务重启中断了任务，已保存的结果仍可查看，请重新执行。"}
+            pipeline = task.payload.get("pipeline")
+            if pipeline:
+                # Keep checkpoints for inspection; never silently restart billable requests.
+                pipeline = {**pipeline, "status": "failed", "error_code": "creative_interrupted", "activity": "服务重启中断，已保存阶段结果"}
+                pipeline["stages"] = {name: {**item, "status": "failed" if item["status"] == "running" else item["status"]}
+                                      for name, item in pipeline["stages"].items()}
+                task.payload = {**task.payload, "pipeline": pipeline}
         db.commit()

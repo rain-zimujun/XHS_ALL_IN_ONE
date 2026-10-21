@@ -18,6 +18,7 @@ class CreativeAnalysisOptions(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     model_id: int = Field(gt=0)
+    workflow: Literal["legacy", "multi_agent"] = "legacy"
     idea_count: Literal[1, 3, 5] = 3
     variant_count: Literal[2, 3] = 3
     audience: str = Field(default="电商、服装行业、AI、时尚行业、营销行业、美工、后期从业者", max_length=300)
