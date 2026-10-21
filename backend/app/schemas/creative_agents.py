@@ -1,4 +1,4 @@
-"""Structured, evidence-linked outputs for the creative agents (M3)."""
+"""Structured, evidence-linked outputs for the creative agents (M3/M4)."""
 from __future__ import annotations
 
 from typing import Annotated, Literal
@@ -50,4 +50,51 @@ class SampleAnalysis(AgentOutputModel):
     avoid_patterns: list[SampleFinding] = Field(
         max_length=6, description="有样本依据、但不适合本次需求的表达模式；没有依据时返回空数组",
     )
+    limitations: list[FindingText] = Field(min_length=1, max_length=8)
+
+
+AudienceTerm = Annotated[str, Field(min_length=1, max_length=60)]
+
+
+class AudienceEvidence(AgentOutputModel):
+    basis: Literal["sample_evidence", "user_requirement", "hypothesis"]
+    note_ids: list[NoteId] = Field(default_factory=list, max_length=8)
+    statement: FindingText
+
+
+class AudienceSegment(AgentOutputModel):
+    segment_id: str = Field(min_length=1, max_length=40, pattern=r"^[a-z][a-z0-9_]{1,39}$")
+    audience_terms: list[AudienceTerm] = Field(min_length=1, max_length=4)
+    role_context: FindingText
+    primary_scenario: FindingText
+    attention_points: list[FindingText] = Field(min_length=1, max_length=6)
+    value_opportunities: list[FindingText] = Field(min_length=1, max_length=5)
+    suitable_formats: list[Literal["作品展示", "灵感分享", "行业观察", "方法说明", "教程", "案例拆解"]] = Field(min_length=1, max_length=4)
+    evidence: list[AudienceEvidence] = Field(min_length=1, max_length=5)
+    uncertainties: list[FindingText] = Field(default_factory=list, max_length=5)
+
+
+class AudienceNeed(AgentOutputModel):
+    need: FindingText
+    applies_to_segment_ids: list[str] = Field(min_length=1, max_length=8)
+    confidence: Literal["evidence", "hypothesis"]
+    evidence: list[AudienceEvidence] = Field(min_length=1, max_length=5)
+
+
+class AudienceFormatRecommendation(AgentOutputModel):
+    format: Literal["作品展示", "灵感分享", "行业观察", "方法说明", "教程", "案例拆解"]
+    for_segment_ids: list[str] = Field(min_length=1, max_length=8)
+    reason: FindingText
+    caution: FindingText
+
+
+class AudienceBrief(AgentOutputModel):
+    """A reader brief, not a market-research or demographic claim."""
+
+    summary: str = Field(min_length=1, max_length=1500)
+    requested_audience_terms: list[AudienceTerm] = Field(min_length=1, max_length=20)
+    segments: list[AudienceSegment] = Field(min_length=1, max_length=8)
+    shared_needs: list[AudienceNeed] = Field(min_length=1, max_length=8)
+    format_recommendations: list[AudienceFormatRecommendation] = Field(min_length=1, max_length=8)
+    avoid_assumptions: list[FindingText] = Field(default_factory=list, max_length=8)
     limitations: list[FindingText] = Field(min_length=1, max_length=8)
