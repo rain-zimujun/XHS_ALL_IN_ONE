@@ -8,6 +8,8 @@
 
 项目档案：[project-change-log.md](project-change-log.md)；总路线图：[hot-content-roadmap.md](hot-content-roadmap.md)。
 
+交付分支：自 2026-10-21 起，后续阶段默认在个人 Fork `rain-zimujun/XHS_ALL_IN_ONE` 的 `master` 上实现、验证并提交，推送至 `origin/master`；原开发分支保留，不向原作者仓库推送。
+
 ## 1. 角色总览
 
 采用 6 个生产角色和 1 个复用评委角色。选题评委、标题评委、文案评委、最终评委是同一评委机制在不同环节使用不同规则，并非必须使用不同模型。
