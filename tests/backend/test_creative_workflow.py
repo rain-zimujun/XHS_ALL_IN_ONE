@@ -88,7 +88,8 @@ def workflow(complete, count=1, variants=2, on_state=None, **kwargs):
                             complete=complete, on_state=on_state, **kwargs)
 
 
-@pytest.mark.parametrize("count,variants", [(1, 2), (3, 3), (5, 2)])
+@pytest.mark.parametrize("count", [1, 3, 5])
+@pytest.mark.parametrize("variants", [2, 3])
 def test_real_workflow_handoffs_all_roles_and_returns_legacy_compatible_result(count, variants):
     model, saved = WorkflowCompletion(), []
     w = workflow(model, count, variants, saved.append)
@@ -229,13 +230,16 @@ def install_client(model):
     app.dependency_overrides[get_creative_text_client_factory] = lambda: Client
 
 
-def test_api_multi_agent_saves_checkpoints_and_report_and_enforces_ownership(env):
+@pytest.mark.parametrize("count", [1, 3, 5])
+@pytest.mark.parametrize("variants", [2, 3])
+def test_api_multi_agent_saves_checkpoints_and_report_and_enforces_ownership(env, count, variants):
     model = WorkflowCompletion()
     install_client(model)
-    result = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": 1, "variant_count": 2, "workflow": "multi_agent"})
+    result = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": count, "variant_count": variants, "workflow": "multi_agent"})
     assert result["status"] == "completed", result["payload"].get("error")
     assert result["payload"]["pipeline"]["status"] == "completed"
-    assert len(result["payload"]["result"]["ideas"][0]["variants"]) == 2
+    assert len(result["payload"]["result"]["ideas"]) == count
+    assert all(len(idea["variants"]) == variants for idea in result["payload"]["result"]["ideas"])
     assert result["payload"]["report_files"]
     assert all(kwargs["timeout"] == (10, 180) for _, _, kwargs in model.calls)
     assert "fixture-key-private" not in json.dumps(result)
