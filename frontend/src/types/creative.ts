@@ -69,12 +69,25 @@ export type CreativeVariant = {
   tags: string[];
   cover_text: string;
   image_plan: CreativeImagePlan[];
+  quality?: { copy?: CreativeQualityReview; final?: CreativeQualityReview };
+};
+
+export type CreativeQualityReview = {
+  kind: "topic" | "title" | "copy" | "final";
+  scores: { criterion: string; score: number; comment: string }[];
+  overall_score: number;
+  passed: boolean;
+  blocking_issues: string[];
+  revision_instructions: string[];
+  reviewer_notes?: string;
 };
 
 type CreativeIdeaBase = {
+  idea_id?: string;
   title: string;
   reason: string;
   source_note_ids: string[];
+  quality?: { title?: CreativeQualityReview };
 };
 
 // Old saved results keep their original single body. Never fabricate extra variants.

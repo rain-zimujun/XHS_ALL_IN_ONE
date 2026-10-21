@@ -23,6 +23,9 @@ async function main() {
       id, platform: "xhs", task_type, status, progress: status === "completed" ? 100 : 0,
       payload, created_at: "2026-10-20T10:00:00", started_at: null, finished_at: null, parent_task_id: null,
     });
+    const review = (kind, overall_score) => ({
+      kind, scores: [], overall_score, passed: overall_score >= 7, blocking_issues: [], revision_instructions: [],
+    });
     const makePipeline = (running = false) => ({
       schema_version: 2, status: running ? "running" : "completed", current_stage: running ? "copy" : null,
       activity: running ? "文案 Agent（第 1/2 次）" : "多 Agent 创作及评审完成", request_count: running ? 7 : 10,
@@ -69,11 +72,14 @@ async function main() {
           search: searchBody, analysis: collectBody.analysis, sources, stage: "创作方案已生成", pipeline: makePipeline(),
           result: { summary: "多篇样本关注 AI 服装设计流程", patterns: ["拆解步骤", "对比方案"], style_summary: "问题开头、口语短句、分段清晰，结尾邀请讨论。",
             ideas: Array.from({ length: collectBody.analysis.idea_count }, (_, i) => ({
+              idea_id: `idea_${i + 1}`,
               title: `AI 服装创作方案 ${i + 1}`,
               reason: "基于多篇样本的共同特点", source_note_ids: sources.slice(0, 2).map(n => n.note_id),
+              quality: { title: review("title", [7, 9, 8][i]) },
               variants: Array.from({ length: collectBody.analysis.variant_count }, (_, v) => ({
                 label: ["问题拆解", "步骤清单", "对比讨论"][v], body: `标题 ${i + 1} 的文案 ${v + 1}：雾白的衣摆和轻盈的线条，有海风吹过的感觉。`,
                 tags: [`标题${i + 1}`, `版本${v + 1}`], cover_text: `封面 ${i + 1}-${v + 1}`,
+                quality: { copy: review("copy", [7, 8, 6][i]), final: review("final", [8, 6.5, 9][i]) },
                 image_plan: [{ purpose: "封面", composition: `配图 ${i + 1}-${v + 1}：3:4 竖图，顶部留白`, prompt: `concept ${i + 1}, version ${v + 1}, fashion sketch, 3:4`, negative_prompt: "logo, watermark, text" }],
               })),
             })) },
@@ -93,6 +99,10 @@ async function main() {
           title: "旧版标题", reason: "旧版推荐理由", source_note_ids: sources.slice(0, 2).map(n => n.note_id),
           ...collectedRun.payload.result.ideas[0].variants[0], body: "旧版正文原样保留，不补造额外版本。", alternative_titles: ["旧备选一", "旧备选二", "旧备选三"],
         }];
+        delete legacyRun.payload.result.ideas[0].idea_id;
+        delete legacyRun.payload.result.ideas[0].quality;
+        legacyRun.payload.result.ideas.push({ ...legacyRun.payload.result.ideas[0], title: "旧版第二个标题", body: "旧版第二篇正文，无评分且没有 idea_id。" });
+        legacyRun.payload.result.ideas[0].quality = { title: review("title", 7) };
         return reply(collectedRun);
       }
       if (path === "/api/xhs/creative/runs/100") return reply(legacyRun);
@@ -127,6 +137,36 @@ async function main() {
     await page.getByRole("button", { name: `采集并生成 3 个标题 × ${variantCount} 版文案`, exact: true }).click();
     await page.getByTestId("creative-stage-copy").filter({ hasText: "进行中" }).waitFor();
     await page.getByTestId("creative-results").waitFor();
+    assert.ok((await page.getByTestId("quality-标题").first().innerText()).includes("标题 7.0 分 · 通过"));
+    await page.getByLabel("评分排序").click();
+    await page.getByText("标题评分从高到低", { exact: true }).last().click();
+    assert.equal(await page.locator('button[data-testid^="creative-title-"]').first().getAttribute("data-testid"), "creative-title-1");
+    await page.getByLabel("评分排序").click();
+    await page.getByText("正文评分从高到低", { exact: true }).last().click();
+    assert.equal(await page.locator('button[data-testid^="creative-title-"]').first().getAttribute("data-testid"), "creative-title-1");
+    await page.getByLabel("评分排序").click();
+    await page.getByText("终审评分从高到低", { exact: true }).last().click();
+    assert.equal(await page.locator('button[data-testid^="creative-title-"]').first().getAttribute("data-testid"), "creative-title-2");
+    await page.getByLabel("评分筛选依据").click();
+    await page.getByText("按标题评分筛选", { exact: true }).last().click();
+    await page.getByLabel("最低评分").click();
+    await page.getByText("至少 8 分", { exact: true }).last().click();
+    assert.equal(await page.locator('button[data-testid^="creative-title-"]').count(), 2);
+    assert.ok(await page.getByTestId("creative-title-1").count());
+    assert.ok(await page.getByTestId("creative-title-2").count());
+    await page.getByLabel("评分筛选依据").click();
+    await page.getByText("按正文评分筛选", { exact: true }).last().click();
+    assert.equal(await page.locator('button[data-testid^="creative-title-"]').count(), 1);
+    assert.ok(await page.getByTestId("creative-title-1").count());
+    await page.getByLabel("评分筛选依据").click();
+    await page.getByText("按终审评分筛选", { exact: true }).last().click();
+    assert.equal(await page.locator('button[data-testid^="creative-title-"]').count(), 2);
+    assert.ok(await page.getByTestId("creative-title-0").count());
+    assert.ok(await page.getByTestId("creative-title-2").count());
+    await page.getByLabel("最低评分").click();
+    await page.getByText("显示全部评分", { exact: true }).last().click();
+    await page.getByLabel("评分排序").click();
+    await page.getByText("按原顺序", { exact: true }).last().click();
     assert.equal(collectBody.analysis.workflow, "multi_agent");
     assert.ok((await page.getByTestId("creative-pipeline").innerText()).includes("10 / 36"));
     assert.equal(collectBody.note_ids.length, 29);
@@ -198,6 +238,16 @@ async function main() {
     await page.getByText("这是旧版结果，仅保留原有的 1 版文案和配图。", { exact: true }).waitFor();
     assert.equal(await page.getByRole("tab").count(), 1);
     assert.ok((await page.getByTestId("creative-body").innerText()).includes("旧版正文原样保留"));
+    await page.getByLabel("评分筛选依据").click();
+    await page.getByText("按标题评分筛选", { exact: true }).last().click();
+    await page.getByLabel("最低评分").click();
+    await page.getByText("至少 6.5 分", { exact: true }).last().click();
+    assert.equal(await page.locator('button[data-testid^="creative-title-"]').count(), 1);
+    assert.equal(await page.getByTestId("creative-title-1").count(), 0);
+    await page.getByLabel("最低评分").click();
+    await page.getByText("显示全部评分", { exact: true }).last().click();
+    await page.getByTestId("creative-title-1").click();
+    assert.ok((await page.getByTestId("creative-body").innerText()).includes("旧版第二篇正文，无评分且没有 idea_id。"));
     await page.evaluate(() => { window.__rejectCopy = true; });
     await page.getByRole("button", { name: "复制完整笔记", exact: true }).click();
     await page.getByText("浏览器未允许复制，请选中正文手动复制。", { exact: true }).waitFor();

@@ -1,11 +1,18 @@
-import { Alert, Button, Card, Col, Collapse, Row, Space, Tabs, Tag, Typography } from "antd";
+import { Alert, Button, Card, Col, Collapse, Row, Select, Space, Tabs, Tag, Typography } from "antd";
 import { useState } from "react";
 
 import { downloadExportFile, exportCreativeReport } from "../../../lib/api";
 
-import type { CreativeIdea, CreativeRun, CreativeVariant } from "../../../types/creative";
+import type { CreativeIdea, CreativeQualityReview, CreativeRun, CreativeVariant } from "../../../types/creative";
 
 const { Paragraph, Title, Text } = Typography;
+
+function QualityBadge({ label, review }: { label: string; review?: CreativeQualityReview }) {
+  if (!review) return null;
+  return <Tag color={review.passed ? "success" : "error"} data-testid={`quality-${label}`}>
+    {label} {review.overall_score.toFixed(1)} 分 · {review.passed ? "通过" : "待修改"}
+  </Tag>;
+}
 
 function VariantContent({ title, variant }: { title: string; variant: CreativeVariant }) {
   const [copied, setCopied] = useState<"body" | "note" | null>(null);
@@ -57,11 +64,19 @@ function IdeaContent({ idea, sources }: { idea: CreativeIdea; sources: NonNullab
     <Card title="文案版本">
       <Paragraph type="secondary">当前标题</Paragraph>
       <Title level={4} copyable data-testid="creative-selected-title">{idea.title}</Title>
+      <Space wrap style={{ marginBottom: 12 }}><QualityBadge label="标题" review={idea.quality?.title} /></Space>
       {legacy && <Alert type="info" title="这是旧版结果，仅保留原有的 1 版文案和配图。" description="如需每个标题有 2～3 版，请点击上方“使用已采集正文重新生成”（会调用文字模型）。仅切换标题或文案不会调用模型。" style={{ marginBottom: 16 }} />}
       <Tabs defaultActiveKey="0" destroyOnHidden items={variants.map((variant, i) => ({
         key: String(i), label: `文案 ${i + 1} · ${variant.label}`,
-        children: <VariantContent title={idea.title} variant={variant} />,
+        children: <>
+          <Space wrap style={{ marginBottom: 12 }}>
+            <QualityBadge label="正文" review={variant.quality?.copy} />
+            <QualityBadge label="终审" review={variant.quality?.final} />
+          </Space>
+          <VariantContent title={idea.title} variant={variant} />
+        </>,
       }))} />
+      {variants.some(variant => variant.quality) && <Text type="secondary">正文和终审评分对应当前文案版本。</Text>}
     </Card>
     <Collapse items={[{
       key: "references", label: "推荐理由与参考来源", children: <>
@@ -84,11 +99,33 @@ function IdeaContent({ idea, sources }: { idea: CreativeIdea; sources: NonNullab
 export function CreativeResults({ run, onUpdate }: { run: CreativeRun; onUpdate: (updated: CreativeRun) => void }) {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
-  const [selectedTitle, setSelectedTitle] = useState(0);
+  const [selectedIdeaId, setSelectedIdeaId] = useState<string | null>(null);
+  const [sortBy, setSortBy] = useState<"original" | "title" | "copy" | "final">("original");
+  const [filterBy, setFilterBy] = useState<"title" | "copy" | "final">("final");
+  const [minimumScore, setMinimumScore] = useState(0);
   const { result, analysis_metadata: metadata, sources = [] } = run.payload;
   if (!result) return null;
-  const selectedIndex = result.ideas[selectedTitle] ? selectedTitle : 0;
-  const idea = result.ideas[selectedIndex];
+  const scoreFor = (idea: CreativeIdea, metric: "title" | "copy" | "final") => {
+    if (metric === "title") return idea.quality?.title?.overall_score;
+    const variantScores = (idea.variants || []).map(variant => metric === "copy" ? variant.quality?.copy?.overall_score : variant.quality?.final?.overall_score).filter((score): score is number => typeof score === "number");
+    return variantScores.length ? Math.max(...variantScores) : undefined;
+  };
+  const sortedIdeas = [...result.ideas].sort((a, b) => {
+    if (sortBy === "original") return result.ideas.indexOf(a) - result.ideas.indexOf(b);
+    const metric = sortBy;
+    return (scoreFor(b, metric) ?? -1) - (scoreFor(a, metric) ?? -1);
+  });
+  const visibleIdeas = sortedIdeas.filter(idea => {
+    if (minimumScore === 0) return true;
+    const score = scoreFor(idea, filterBy);
+    return score !== undefined && score >= minimumScore;
+  });
+  const selectedIdea = visibleIdeas.find(idea => {
+    const index = result.ideas.indexOf(idea);
+    return (idea.idea_id || `legacy-${index}`) === selectedIdeaId;
+  }) || visibleIdeas[0];
+  const selectedIndex = selectedIdea ? result.ideas.indexOf(selectedIdea) : 0;
+  const idea = selectedIdea;
   async function exportAgain() {
     setExporting(true); setError("");
     try { onUpdate(await exportCreativeReport(run.id)); }
@@ -100,14 +137,32 @@ export function CreativeResults({ run, onUpdate }: { run: CreativeRun; onUpdate:
       <Alert type="info" title={metadata?.disclaimer || "内容仅供创作参考，不保证流量；配图建议未分析原图。"} style={{ marginBottom: 16 }} />
       <Title level={5}>标题</Title>
       <Paragraph type="secondary">点击标题，在下方选择它的文案版本，正文与配图建议会同步显示。切换不会再次调用模型。</Paragraph>
+      {result.ideas.some(item => item.quality?.title || item.variants?.some(v => v.quality)) && <Space wrap style={{ marginBottom: 12 }}>
+        <Select aria-label="评分排序" value={sortBy} onChange={setSortBy} style={{ minWidth: 190 }} options={[
+          { value: "original", label: "按原顺序" }, { value: "title", label: "标题评分从高到低" },
+          { value: "copy", label: "正文评分从高到低" }, { value: "final", label: "终审评分从高到低" },
+        ]} />
+        <Select aria-label="评分筛选依据" value={filterBy} onChange={setFilterBy} style={{ minWidth: 150 }} options={[
+          { value: "title", label: "按标题评分筛选" }, { value: "copy", label: "按正文评分筛选" }, { value: "final", label: "按终审评分筛选" },
+        ]} />
+        <Select aria-label="最低评分" value={minimumScore} onChange={setMinimumScore} style={{ minWidth: 150 }} options={[
+          { value: 0, label: "显示全部评分" }, { value: 6.5, label: "至少 6.5 分" }, { value: 8, label: "至少 8 分" },
+        ]} />
+        <Text type="secondary">正文/终审按该标题下最高分版本排序或筛选；开启最低分后，无评分旧稿不会被误认为达标。</Text>
+      </Space>}
       <Row gutter={[12, 12]}>
-        {result.ideas.map((item, i) => <Col xs={24} md={12} xl={8} key={i}>
-          <Button block type={i === selectedIndex ? "primary" : "default"} aria-pressed={i === selectedIndex}
-            data-testid={`creative-title-${i}`} onClick={() => setSelectedTitle(i)}
+        {visibleIdeas.map(item => {
+          const i = result.ideas.indexOf(item);
+          return <Col xs={24} md={12} xl={8} key={item.idea_id || i}>
+          <Button block type={item === idea ? "primary" : "default"} aria-pressed={item === idea}
+            data-testid={`creative-title-${i}`} onClick={() => setSelectedIdeaId(item.idea_id || `legacy-${i}`)}
             style={{ height: "auto", minHeight: 72, whiteSpace: "normal", textAlign: "left", padding: "12px 16px" }}>
-            <span>标题 {i + 1} · {item.title}<br /><small>{item.variants?.length || 1} 版文案及对应配图</small></span>
+            <Space orientation="vertical" align="start"><span>标题 {i + 1} · {item.title}<br /><small>{item.variants?.length || 1} 版文案及对应配图</small></span>
+              <QualityBadge label="标题" review={item.quality?.title} /></Space>
           </Button>
-        </Col>)}
+          </Col>;
+        })}
+        {!visibleIdeas.length && <Col span={24}><Text type="secondary">没有达到当前分数条件的标题。</Text></Col>}
       </Row>
     </Card>
     {idea && <IdeaContent key={`${run.id}-${selectedIndex}`} idea={idea} sources={sources} />}
