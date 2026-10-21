@@ -240,6 +240,19 @@ def test_api_multi_agent_saves_checkpoints_and_report_and_enforces_ownership(env
     assert all(kwargs["timeout"] == (10, 180) for _, _, kwargs in model.calls)
     assert "fixture-key-private" not in json.dumps(result)
     assert env.client.get(f"/api/xhs/creative/runs/{result['id']}", headers=env.other_headers).status_code == 404
+    calls = len(model.calls)
+    for file in result["payload"]["report_files"]:
+        download = env.client.get(file["download_url"], headers=env.headers)
+        assert download.status_code == 200
+        assert env.client.get(file["download_url"], headers=env.other_headers).status_code == 404
+        if file["file_name"].endswith(".json"):
+            assert download.json()["schema_version"] == 3
+            assert download.json()["pipeline"] == result["payload"]["pipeline"]
+        else:
+            assert "终审评分：8.00 分 · 通过" in download.text
+            assert "多 Agent 阶段与质量记录" in download.text
+    assert env.client.post(f"/api/xhs/creative/runs/{result['id']}/export", headers=env.headers).status_code == 200
+    assert len(model.calls) == calls
 
 
 def test_api_timeout_keeps_draft_without_final_result_and_no_model_retry(env):
