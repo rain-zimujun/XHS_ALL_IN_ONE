@@ -211,6 +211,7 @@ class ItemReviewIssue(AgentOutputModel):
     revision_instruction: FindingText
     note_ids: list[NoteId] = Field(default_factory=list, max_length=8)
     related_item_ids: list[str] = Field(default_factory=list, max_length=8)
+    responsible_stage: Literal["topic", "title", "copy", "image"] | None = None
 
 
 class ItemJudgement(AgentOutputModel):
