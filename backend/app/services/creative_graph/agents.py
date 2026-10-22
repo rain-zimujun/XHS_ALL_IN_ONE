@@ -40,12 +40,23 @@ def validation_summary(exc: ValidationError) -> str:
     )))[:300]
 
 
+def graph_prompt(spec: AgentSpec) -> str:
+    prompt = spec.system_prompt
+    for instruction in (
+        "原样回填 topic_revision 和 input_fingerprint。", "原样回填 input_fingerprint。",
+        "原样回填 revision 和 input_fingerprint，", "按输入 topic_revision 和 input_fingerprint 原样回填，不能评审旧版本。",
+    ):
+        prompt = prompt.replace(instruction, "")
+    return prompt + "\n只返回当前 response_format 的字段；版本号、输入指纹和通过名单由程序从当前全局状态绑定，不要在响应中输出。"
+
+
 @dataclass(frozen=True)
 class StructuredAgent:
     model: CompatibleChatModel
     spec: AgentSpec
     response_format: type
     output_model: type[BaseModel]
+    state_fields: tuple[str, ...] = ()
     runnable: object = field(init=False, repr=False)
 
     def __post_init__(self):
@@ -70,10 +81,12 @@ class StructuredAgent:
                 # Output is constrained in the actual request, then validated
                 # against TypedDict at runtime before business checks see it.
                 value = self.runnable.invoke([
-                    SystemMessage(content=self.spec.system_prompt),
+                    SystemMessage(content=graph_prompt(self.spec)),
                     HumanMessage(content=prompt + repair),
                 ])
-                result = self.output_model.model_validate(value)
+                # Version/fingerprint are owned by this invocation's global
+                # state, never copied or chosen by the model.
+                result = self.output_model.model_validate({**value, **{k: payload[k] for k in self.state_fields}})
                 kind = "creative_handoff_invalid"
                 validate_output(result)
                 if revision:
@@ -95,11 +108,11 @@ def build_agents(model: CompatibleChatModel) -> dict[str, StructuredAgent]:
         "sample_analysis": StructuredAgent(model, SAMPLE_AGENT, response_format=responses.SampleAnalysisResponse, output_model=legacy.SampleAnalysis),
         "audience": StructuredAgent(model, AUDIENCE_AGENT, response_format=responses.AudienceResponse, output_model=legacy.AudienceBrief),
         "topic": StructuredAgent(model, TOPIC_AGENT, response_format=responses.TopicResponse, output_model=legacy.TopicBrief),
-        "topic_review": StructuredAgent(model, TOPIC_REVIEW_AGENT, response_format=responses.TopicReviewResponse, output_model=legacy.TopicReviewResponse),
-        "title": StructuredAgent(model, TITLE_AGENT, response_format=responses.TitleResponse, output_model=legacy.TitleCandidates),
-        "title_review": StructuredAgent(model, TITLE_REVIEW_AGENT, response_format=responses.TitleReviewResponse, output_model=legacy.ItemReviewResponse),
-        "copy": StructuredAgent(model, COPY_AGENT, response_format=responses.CopyResponse, output_model=legacy.CopyVariants),
-        "copy_review": StructuredAgent(model, COPY_REVIEW_AGENT, response_format=responses.CopyReviewResponse, output_model=legacy.ItemReviewResponse),
-        "image": StructuredAgent(model, IMAGE_AGENT, response_format=responses.ImageResponse, output_model=legacy.ImagePlans),
-        "final_review": StructuredAgent(model, FINAL_REVIEW_AGENT, response_format=responses.FinalReviewResponse, output_model=legacy.ItemReviewResponse),
+        "topic_review": StructuredAgent(model, TOPIC_REVIEW_AGENT, response_format=responses.TopicReviewResponse, output_model=legacy.TopicReviewResponse, state_fields=("topic_revision", "input_fingerprint")),
+        "title": StructuredAgent(model, TITLE_AGENT, response_format=responses.TitleResponse, output_model=legacy.TitleCandidates, state_fields=("topic_revision", "input_fingerprint")),
+        "title_review": StructuredAgent(model, TITLE_REVIEW_AGENT, response_format=responses.TitleReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint")),
+        "copy": StructuredAgent(model, COPY_AGENT, response_format=responses.CopyResponse, output_model=legacy.CopyVariants, state_fields=("input_fingerprint",)),
+        "copy_review": StructuredAgent(model, COPY_REVIEW_AGENT, response_format=responses.CopyReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint")),
+        "image": StructuredAgent(model, IMAGE_AGENT, response_format=responses.ImageResponse, output_model=legacy.ImagePlans, state_fields=("input_fingerprint",)),
+        "final_review": StructuredAgent(model, FINAL_REVIEW_AGENT, response_format=responses.FinalReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint")),
     }

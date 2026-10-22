@@ -13,7 +13,6 @@ strict_response = with_config(ConfigDict(extra="forbid", str_strip_whitespace=Tr
 Text = Annotated[str, Field(min_length=1, max_length=600)]
 NoteId = Annotated[str, Field(min_length=1, max_length=120)]
 Quote = Annotated[str, Field(min_length=2, max_length=180)]
-Fingerprint = Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
 IdeaId = Annotated[str, Field(min_length=1, max_length=40, pattern=r"^idea_[a-z0-9_]{1,39}$")]
 TitleId = Annotated[str, Field(pattern=r"^title_[a-z0-9_]{1,60}$")]
 CopyId = Annotated[str, Field(pattern=r"^copy_[a-z0-9_]{1,60}$")]
@@ -179,8 +178,6 @@ class TopicJudgement(TypedDict):
 class TopicReviewResponse(TypedDict):
     """Evaluate topics; the application calculates pass/fail."""
 
-    topic_revision: Annotated[int, Field(ge=1)]
-    input_fingerprint: Fingerprint
     summary: Summary
     reviews: Annotated[list[TopicJudgement], Field(min_length=1, max_length=5)]
     limitations: Annotated[list[Text], Field(min_length=1, max_length=8)]
@@ -207,8 +204,6 @@ class TitleGroup(TypedDict):
 class TitleResponse(TypedDict):
     """Create distinct candidates for the approved topics."""
 
-    topic_revision: Annotated[int, Field(ge=1)]
-    input_fingerprint: Fingerprint
     ideas: Annotated[list[TitleGroup], Field(min_length=1, max_length=5)]
     limitations: Annotated[list[Text], Field(min_length=1, max_length=8)]
 
@@ -248,8 +243,6 @@ class ItemJudgement(TypedDict):
 class TitleReviewResponse(TypedDict):
     """Score title candidates without rewriting them."""
 
-    revision: Annotated[int, Field(ge=1)]
-    input_fingerprint: Fingerprint
     summary: Summary
     reviews: Annotated[list[ItemJudgement], Field(min_length=1, max_length=40)]
     limitations: Annotated[list[Text], Field(min_length=1, max_length=8)]
@@ -276,7 +269,6 @@ class CopyGroup(TypedDict):
 class CopyResponse(TypedDict):
     """Write directly usable copy variants for each locked title."""
 
-    input_fingerprint: Fingerprint
     ideas: Annotated[list[CopyGroup], Field(min_length=1, max_length=5)]
     limitations: Annotated[list[Text], Field(min_length=1, max_length=8)]
 
@@ -285,8 +277,6 @@ class CopyResponse(TypedDict):
 class CopyReviewResponse(TypedDict):
     """Evaluate the actual bodies, not their self-reported coverage."""
 
-    revision: Annotated[int, Field(ge=1)]
-    input_fingerprint: Fingerprint
     summary: Summary
     reviews: Annotated[list[ItemJudgement], Field(min_length=1, max_length=40)]
     limitations: Annotated[list[Text], Field(min_length=1, max_length=8)]
@@ -316,7 +306,6 @@ class VariantImages(TypedDict):
 class ImageResponse(TypedDict):
     """Plan images for every locked copy variant without editing the copy."""
 
-    input_fingerprint: Fingerprint
     variants: Annotated[list[VariantImages], Field(min_length=2, max_length=15)]
     limitations: Annotated[list[Text], Field(min_length=1, max_length=8)]
 
@@ -325,8 +314,6 @@ class ImageResponse(TypedDict):
 class FinalReviewResponse(TypedDict):
     """Review each complete note and identify the owner of every issue."""
 
-    revision: Annotated[int, Field(ge=1)]
-    input_fingerprint: Fingerprint
     summary: Summary
     reviews: Annotated[list[ItemJudgement], Field(min_length=1, max_length=40)]
     limitations: Annotated[list[Text], Field(min_length=1, max_length=8)]

@@ -395,6 +395,10 @@ Git 状态：代码提交 `5c07259`（`feat: 新增选题评委 Agent 与程序�
 
 ### 2026-10-22：LangGraph 迁移
 
+- L2 完成：新增 `CreativeGraphState` 和十个角色局部更新 TypedDict，`workflow.py` 通过真实 `StateGraph` 串联十个角色、返工控制和结果组装；选题/标题/正文评委通过条件边继续或返回原生产者，终审条件边按责任阶段返工。节点仅能返回允许字段；上游修改使下游评审失效，定向重写保留其他稿件，标题改选会重新绑定正文/配图。
+- L2 同步调整程序字段归属：模型响应 Schema 不再要求返回版本号和输入指纹，角色提示词同步去掉回填要求，由当前全局状态补入这些字段后做业务核验。结构、业务交接、评审耗尽、网络异常分别处理，保留请求计数、取消和实时快照；尚未切换 API，L3 接入页面和数据库。
+- L2 自审：检查终审四种责任路由、只改失败对象、改选标题后的绑定、预算和取消竞争；修复“最终组装时取消仍在全局状态留下最终结果”的边界。新图测试 26 项；新旧流程及原生 Schema 定向回归合计 77 项通过，未调用真实模型。说明与图见 [LangGraph 实现说明](langgraph-workflow.md)。本节随 `feat: 用 LangGraph 全局状态与条件边编排创作流程` 归档，L1 提交为 `342bbe7`，交付目标 `origin/master`。
+
 - L1 完成：固定 `langgraph==0.6.11`、`langchain-core==0.3.86`，在现有 Python 3.11 虚拟环境安装并通过 `pip check`。新增 `schemas/creative_graph.py`，手写十个独立 Agent 响应 `TypedDict` 及嵌套类型；字段长度、数量、枚举、可空值和禁止额外字段均保留到 Schema。
 - 新增 `services/creative_graph/model.py`：继承 LangChain `BaseChatModel`，复用现有 OpenAI 兼容传输和 10/180 秒超时；`with_structured_output()` 将 TypedDict 转成原生严格 JSON Schema 请求参数，完整 JSON 解析和 TypeAdapter 运行时校验后才交给业务检查。每次调用只有一次模型请求，不增加隐藏的格式化请求，不静默回退普通文本。
 - 新增 `services/creative_graph/agents.py`：十个角色构建时各自显式填写 `response_format=对应 TypedDict`，复用角色提示词；旧 Pydantic 模型仅适配现有业务检查。结构错误和动态交接错误分别记录为 `creative_schema_invalid` / `creative_handoff_invalid`，网络和 HTTP 异常直接退出。

@@ -2,7 +2,7 @@
 
 日期：2026-10-21（北京时间）
 
-2026-10-22 迁移进度：按用户确认新增可切换的 LangGraph 流程。L1 已完成十个 Agent 的手写响应 `TypedDict`，构建时逐一显式传入 `response_format`，内部通过 LangChain `with_structured_output()` 传递原生严格 JSON Schema。TypedDict 自身不做运行时检查，适配层使用 TypeAdapter 校验；来源、版本和数量关联继续执行独立业务校验。全局状态、局部更新、条件边及页面入口正在后续 L2/L3 实施，旧流程保留。
+2026-10-22 迁移进度：L1 已完成十个 Agent 的手写响应 `TypedDict`，构建时逐一显式传入 `response_format`，内部通过 LangChain `with_structured_output()` 传递原生严格 JSON Schema。L2 已完成 `CreativeGraphState`、各节点局部更新 TypedDict、真实 StateGraph 条件边和定向返工。版本/指纹由程序绑定，模型仅返回角色负责的内容/评分；来源与 ID 关系继续业务校验。L3 页面与任务接入待完成，旧流程保留。详细状态字段、调用方式和实际图结构见 [LangGraph 实现说明](langgraph-workflow.md)。
 
 状态：M0～M18 的基础层、各角色、后端串联/有限返工、页面阶段/评分/评审详情、报告及完整离线验收已完成；M19 真实小规模试用与兼容问题修复进行中，M20 人工反馈校准待完成。
 

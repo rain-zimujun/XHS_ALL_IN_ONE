@@ -1,0 +1,213 @@
+import copy
+import json
+
+import pytest
+import requests
+
+from backend.app.services.creative_analysis import CreativeError
+from backend.app.services.creative_agents.revision import PipelineCancelled
+from backend.app.services.creative_graph.state import SampleUpdate
+from backend.app.services.creative_graph.workflow import LangGraphWorkflow
+from backend.app.services.creative_pipeline import validate_pipeline_state
+from test_creative_sample_agent import SEARCH, sources
+from test_creative_workflow import WorkflowCompletion
+
+
+class GraphCompletion(WorkflowCompletion):
+    """Use the existing independent synthetic outputs with the new wire schema."""
+    NAMES = {
+        "SampleAnalysisResponse": "SampleAnalysis", "AudienceResponse": "AudienceBrief",
+        "TopicResponse": "TopicBrief", "TopicReviewResponse": "TopicReviewResponse",
+        "TitleResponse": "TitleCandidates", "CopyResponse": "CopyVariants", "ImageResponse": "ImagePlans",
+        "TitleReviewResponse": "ItemReviewResponse", "CopyReviewResponse": "ItemReviewResponse", "FinalReviewResponse": "ItemReviewResponse",
+    }
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.wire_calls = []
+
+    def __call__(self, **kwargs):
+        self.wire_calls.append(copy.deepcopy(kwargs))
+        prompt, end = json.JSONDecoder().raw_decode(kwargs["user_prompt"])
+        prompt["output_schema"]["title"] = self.NAMES[prompt["output_schema"]["title"]]
+        raw = super().__call__(**{**kwargs, "user_prompt": json.dumps(prompt, ensure_ascii=False) + kwargs["user_prompt"][end:]})
+        output = json.loads(raw)
+        for key in ("input_fingerprint", "revision", "topic_revision"):
+            output.pop(key, None)
+        for review in output.get("reviews", []):
+            if "item_id" in review:
+                for issue in review["issues"]:
+                    issue.setdefault("responsible_stage", None)
+        return json.dumps(output, ensure_ascii=False)
+
+
+def workflow(model, count=1, variants=2, **kwargs):
+    return LangGraphWorkflow(search=SEARCH, sources=sources(), options={"model_id": 1, "idea_count": count, "variant_count": variants}, complete=model, **kwargs)
+
+
+@pytest.mark.parametrize("count", [1, 3, 5])
+@pytest.mark.parametrize("variants", [2, 3])
+def test_graph_executes_ten_roles_and_persists_serializable_global_state(count, variants):
+    model, saved = GraphCompletion(), []
+    w = workflow(model, count, variants, on_graph_state=saved.append)
+    result, metadata = w.run()
+    assert len(result["ideas"]) == count
+    assert all(len(i["variants"]) == variants for i in result["ideas"])
+    assert metadata["workflow"] == "langgraph"
+    assert len(model.calls) == metadata["request_count"] == 10
+    assert saved[-1]["result"] == result
+    assert saved[-1]["pipeline"]["status"] == "completed"
+    assert saved[-1]["revision_plan"] == {}
+    for state in saved:
+        validate_pipeline_state(json.loads(json.dumps(state))["pipeline"])
+    assert {c["response_format"]["json_schema"]["name"] for c in model.wire_calls} == set(GraphCompletion.NAMES)
+    assert "fixture-private" not in json.dumps(w.state)
+
+
+@pytest.mark.parametrize("stage", ["TopicReviewResponse", "title_review", "copy_review"])
+def test_conditional_review_edge_returns_to_producer_and_only_revises_failed_items(stage):
+    model = GraphCompletion(fail_stage=stage)
+    w = workflow(model, 3, 3)
+    result, _ = w.run()
+    assert len(result["ideas"]) == 3
+    assert len(model.calls) == 12
+    producer = {"TopicReviewResponse": "topic", "title_review": "title", "copy_review": "copy"}[stage]
+    item = w.state["pipeline"]["stages"][producer]
+    assert item["quality_revisions"] == 1
+    history = [h for h in item["history"] if h["role"] == "producer"]
+    assert history[0]["output"]["ideas"][-1] == history[-1]["output"]["ideas"][-1]
+
+
+@pytest.mark.parametrize("owner", ["topic", "title", "copy", "image"])
+def test_final_conditional_route_invalidates_and_rebuilds_only_dependencies(owner):
+    model, states = GraphCompletion(fail_stage="final_review", final_owner=owner), []
+    w = workflow(model, 3, 2, on_graph_state=states.append)
+    result, _ = w.run()
+    assert result and model.counts["final_review"] == 2
+    assert any(s["pipeline"]["stages"]["final_review"]["status"] == "invalidated" and s["final_review"] is None for s in states)
+    assert w.state["pipeline"]["stages"][owner]["quality_revisions"] == 1
+    for stage in ("topic", "title", "copy", "image"):
+        history = [h["output"] for h in w.state["pipeline"]["stages"][stage]["history"] if h["role"] == "producer"]
+        if len(history) > 1:
+            field = "variants" if stage == "image" else "ideas"
+            assert history[0][field][-1] == history[-1][field][-1]
+
+
+@pytest.mark.parametrize("stage,owner", [("TopicReviewResponse", "topic"), ("title_review", "title"), ("copy_review", "copy"), ("final_review", "image")])
+def test_exhausted_review_cycle_stops_with_drafts_and_no_final_result(stage, owner):
+    model = GraphCompletion(fail_stage=stage, always=True, final_owner=owner)
+    w = workflow(model)
+    with pytest.raises(CreativeError) as caught:
+        w.run()
+    assert caught.value.code == "creative_quality_exhausted"
+    assert w.state["result"] is None
+    assert w.state["pipeline"]["status"] == "revision_required"
+    assert w.state["pipeline"]["stages"][owner]["quality_revisions"] == 2
+    assert model.counts[stage] == 3
+
+
+def test_budget_and_timeout_stop_without_further_requests_and_preserve_global_outputs():
+    model = GraphCompletion()
+    w = workflow(model, max_requests=3)
+    with pytest.raises(CreativeError) as caught:
+        w.run()
+    assert caught.value.code == "creative_budget_exhausted"
+    assert len(model.calls) == w.state["pipeline"]["request_count"] == 3
+    assert w.state["topic"] and w.state["result"] is None
+    model = GraphCompletion(timeout_stage="CopyVariants")
+    w = workflow(model)
+    with pytest.raises(requests.ReadTimeout):
+        w.run()
+    assert model.counts["CopyVariants"] == 1
+    assert w.state["title_review"]["status"] == "passed"
+    assert w.state["copy"] is None
+    assert "secret-transport-details" not in json.dumps(w.state)
+
+
+@pytest.mark.parametrize("race", [False, True])
+def test_cancellation_at_request_boundary_keeps_results_uncommitted(race):
+    model, states = GraphCompletion(timeout_stage="TopicBrief" if race else None), []
+    def save(state):
+        if len(model.calls) == 3 and state["pipeline"]["status"] != "cancelled":
+            raise PipelineCancelled()
+        states.append(state)
+    w = workflow(model, on_graph_state=save)
+    with pytest.raises(PipelineCancelled):
+        w.run()
+    assert len(model.calls) == 3
+    assert states[-1]["pipeline"]["status"] == "cancelled"
+    assert states[-1]["topic"] is None
+
+
+def test_changed_title_selection_rebinds_copy_and_image_groups():
+    model = GraphCompletion(fail_stage="final_review", final_owner="title")
+    def complete(**kwargs):
+        output = json.loads(model(**kwargs))
+        if model.calls[-1][0] == "title_review" and model.counts["title_review"] == 2:
+            for score in output["reviews"][1]["scores"]:
+                score["score"] = 9.0
+        return json.dumps(output)
+    w = workflow(complete, 3, 2)
+    result, _ = w.run()
+    assert result["ideas"][0]["candidate_id"] == "title_0_1"
+    assert w.state["copy"]["ideas"][0]["candidate_id"] == "title_0_1"
+    assert w.state["image"]["variants"][0]["candidate_id"] == "title_0_1"
+
+
+def test_graph_has_visible_conditional_edges_and_node_write_scope_is_enforced():
+    w = workflow(GraphCompletion())
+    diagram = w.graph.get_graph()
+    assert any(e.source == "topic_review" and e.target == "topic" and e.conditional for e in diagram.edges)
+    assert any(e.source == "plan_revision" and e.target == "image" and e.conditional for e in diagram.edges)
+    original = copy.deepcopy(w.state)
+    def out_of_scope(state):
+        state["search"]["keyword"] = "mutated"
+        return {"copy": {}}
+    with pytest.raises(CreativeError) as caught:
+        w._node("sample_analysis", out_of_scope, SampleUpdate)(w.state)
+    assert caught.value.code == "creative_node_scope_invalid"
+    assert w.state["search"] == original["search"]
+
+
+def test_model_does_not_echo_server_owned_versions_and_every_artifact_binds_current_state():
+    model = GraphCompletion()
+    w = workflow(model)
+    w.run()
+    for call in model.wire_calls:
+        properties = call["response_format"]["json_schema"]["schema"]["properties"]
+        assert not set(properties).intersection({"revision", "topic_revision", "input_fingerprint"})
+        assert "原样回填" not in call["system_prompt"]
+    assert w.state["title"]["topic_revision"] == w.state["pipeline"]["stages"]["topic"]["revision"]
+    assert len(w.state["copy"]["input_fingerprint"]) == 64
+    assert w.state["final_review"]["revision"] == 1
+
+
+def test_cancellation_before_final_result_persistence_does_not_publish_result():
+    states = []
+    def save(state):
+        if state["result"] is not None:
+            raise PipelineCancelled()
+        states.append(state)
+    w = workflow(GraphCompletion(), on_graph_state=save)
+    with pytest.raises(PipelineCancelled):
+        w.run()
+    assert states[-1]["pipeline"]["status"] == "cancelled"
+    assert states[-1]["result"] is None
+
+
+@pytest.mark.parametrize("kind", ["schema", "handoff"])
+def test_distinct_output_failure_reason_is_saved_in_global_state(kind):
+    model = GraphCompletion()
+    def complete(**kwargs):
+        output = json.loads(model(**kwargs))
+        if kind == "schema":
+            output["observations"][0]["note_id"] = 123
+        else:
+            output["observations"][0]["quote"] = "未出现在样本中的引文"
+        return json.dumps(output)
+    w = workflow(complete)
+    with pytest.raises(CreativeError) as caught:
+        w.run()
+    assert caught.value.code == w.state["pipeline"]["error_code"] == f"creative_{kind}_invalid"
+    assert len(model.calls) == 2 and w.state["audience"] is None
+    assert len(w.state["pipeline"]["stages"]["sample_analysis"]["metadata"]["failed_attempts"]) == 2
