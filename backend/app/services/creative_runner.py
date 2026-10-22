@@ -30,18 +30,27 @@ def generate_for_task(db, task, client_factory):
         task.progress = 85
         db.commit()
 
-    def save_pipeline(state):
+    def save_pipeline(state, graph_state=None):
         db.refresh(task)
         if task.status == "cancelled" and state["status"] != "cancelled":
             raise RunCancelled()
         task.payload = {**task.payload, "pipeline": state, "stage": state["activity"]}
+        if graph_state is not None:
+            task.payload = {**task.payload, "graph_state": graph_state}
         done = sum(item["status"] == "completed" for item in state["stages"].values())
         start = 75 if task.task_type == "creative_collect" else 0
         task.progress = max(task.progress, start + round(done / 7 * (95 - start)))
         db.commit()
 
     # An old saved/pending task without a workflow flag keeps its original behavior.
-    if task.payload["analysis"].get("workflow") == "multi_agent":
+    if task.payload["analysis"].get("workflow") == "langgraph":
+        from backend.app.services.creative_graph.workflow import analyze_langgraph
+        result, metadata = analyze_langgraph(
+            db, task.user_id, task.payload["search"], task.payload["sources"],
+            task.payload["analysis"], client_factory,
+            lambda state: save_pipeline(state["pipeline"], graph_state=state),
+        )
+    elif task.payload["analysis"].get("workflow") == "multi_agent":
         result, metadata = analyze_multi_agent(
             db, task.user_id, task.payload["search"], task.payload["sources"],
             task.payload["analysis"], client_factory, save_pipeline,
@@ -176,4 +185,8 @@ def recover_interrupted_runs(session_factory):
                 pipeline["stages"] = {name: {**item, "status": "failed" if item["status"] == "running" else item["status"]}
                                       for name, item in pipeline["stages"].items()}
                 task.payload = {**task.payload, "pipeline": pipeline}
+                if task.payload.get("graph_state"):
+                    task.payload = {**task.payload, "graph_state": {
+                        **task.payload["graph_state"], "pipeline": pipeline, "result": None, "metadata": {},
+                    }}
         db.commit()

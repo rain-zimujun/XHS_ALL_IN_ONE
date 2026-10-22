@@ -2,7 +2,7 @@
 
 日期：2026-10-21（北京时间）
 
-2026-10-22 迁移进度：L1 已完成十个 Agent 的手写响应 `TypedDict`，构建时逐一显式传入 `response_format`，内部通过 LangChain `with_structured_output()` 传递原生严格 JSON Schema。L2 已完成 `CreativeGraphState`、各节点局部更新 TypedDict、真实 StateGraph 条件边和定向返工。版本/指纹由程序绑定，模型仅返回角色负责的内容/评分；来源与 ID 关系继续业务校验。L3 页面与任务接入待完成，旧流程保留。详细状态字段、调用方式和实际图结构见 [LangGraph 实现说明](langgraph-workflow.md)。
+2026-10-22 迁移进度：L1～L3 已完成。十个 Agent 均手写响应 `TypedDict`，构建时逐一显式传入 `response_format`，内部通过 LangChain `with_structured_output()` 传递原生严格 JSON Schema；新增 `CreativeGraphState`、各节点局部更新 TypedDict、真实 StateGraph 条件边和定向返工。版本/指纹由程序绑定，模型仅返回角色负责的内容/评分；来源与 ID 关系继续业务校验。页面高级选项可切换 LangGraph 试用版，任务逐次保存全局状态和兼容的阶段快照，旧流程保留。详细状态字段、调用方式和实际图结构见 [LangGraph 实现说明](langgraph-workflow.md)。
 
 状态：M0～M18 的基础层、各角色、后端串联/有限返工、页面阶段/评分/评审详情、报告及完整离线验收已完成；M19 真实小规模试用与兼容问题修复进行中，M20 人工反馈校准待完成。
 
@@ -54,7 +54,7 @@ M13.2 已通过 `creative_workflow.py` 接入现有任务执行器：请求指�
 
 ### 2.2 输出与交接
 
-- 每个生产和评委调用都通过 `response_format.type=json_schema` 传递对应 Pydantic 产物的 Schema，并设置 `json_schema.strict=true`；结构修复、质量返工和旧版综合创作同样传参。嵌套对象关闭额外字段、所有属性显式必填，可空字段保留 `null` 类型；所选模型与中转接口需要支持此参数，服务拒绝时明确失败，不静默回退到仅提示词约定。本地来源、证据、ID/版本及质量校验继续执行。
+- 每个生产和评委调用都通过 `response_format.type=json_schema` 传递完整 Schema，并设置 `json_schema.strict=true`；旧流程从 Pydantic 产物生成，LangGraph 版从每个角色显式绑定的手写 TypedDict 生成。结构修复、质量返工和旧版综合创作同样传参。嵌套对象关闭额外字段、所有属性显式必填，可空字段保留 `null` 类型；所选模型与中转接口需要支持此参数，服务拒绝时明确失败，不静默回退到仅提示词约定。本地来源、证据、ID/版本及质量校验继续执行。
 - 全部使用独立结构化字段。来源、分析、理由和评审不能混入可复制正文。
 - 选题、标题、文案版本均有稳定 ID，配图用对应 ID 绑定，不依靠数组顺序。
 - 分清样本观察、需求推测和创作建议；推测不得写成已证实事实。

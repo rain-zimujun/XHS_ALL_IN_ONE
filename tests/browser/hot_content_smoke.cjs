@@ -21,6 +21,8 @@ async function main() {
     });
     const variantCount = Number(process.env.XHS_TEST_VARIANTS || 3);
     assert.ok([2, 3].includes(variantCount));
+    const workflow = process.env.XHS_TEST_WORKFLOW || "multi_agent";
+    assert.ok(["multi_agent", "langgraph"].includes(workflow));
     let searchBody, collectBody, searchRun, collectedRun, legacyRun, failedRun, pollCount = 0, collectCalls = 0;
     const makeRun = (id, task_type, payload, status = "completed") => ({
       id, platform: "xhs", task_type, status, progress: status === "completed" ? 100 : 0,
@@ -152,6 +154,12 @@ async function main() {
     await page.locator('tr[data-row-key="note-0"] .ant-checkbox-input').uncheck();
     await page.getByText("已选 29 / 30 篇", { exact: true }).waitFor();
     await page.getByLabel("创作要求").fill("偏向实操教程，不夸张承诺");
+    if (workflow === "langgraph") {
+      await page.getByText("高级生成选项", { exact: true }).click();
+      await page.getByLabel("生成方式").click();
+      await page.getByText("LangGraph 分阶段创作与评审（试用）", { exact: true }).last().click();
+      await page.getByText(/当前使用 LangGraph 试用流程/).waitFor();
+    }
     if (variantCount === 2) {
       await page.getByLabel("每个标题的文案数").click();
       await page.getByText("2 个版本", { exact: true }).last().click();
@@ -189,7 +197,7 @@ async function main() {
     await page.getByText("显示全部评分", { exact: true }).last().click();
     await page.getByLabel("评分排序").click();
     await page.getByText("按原顺序", { exact: true }).last().click();
-    assert.equal(collectBody.analysis.workflow, "multi_agent");
+    assert.equal(collectBody.analysis.workflow, workflow);
     assert.ok((await page.getByTestId("creative-pipeline").innerText()).includes("10 / 36"));
     assert.equal(collectBody.note_ids.length, 29);
     assert.equal(collectBody.analysis.model_id, 2);
@@ -248,6 +256,11 @@ async function main() {
     await page.getByText(`${variantCount} 个版本`, { exact: true }).waitFor();
     assert.equal(await page.getByLabel("搜索关键词").inputValue(), "AI 模特穿搭");
     assert.equal(await page.getByLabel("创作要求").inputValue(), "偏向实操教程，不夸张承诺");
+    if (workflow === "langgraph") {
+      await page.getByText(/当前使用 LangGraph 试用流程/).waitFor();
+      await page.getByText("高级生成选项", { exact: true }).click();
+      assert.ok(await page.getByText("LangGraph 分阶段创作与评审（试用）", { exact: true }).isVisible());
+    }
     assert.ok((await page.locator('tr[data-row-key="note-1"]').innerText()).includes("2026/10/18"));
     assert.equal(await page.locator("tbody .ant-checkbox-input").count(), 0);
     if (process.env.XHS_TEST_SCREENSHOT) {
@@ -296,7 +309,7 @@ async function main() {
     await audit.getByText("本次修改对象：copy_1_1", { exact: true }).waitFor();
     assert.equal(collectCalls, 1);
     assert.deepEqual(errors, []);
-    console.log(`浏览器验证通过：筛选 30 篇、采集生成、3 个标题 × ${variantCount} 版的正文与配图联动、完整复制、风格依据、时间回填、报告、历史和旧版兼容、窄屏。全部使用模拟接口。`);
+    console.log(`浏览器验证通过：${workflow}，筛选 30 篇、采集生成、3 个标题 × ${variantCount} 版的正文与配图联动、完整复制、风格依据、时间回填、报告、历史和旧版兼容、窄屏。全部使用模拟接口。`);
   } finally {
     await browser.close();
   }

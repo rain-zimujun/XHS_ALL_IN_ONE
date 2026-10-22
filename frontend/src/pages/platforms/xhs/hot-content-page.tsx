@@ -42,7 +42,7 @@ export function HotContentPage() {
   const [modelId, setModelId] = useState<number>();
   const [ideaCount, setIdeaCount] = useState<1 | 3 | 5>(3);
   const [variantCount, setVariantCount] = useState<2 | 3>(3);
-  const [workflow, setWorkflow] = useState<"legacy" | "multi_agent">("multi_agent");
+  const [workflow, setWorkflow] = useState<NonNullable<CreativeAnalysisOptions["workflow"]>>("multi_agent");
   const [audience, setAudience] = useState("电商、服装行业、AI、时尚行业、营销行业、美工、后期从业者");
   const [instruction, setInstruction] = useState("符合小红书爆款文案的调性，文案尽可能精简、抓眼球");
   const collecting = collection?.status === "running" || collection?.status === "pending";
@@ -209,6 +209,7 @@ export function HotContentPage() {
           </Row>
           <Collapse style={{ marginBottom: 16 }} items={[{ key: "workflow", label: "高级生成选项", children: <Form.Item label="生成方式">
             <Select aria-label="生成方式" value={workflow} onChange={setWorkflow} options={[
+              { value: "langgraph", label: "LangGraph 分阶段创作与评审（试用）" },
               { value: "multi_agent", label: "多 Agent 分阶段创作与评审（推荐）" }, { value: "legacy", label: "旧版一次综合生成（对照用）" },
             ]} />
           </Form.Item> }]} />
@@ -218,7 +219,7 @@ export function HotContentPage() {
           </Space>
         </Form>
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>正文参考本批有效样本的共同语气、开头、分段与互动方式，保持原创。每个标题对应 {variantCount} 版不同文案，每版都有独立配图建议与提示词；共生成 {ideaCount * variantCount} 版，数量越多通常耗时和费用越高。</Paragraph>
-        {workflow === "multi_agent" && <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>当前使用多 Agent：样本 → 受众 → 选题 → 标题 → 正文 → 配图 → 终审。首次全部通过通常为 10 次模型请求；每个生产阶段最多质量返工 2 次，任务总计最多 36 次请求，30 分钟后不再开始新请求。模型评分仅供参考，仍需人工确认。</Paragraph>}
+        {workflow !== "legacy" && <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>当前使用{workflow === "langgraph" ? " LangGraph 试用流程" : "多 Agent"}：样本 → 受众 → 选题 → 标题 → 正文 → 配图 → 终审。首次全部通过通常为 10 次模型请求；每个生产阶段最多质量返工 2 次，任务总计最多 36 次请求，30 分钟后不再开始新请求。模型评分仅供参考，仍需人工确认。</Paragraph>}
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>点击生成会将样本文字发送给所选模型服务，按其规则计费；每次模型请求的读取超时为 3 分钟，超时不会自动重试，格式校验失败最多重试一次。刷新页面后可从历史任务继续查看，不会自动发布。停止任务无法撤回已发出的模型请求。</Paragraph>
       </Card>
       {collection && <Card title={`创作任务 #${collection.id} · ${collection.payload.search.keyword}`} extra={collecting && <Button onClick={() => void stopTask()}>停止任务</Button>}>

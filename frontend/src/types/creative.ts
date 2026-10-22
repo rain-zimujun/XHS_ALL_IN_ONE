@@ -31,7 +31,7 @@ export type CreativeRun = Omit<TaskRecord, "payload"> & {
 
 export type CreativeAnalysisOptions = {
   model_id: number;
-  workflow?: "legacy" | "multi_agent";
+  workflow?: "legacy" | "multi_agent" | "langgraph";
   idea_count: 1 | 3 | 5;
   variant_count?: 2 | 3;
   audience: string;
