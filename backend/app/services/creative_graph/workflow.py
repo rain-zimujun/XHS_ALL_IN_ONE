@@ -9,15 +9,20 @@ from dataclasses import asdict
 from functools import partial
 
 from langgraph.graph import END, START, StateGraph
+from pydantic import ValidationError
 
 from backend.app.core.security import decrypt_text
 from backend.app.schemas.creative import CreativeAnalysisOptions, CreativeAnalysisResult
+from backend.app.schemas.creative_agents import ItemReviewResponse
 from backend.app.services.creative_analysis import CreativeError, owned_text_model, request_analysis
 from backend.app.services.creative_agents import (
     sample_analysis, reader_needs, topic_selection, topic_review, title_generation,
     title_review, copy_generation, copy_review, image_planning, final_review,
 )
 from backend.app.services.creative_agents.reviewing import decide_review
+from backend.app.services.creative_graph.title_review import (
+    TITLE_REVIEW_VERSION, merge_title_review_results, prepare_title_review_batches,
+)
 from backend.app.services.creative_agents.revision import (
     MAX_MODEL_REQUESTS, MAX_QUALITY_REVISIONS, PipelineCancelled, RequestBudget,
 )
@@ -31,6 +36,7 @@ from backend.app.services.creative_graph.state import (
 from backend.app.services.creative_pipeline import new_pipeline_state, utc_now, validate_pipeline_state
 from backend.app.services.creative_diagnostics import diagnostic_event
 from backend.app.services.creative_retries import request_with_retries
+from backend.app.services.creative_orchestrator import AgentRun, AgentValidationError
 
 
 PRODUCTION_ORDER = ("topic", "title", "copy", "image")
@@ -202,7 +208,7 @@ class LangGraphWorkflow:
     def revision_route(state):
         return next(s for s in PRODUCTION_ORDER if s in state["revision_plan"])
 
-    def _run_role(self, s, role, payload, validator, *, transform=None, revision=None):
+    def _run_role(self, s, role, payload, validator, *, transform=None, revision=None, invoke=None):
         self.current_role = role
         agent = self.agents[role]
         stage, pipeline = agent.spec.stage, self.active_pipeline
@@ -213,8 +219,9 @@ class LangGraphWorkflow:
         self._checkpoint(pipeline, agent.spec.name)
         requests_before = self.budget.request_count
         try:
-            run = agent.invoke(payload, validate_output=validator,
-                               on_progress=lambda text: self._checkpoint(pipeline, text), revision=revision)
+            run = (invoke(agent, payload, validator, pipeline, revision)
+                   if invoke else agent.invoke(payload, validate_output=validator,
+                                               on_progress=lambda text: self._checkpoint(pipeline, text), revision=revision))
         except GraphOutputError as exc:
             item["metadata"]["failed_attempts"] = [asdict(a) for a in exc.attempts]
             raise
@@ -275,11 +282,12 @@ class LangGraphWorkflow:
             add_dependents(s, plan, stage, request["target_ids"], request["feedback"])
         return {stage: output, "pipeline": pipeline, "revision_plan": plan}
 
-    def _reviewer(self, s, stage, payload, *, transform=None):
+    def _reviewer(self, s, stage, payload, *, transform=None, invoke=None):
         role = REVIEW_FIELD[stage]
         decide = topic_review.decide_topic_review if stage == "topic" else decide_review
         output, pipeline = self._run_role(s, role, payload, lambda r: decide(r, payload),
-                                         transform=lambda r: transform(decide(r, payload), payload) if transform else decide(r, payload))
+                                         transform=lambda r: transform(decide(r, payload), payload) if transform else decide(r, payload),
+                                         invoke=invoke)
         plan = deepcopy(s["revision_plan"])
         if output["status"] != "passed" and stage != "final_review":
             if stage == "topic":
@@ -317,7 +325,51 @@ class LangGraphWorkflow:
 
     def title_review_node(self, s: CreativeGraphState) -> TitleReviewUpdate:
         payload = title_review.prepare_title_review_input(**title_inputs(s))
-        return self._reviewer(s, "title", payload, transform=title_review.select_titles)
+        batches = prepare_title_review_batches(payload)
+
+        def invoke(agent, original_payload, validator, pipeline, revision):
+            metadata = pipeline["stages"]["title"]["metadata"]
+            cache = metadata.get("title_review_batches", {})
+            if cache.get("input_fingerprint") != payload["input_fingerprint"] or cache.get("version") != TITLE_REVIEW_VERSION:
+                cache = {"version": TITLE_REVIEW_VERSION, "input_fingerprint": payload["input_fingerprint"], "results": {}}
+            metadata["title_review_batches"] = cache
+            metadata["title_review_batch_count"] = len(batches)
+            metadata["title_review_reused_batches"] = 0
+            metadata["title_review_completed_batches"] = len(cache["results"])
+            results, traces = [], []
+            for index, batch in enumerate(batches, start=1):
+                fingerprint = batch["input_fingerprint"]
+                metadata["title_review_batch"] = {"index": index, "count": len(batches), "item_count": len(batch["items"])}
+                raw = cache["results"].get(fingerprint)
+                if raw is not None:
+                    try:
+                        stored = ItemReviewResponse.model_validate(raw)
+                        decide_review(stored, batch)
+                    except (ValidationError, AgentValidationError):
+                        cache["results"].pop(fingerprint)
+                        metadata["title_review_completed_batches"] = len(cache["results"])
+                    else:
+                        results.append(stored)
+                        metadata["title_review_reused_batches"] += 1
+                        diagnostic_event("复用标题评审批次", stage="title", agent=agent.spec.name,
+                                         batch_index=index, batch_count=len(batches), item_count=len(batch["items"]))
+                        continue
+                self._checkpoint(pipeline, f"标题评委 Agent · 评审批次 {index}/{len(batches)}")
+                run = agent.invoke(
+                    batch,
+                    validate_output=lambda raw, current=batch: decide_review(raw, current),
+                    on_progress=lambda text: self._checkpoint(pipeline, f"{text} · 批次 {index}/{len(batches)}"),
+                )
+                results.append(run.output)
+                traces.extend(run.attempts)
+                cache["results"][fingerprint] = run.output.model_dump(mode="json")
+                metadata["title_review_completed_batches"] = len(cache["results"])
+                self._checkpoint(pipeline, f"标题评委 Agent · 已完成 {index}/{len(batches)} 批")
+            merged = merge_title_review_results(results, original_payload)
+            validator(merged)
+            return AgentRun(stage=agent.spec.stage, name=agent.spec.name, output=merged, attempts=tuple(traces))
+
+        return self._reviewer(s, "title", payload, transform=title_review.select_titles, invoke=invoke)
 
     def copy_node(self, s: CreativeGraphState) -> CopyUpdate:
         payload = copy_generation.prepare_copy_input(**title_inputs(s), title_review=s["title_review"], variant_count=s["options"]["variant_count"])

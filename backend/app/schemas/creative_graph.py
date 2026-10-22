@@ -240,12 +240,43 @@ class ItemJudgement(TypedDict):
 
 
 @strict_response
-class TitleReviewResponse(TypedDict):
-    """Score title candidates without rewriting them."""
+class TitleScores(TypedDict):
+    hook: Annotated[float, Field(ge=0, le=10, allow_inf_nan=False)]
+    specificity: Annotated[float, Field(ge=0, le=10, allow_inf_nan=False)]
+    reader_benefit: Annotated[float, Field(ge=0, le=10, allow_inf_nan=False)]
+    relevance: Annotated[float, Field(ge=0, le=10, allow_inf_nan=False)]
+    difference: Annotated[float, Field(ge=0, le=10, allow_inf_nan=False)]
+    naturalness: Annotated[float, Field(ge=0, le=10, allow_inf_nan=False)]
 
-    summary: Summary
-    reviews: Annotated[list[ItemJudgement], Field(min_length=1, max_length=40)]
-    limitations: Annotated[list[Text], Field(min_length=1, max_length=8)]
+
+@strict_response
+class TitleIssue(TypedDict):
+    criterion: Literal["hook", "specificity", "reader_benefit", "relevance", "difference", "naturalness"]
+    severity: Literal["blocking", "suggestion"]
+    field: Literal["title", "angle", "reader_value", "promise", "support_points", "rationale"]
+    quote: Annotated[str, Field(min_length=1, max_length=180)]
+    problem: Annotated[str, Field(min_length=1, max_length=120)]
+    revision_instruction: Annotated[str, Field(min_length=1, max_length=120)]
+    related_item_ids: Annotated[list[TitleId], Field(max_length=4)]
+
+
+@strict_response
+class TitleJudgement(TypedDict):
+    item_id: TitleId
+    scores: TitleScores
+    comment: Annotated[str, Field(min_length=1, max_length=120)]
+    issues: Annotated[list[TitleIssue], Field(max_length=8)]
+    preserve: Annotated[list[Annotated[str, Field(min_length=1, max_length=80)]], Field(min_length=1, max_length=2)]
+    comparison: Annotated[str, Field(min_length=1, max_length=100)]
+
+
+@strict_response
+class TitleReviewResponse(TypedDict):
+    """Briefly score at most five candidates; the application calculates totals."""
+
+    summary: Annotated[str, Field(min_length=1, max_length=200)]
+    reviews: Annotated[list[TitleJudgement], Field(min_length=1, max_length=5)]
+    limitations: Annotated[list[Annotated[str, Field(min_length=1, max_length=120)]], Field(min_length=1, max_length=3)]
 
 
 @strict_response

@@ -2,6 +2,7 @@
 import json
 from dataclasses import dataclass, field
 from time import monotonic
+from typing import Callable
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ValidationError
@@ -13,7 +14,7 @@ from backend.app.services.creative_agents.reader_needs import AUDIENCE_AGENT
 from backend.app.services.creative_agents.topic_selection import TOPIC_AGENT
 from backend.app.services.creative_agents.topic_review import TOPIC_REVIEW_AGENT
 from backend.app.services.creative_agents.title_generation import TITLE_AGENT
-from backend.app.services.creative_agents.title_review import TITLE_REVIEW_AGENT
+from backend.app.services.creative_graph.title_review import TITLE_REVIEW_AGENT, expand_title_review
 from backend.app.services.creative_agents.copy_generation import COPY_AGENT
 from backend.app.services.creative_agents.copy_review import COPY_REVIEW_AGENT
 from backend.app.services.creative_agents.image_planning import IMAGE_AGENT
@@ -51,6 +52,8 @@ class StructuredAgent:
     response_format: type
     output_model: type[BaseModel]
     state_fields: tuple[str, ...] = ()
+    output_adapter: Callable[[dict], dict] | None = None
+    include_prompt_schema: bool = True
     runnable: object = field(init=False, repr=False)
 
     def __post_init__(self):
@@ -61,7 +64,9 @@ class StructuredAgent:
 
     def invoke(self, payload, *, validate_output, on_progress=None, revision=None):
         parameter = response_parameter(self.response_format)
-        envelope = {"input": payload, "output_schema": parameter["json_schema"]["schema"]}
+        envelope = {"input": payload}
+        if self.include_prompt_schema:
+            envelope["output_schema"] = parameter["json_schema"]["schema"]
         if revision:
             envelope["quality_revision"] = revision
         prompt = json.dumps(envelope, ensure_ascii=False)
@@ -72,7 +77,15 @@ class StructuredAgent:
             started = monotonic()
             context = {"stage": self.spec.stage, "agent": self.spec.name, "attempt": attempt,
                        "max_attempts": self.spec.max_attempts}
-            diagnostic_event("模型调用开始", **context)
+            size_details = {
+                "input_chars": len(prompt + repair),
+                "schema_chars": len(json.dumps(parameter, ensure_ascii=False)),
+                "item_count": len(payload.get("items", [])), "rubric_count": len(payload.get("rubric", [])),
+                "score_count": len(payload.get("items", [])) * len(payload.get("rubric", [])),
+            }
+            if "batch" in payload:
+                context.update(batch_index=payload["batch"]["index"], batch_count=payload["batch"]["count"])
+            diagnostic_event("模型调用开始", **context, **size_details)
             kind = "creative_schema_invalid"
             try:
                 # Output is constrained in the actual request, then validated
@@ -83,7 +96,8 @@ class StructuredAgent:
                 ])
                 # Version/fingerprint are owned by this invocation's global
                 # state, never copied or chosen by the model.
-                result = self.output_model.model_validate({**value, **{k: payload[k] for k in self.state_fields}})
+                adapted = self.output_adapter(value) if self.output_adapter else value
+                result = self.output_model.model_validate({**adapted, **{k: payload[k] for k in self.state_fields}})
                 kind = "creative_handoff_invalid"
                 validate_output(result)
                 if revision:
@@ -115,7 +129,7 @@ def build_agents(model: CompatibleChatModel) -> dict[str, StructuredAgent]:
         "topic": StructuredAgent(model, TOPIC_AGENT, response_format=responses.TopicResponse, output_model=legacy.TopicBrief),
         "topic_review": StructuredAgent(model, TOPIC_REVIEW_AGENT, response_format=responses.TopicReviewResponse, output_model=legacy.TopicReviewResponse, state_fields=("topic_revision", "input_fingerprint")),
         "title": StructuredAgent(model, TITLE_AGENT, response_format=responses.TitleResponse, output_model=legacy.TitleCandidates, state_fields=("topic_revision", "input_fingerprint")),
-        "title_review": StructuredAgent(model, TITLE_REVIEW_AGENT, response_format=responses.TitleReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint")),
+        "title_review": StructuredAgent(model, TITLE_REVIEW_AGENT, response_format=responses.TitleReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), output_adapter=expand_title_review, include_prompt_schema=False),
         "copy": StructuredAgent(model, COPY_AGENT, response_format=responses.CopyResponse, output_model=legacy.CopyVariants, state_fields=("input_fingerprint",)),
         "copy_review": StructuredAgent(model, COPY_REVIEW_AGENT, response_format=responses.CopyReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint")),
         "image": StructuredAgent(model, IMAGE_AGENT, response_format=responses.ImageResponse, output_model=legacy.ImagePlans, state_fields=("input_fingerprint",)),

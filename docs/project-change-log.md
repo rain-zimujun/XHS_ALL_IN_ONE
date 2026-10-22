@@ -458,6 +458,15 @@ Git 状态：代码提交 `5c07259`（`feat: 新增选题评委 Agent 与程序�
 - 完成标题与多版正文、配图建议的成套展示。
 - 完成超时调整、发布时间回填、报告导出和高级功能折叠。
 
+### 2026-10-22：压缩 LangGraph 标题评审请求并支持批次复用
+
+- 起因：标题评审一次性携带约 15 个候选标题、六项评分和大量重复上下文，单次输入约 2.4 万字符，真实中转站在等待约 128 秒后返回 HTTP 524；前置阶段正常，优先针对标题评审的单次请求负载减压，不能仅凭 524 确定服务端具体瓶颈。
+- 改造：新增 `services/creative_graph/title_review.py`，按选题拆分标题评审，每批最多 5 个候选；只传关键词、创作要求、当前选题、对应受众摘要、标题风格摘要、候选和 rubric，不重复传完整样本/受众/选题评审。新增轻量 `TitleScores`、`TitleIssue`、`TitleJudgement` 和 `TitleReviewResponse` TypedDict，模型返回短评审结构后由程序适配回既有评审模型，继续执行字段、引句、低分问题、完整覆盖和确定性选优校验。
+- 接续：已完成批次按输入指纹写入 `pipeline.stages.title.metadata.title_review_batches`；失败接续或节点重试时复用仍匹配版本的批次，只补跑未完成批次，输入或版本不一致时自动失效。标题评审不再在用户提示词中重复嵌入完整 JSON Schema，原生 Schema 仍通过 `response_format` 参数传递。
+- 兼容边界：单次请求负载下降，但请求次数可能增加；例如 3 个选题通常为 3 次小评审请求，首轮总请求约从 10 次变为 12 次，仍受 36 次全局预算和现有 10/180 秒连接/读取超时约束。旧多 Agent 流程、报告格式和接口保持不变；标题轻量评审的样本引用为空，标题风格仅使用摘要，不能替代真实内容质量验收。
+- 自审与验证：新增 8 项检查，覆盖 5～8 候选的分批上限、同组选题隔离、合并后顺序与选优、失败接续复用、版本/指纹/损坏评审缓存失效，以及原生 Schema 请求参数与轻量上下文。LangGraph 定向回归 **72 项通过**，完整后端回归 **721 项通过**（1 条既有 warning），`git diff --check` 通过。未调用真实模型、小红书或发布接口，未把离线通过表述为真实 524 下降比例。
+- 代码文件：`backend/app/schemas/creative_graph.py`、`backend/app/services/creative_graph/title_review.py`、`backend/app/services/creative_graph/agents.py`、`backend/app/services/creative_graph/workflow.py`、`tests/backend/test_creative_graph_api.py`、`tests/backend/test_creative_graph_workflow.py`、`tests/backend/test_creative_graph_title_review.py`，并同步更新 [LangGraph 实现说明](langgraph-workflow.md)。提交信息：`feat: 压缩标题评审请求并支持分批复用`，随本提交归档到本地 `master`，未推送 GitHub。可用于简历的事实：实现评审上下文裁剪、候选分批、基于输入指纹的已完成批次复用及缓存重验；真实耗时与成功率尚未验收。
+
 ## 10. 文档维护规则
 
 每个后续小任务完成后，在本文件追加一条变更记录，并同步更新：

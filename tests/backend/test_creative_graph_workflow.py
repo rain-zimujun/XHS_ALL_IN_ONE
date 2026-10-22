@@ -1,5 +1,6 @@
 import copy
 import json
+from types import SimpleNamespace
 
 import pytest
 import requests
@@ -7,6 +8,7 @@ import requests
 from backend.app.services.creative_analysis import CreativeError
 from backend.app.services.creative_agents.revision import PipelineCancelled
 from backend.app.services.creative_graph.state import SampleUpdate
+from backend.app.services.creative_graph.recovery import prepare_resume
 from backend.app.services.creative_graph.workflow import LangGraphWorkflow
 from backend.app.services.creative_pipeline import validate_pipeline_state
 from test_creative_sample_agent import SEARCH, sources
@@ -29,6 +31,8 @@ class GraphCompletion(WorkflowCompletion):
     def __call__(self, **kwargs):
         self.wire_calls.append(copy.deepcopy(kwargs))
         prompt, end = json.JSONDecoder().raw_decode(kwargs["user_prompt"])
+        wire_name = kwargs["response_format"]["json_schema"]["name"]
+        prompt.setdefault("output_schema", copy.deepcopy(kwargs["response_format"]["json_schema"]["schema"]))
         prompt["output_schema"]["title"] = self.NAMES[prompt["output_schema"]["title"]]
         raw = super().__call__(**{**kwargs, "user_prompt": json.dumps(prompt, ensure_ascii=False) + kwargs["user_prompt"][end:]})
         output = json.loads(raw)
@@ -38,6 +42,12 @@ class GraphCompletion(WorkflowCompletion):
             if "item_id" in review:
                 for issue in review["issues"]:
                     issue.setdefault("responsible_stage", None)
+                if wire_name == "TitleReviewResponse":
+                    review["comment"] = review["scores"][0]["comment"]
+                    review["scores"] = {score["criterion"]: score["score"] for score in review["scores"]}
+                    for issue in review["issues"]:
+                        issue.pop("responsible_stage")
+                        issue.pop("note_ids")
         return json.dumps(output, ensure_ascii=False)
 
 
@@ -54,7 +64,7 @@ def test_graph_executes_ten_roles_and_persists_serializable_global_state(count, 
     assert len(result["ideas"]) == count
     assert all(len(i["variants"]) == variants for i in result["ideas"])
     assert metadata["workflow"] == "langgraph"
-    assert len(model.calls) == metadata["request_count"] == 10
+    assert len(model.calls) == metadata["request_count"] == 9 + count
     assert saved[-1]["result"] == result
     assert saved[-1]["pipeline"]["status"] == "completed"
     assert saved[-1]["revision_plan"] == {}
@@ -64,13 +74,66 @@ def test_graph_executes_ten_roles_and_persists_serializable_global_state(count, 
     assert "fixture-private" not in json.dumps(w.state)
 
 
+@pytest.mark.parametrize("cache_fault", [None, "version", "fingerprint", "review"])
+def test_title_review_resume_reuses_only_valid_batches_and_keeps_context_compact(cache_fault):
+    model = GraphCompletion()
+
+    def complete(**kwargs):
+        prompt, _ = json.JSONDecoder().raw_decode(kwargs["user_prompt"])
+        if kwargs["response_format"]["json_schema"]["name"] == "TitleReviewResponse":
+            batch = prompt["input"]["batch"]
+            if batch["index"] == 2:
+                raise CreativeError("模型服务返回错误（HTTP 401）", "ai_http_error", http_status=401)
+            assert "output_schema" not in prompt
+            assert kwargs["response_format"]["json_schema"]["schema"]["properties"]["reviews"]
+            context = prompt["input"]["context"]
+            assert set(context) == {"keyword", "requirements", "title_max_length", "topic_brief", "audience", "title_style", "style_summary"}
+            assert len(prompt["input"]["items"]) == 5
+            assert len(context["topic_brief"]["ideas"]) == 1
+        return model(**kwargs)
+
+    original = workflow(complete, count=3)
+    with pytest.raises(CreativeError):
+        original.run()
+    cache = original.state["pipeline"]["stages"]["title"]["metadata"]["title_review_batches"]
+    assert len(cache["results"]) == 1
+    assert original.state["pipeline"]["stages"]["title"]["metadata"]["failed_role"] == "title_review"
+
+    saved = copy.deepcopy(original.state)
+    saved["options"]["workflow"] = "langgraph"
+    stored_cache = saved["pipeline"]["stages"]["title"]["metadata"]["title_review_batches"]
+    if cache_fault == "version":
+        stored_cache["version"] = "outdated"
+    elif cache_fault == "fingerprint":
+        stored_cache["input_fingerprint"] = "0" * 64
+    elif cache_fault == "review":
+        next(iter(stored_cache["results"].values()))["reviews"][0]["item_id"] = "title_unknown"
+    task = SimpleNamespace(status="failed", error_type="ai_http_error", payload={
+        "analysis": saved["options"], "search": saved["search"], "sources": saved["sources"], "graph_state": saved,
+    })
+    before = copy.deepcopy(task.payload)
+    restored, role = prepare_resume(task)
+    recovery = GraphCompletion()
+    resumed = LangGraphWorkflow(search=restored["search"], sources=restored["sources"], options=restored["options"],
+                                complete=recovery, resume_state=restored, resume_role=role)
+    result, _ = resumed.run()
+    assert len(result["ideas"]) == 3
+    assert recovery.counts["title_review"] == (2 if cache_fault is None else 3)
+    assert [json.loads(c["user_prompt"])["input"]["batch"]["index"] for c in recovery.wire_calls
+            if c["response_format"]["json_schema"]["name"] == "TitleReviewResponse"] == ([2, 3] if cache_fault is None else [1, 2, 3])
+    metadata = resumed.state["pipeline"]["stages"]["title"]["metadata"]
+    assert metadata["title_review_reused_batches"] == (1 if cache_fault is None else 0)
+    assert metadata["title_review_completed_batches"] == 3
+    assert task.payload == before
+
+
 @pytest.mark.parametrize("stage", ["TopicReviewResponse", "title_review", "copy_review"])
 def test_conditional_review_edge_returns_to_producer_and_only_revises_failed_items(stage):
     model = GraphCompletion(fail_stage=stage)
     w = workflow(model, 3, 3)
     result, _ = w.run()
     assert len(result["ideas"]) == 3
-    assert len(model.calls) == 12
+    assert len(model.calls) == (16 if stage == "title_review" else 14)
     producer = {"TopicReviewResponse": "topic", "title_review": "title", "copy_review": "copy"}[stage]
     item = w.state["pipeline"]["stages"][producer]
     assert item["quality_revisions"] == 1
@@ -143,9 +206,8 @@ def test_changed_title_selection_rebinds_copy_and_image_groups():
     model = GraphCompletion(fail_stage="final_review", final_owner="title")
     def complete(**kwargs):
         output = json.loads(model(**kwargs))
-        if model.calls[-1][0] == "title_review" and model.counts["title_review"] == 2:
-            for score in output["reviews"][1]["scores"]:
-                score["score"] = 9.0
+        if model.calls[-1][0] == "title_review" and model.counts["title_review"] == 4:
+            output["reviews"][1]["scores"] = {key: 9.0 for key in output["reviews"][1]["scores"]}
         return json.dumps(output)
     w = workflow(complete, 3, 2)
     result, _ = w.run()
