@@ -393,6 +393,13 @@ Git 状态：代码提交 `5c07259`（`feat: 新增选题评委 Agent 与程序�
 
 ## 9. 变更日志
 
+### 2026-10-22：LangGraph 迁移
+
+- L1 完成：固定 `langgraph==0.6.11`、`langchain-core==0.3.86`，在现有 Python 3.11 虚拟环境安装并通过 `pip check`。新增 `schemas/creative_graph.py`，手写十个独立 Agent 响应 `TypedDict` 及嵌套类型；字段长度、数量、枚举、可空值和禁止额外字段均保留到 Schema。
+- 新增 `services/creative_graph/model.py`：继承 LangChain `BaseChatModel`，复用现有 OpenAI 兼容传输和 10/180 秒超时；`with_structured_output()` 将 TypedDict 转成原生严格 JSON Schema 请求参数，完整 JSON 解析和 TypeAdapter 运行时校验后才交给业务检查。每次调用只有一次模型请求，不增加隐藏的格式化请求，不静默回退普通文本。
+- 新增 `services/creative_graph/agents.py`：十个角色构建时各自显式填写 `response_format=对应 TypedDict`，复用角色提示词；旧 Pydantic 模型仅适配现有业务检查。结构错误和动态交接错误分别记录为 `creative_schema_invalid` / `creative_handoff_invalid`，网络和 HTTP 异常直接退出。
+- L1 自审与验证：定向测试 20 项通过，覆盖真实 HTTP 请求体的模拟拦截、十个独立绑定、必填/可空字段、嵌套 Schema、严格类型、截断 JSON、不重试网络错误及凭证不进入模型序列化。未调用真实模型或小红书，尚未切换任务入口；图节点和页面切换为 L2/L3 后续小任务。提交信息：`feat: 增加 TypedDict Agent 契约与 LangChain 结构化适配`；本节随该提交归档，交付目标 `origin/master`。
+
 ### 2026-10-21
 
 - 继续实施 M6 选题评委独立模块：固定评分、逐项问题定位、版本与输入指纹绑定、通过/待修改名单和 84 项模拟测试。有效低分不自动重评，旧生成流程不变；定向回归 156 项、全量后端 448 项及前端构建通过，代码提交 `5c07259` 已推送至个人仓库 `master`。
