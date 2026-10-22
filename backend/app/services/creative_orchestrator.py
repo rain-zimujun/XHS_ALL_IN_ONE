@@ -15,6 +15,7 @@ from pydantic import BaseModel, ValidationError
 
 from backend.app.services.creative_pipeline import PipelineStage
 from backend.app.services.structured_output import json_schema_response_format
+from backend.app.services.creative_diagnostics import diagnostic_event, exception_details, validation_summary
 
 
 class AgentValidationError(Exception):
@@ -91,6 +92,9 @@ def run_agent(
         if on_progress:
             on_progress(f"{spec.name}（第 {attempt}/{spec.max_attempts} 次）")
         started = monotonic()
+        context = {"stage": spec.stage, "agent": spec.name, "attempt": attempt, "max_attempts": spec.max_attempts}
+        diagnostic_event("模型调用开始", **context)
+        kind = "creative_schema_invalid"
         try:
             raw = complete(
                 system_prompt=spec.system_prompt,
@@ -103,24 +107,29 @@ def run_agent(
                 # The stage supplies deterministic checks, not another model call.
                 # Raise AgentValidationError for an invalid reference/coverage;
                 # programming, cancellation and transport errors must propagate.
+                kind = "creative_handoff_invalid"
                 validate_output(result)
             traces.append(AgentAttemptTrace(attempt, round((monotonic() - started) * 1000), "completed"))
+            diagnostic_event("模型调用及校验完成", **context, duration_ms=traces[-1].duration_ms)
             return AgentRun(spec.stage, spec.name, result, tuple(traces))
         except (AgentValidationError, ValidationError) as exc:
             if isinstance(exc, ValidationError):
                 # Do not put raw model output, source text or input values in logs.
                 # Unknown JSON keys can themselves contain arbitrary private
                 # text. Do not echo them as paths in extra-field errors.
-                issues = exc.errors(include_input=False, include_context=False, include_url=False)
-                message = "; ".join(
-                    f"{'output' if issue['type'] == 'extra_forbidden' else '.'.join(map(str, issue['loc'])) or 'output'}: {issue['type']}"
-                    for issue in issues
-                )[:500]
+                message = validation_summary(exc, schema)
             else:
                 message = str(exc)[:500] or exc.__class__.__name__
             traces.append(AgentAttemptTrace(attempt, round((monotonic() - started) * 1000), "failed", message))
+            diagnostic_event("输出校验失败", level="WARNING", **context, duration_ms=traces[-1].duration_ms,
+                             error_code=kind, reason=message, will_retry=attempt < spec.max_attempts)
             repair = (
                 "\n上一次输出未通过 JSON、字段或证据校验。请只返回完整 JSON 对象，严格遵守 output_schema；"
                 f"修正原因：{message}\n"
             )
+        except Exception as exc:
+            diagnostic_event("模型调用中断", level="ERROR", **context,
+                             duration_ms=round((monotonic() - started) * 1000),
+                             **exception_details(exc), will_retry=False)
+            raise
     raise AgentRunError(f"{spec.name} 连续 {spec.max_attempts} 次输出未通过校验", stage=spec.stage, attempts=traces)

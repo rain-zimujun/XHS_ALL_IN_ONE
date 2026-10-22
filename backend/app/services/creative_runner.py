@@ -11,6 +11,7 @@ from backend.app.services.creative_analysis import CreativeError, analyze_source
 from backend.app.services.creative_report import export_report
 from backend.app.services.creative_workflow import analyze_multi_agent
 from backend.app.services.creative_agents.revision import PipelineCancelled
+from backend.app.services.creative_diagnostics import diagnostic_context, diagnostic_event, exception_details
 
 
 RunCancelled = PipelineCancelled
@@ -25,6 +26,23 @@ def checkpoint(db, task: Task, **updates):
 
 
 def generate_for_task(db, task, client_factory):
+    workflow = task.payload["analysis"].get("workflow", "legacy")
+    with diagnostic_context(task_id=task.id, workflow=workflow):
+        started = time.monotonic()
+        diagnostic_event("生成任务开始", sample_count=len(task.payload.get("sources", [])))
+        try:
+            _generate_for_task(db, task, client_factory)
+        except RunCancelled:
+            diagnostic_event("生成任务已取消", level="WARNING")
+            raise
+        except Exception as exc:
+            diagnostic_event("生成任务失败", level="ERROR",
+                             duration_ms=round((time.monotonic() - started) * 1000), **exception_details(exc))
+            raise
+        diagnostic_event("生成任务完成", duration_ms=round((time.monotonic() - started) * 1000))
+
+
+def _generate_for_task(db, task, client_factory):
     def update_stage(stage):
         checkpoint(db, task, stage=stage)
         task.progress = 85

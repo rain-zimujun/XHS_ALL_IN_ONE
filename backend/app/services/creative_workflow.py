@@ -27,6 +27,7 @@ from backend.app.services.creative_agents.revision import (
 from backend.app.services.creative_analysis import CreativeError, owned_text_model, request_analysis
 from backend.app.services.creative_orchestrator import AgentRunError
 from backend.app.services.creative_pipeline import new_pipeline_state, utc_now, validate_pipeline_state
+from backend.app.services.creative_diagnostics import diagnostic_event
 
 
 PRODUCERS = {"topic": run_topic_selection, "title": run_title_generation, "copy": run_copy_generation, "image": run_image_planning}
@@ -86,6 +87,9 @@ class CreativeWorkflow:
             item["metadata"]["failed_attempts"] = [asdict(a) for a in exc.attempts]
             raise CreativeError("当前阶段两次输出未通过结构或交接校验，已保留此前稿件与评审。", "creative_output_invalid") from exc
         output = run.output.model_dump(mode="json")
+        diagnostic_event("评审完成" if reviewer else "阶段完成", stage=stage,
+                         request_count=self.budget.request_count,
+                         **({"review_status": output["status"]} if reviewer else {}))
         attempt.update(status="completed", finished_at=utc_now())
         item["metadata"] = metadata
         if reviewer:

@@ -117,16 +117,22 @@ def validate_sample_evidence(result: SampleAnalysis, payload: dict[str, Any]) ->
     observed_ids = [item.note_id for item in result.observations]
     if len(observed_ids) != len(set(observed_ids)) or set(observed_ids) != set(sources):
         raise AgentValidationError("observations 必须覆盖全部输入 note_id，不能重复、遗漏或添加未知来源")
-    for item in result.observations:
+    source_positions = {note_id: i + 1 for i, note_id in enumerate(sources)}
+    for index, item in enumerate(result.observations):
         source = sources[item.note_id]
         if not any(item.quote in text for text in [source["title"], *source["body_segments"]]):
-            raise AgentValidationError("observations.quote 必须是对应样本标题或已提供正文片段的连续原文")
+            raise AgentValidationError(
+                f"observations[{index}].quote：observations.quote 必须是对应样本标题或已提供正文片段的连续原文"
+                f"（输入样本序号 {source_positions[item.note_id]}，摘录 {len(item.quote)} 字，逐字匹配失败）"
+            )
     dimensions = [item.dimension for item in result.style_patterns]
     if len(dimensions) != len(set(dimensions)):
         raise AgentValidationError("style_patterns.dimension 不可重复，请将同一风格维度合并说明")
-    for finding in [*result.topic_patterns, *result.style_patterns, *result.value_patterns, *result.avoid_patterns]:
+    findings = [(name, index, finding) for name in ("topic_patterns", "style_patterns", "value_patterns", "avoid_patterns")
+                for index, finding in enumerate(getattr(result, name))]
+    for name, index, finding in findings:
         references = set()
-        for evidence in finding.evidence:
+        for evidence_index, evidence in enumerate(finding.evidence):
             if evidence.note_id not in sources:
                 raise AgentValidationError("evidence.note_id 必须来自本批输入样本")
             identity = (evidence.note_id, evidence.field, evidence.quote)
@@ -136,7 +142,11 @@ def validate_sample_evidence(result: SampleAnalysis, payload: dict[str, Any]) ->
             source = sources[evidence.note_id]
             texts = [source["title"]] if evidence.field == "title" else source["body_segments"]
             if not any(evidence.quote in text for text in texts):
-                raise AgentValidationError("evidence.quote 必须逐字出现在对应字段，不能引用省略正文、改写或跨片段拼接")
+                raise AgentValidationError(
+                    f"{name}[{index}].evidence[{evidence_index}].quote：evidence.quote 必须逐字出现在对应字段，"
+                    f"不能引用省略正文、改写或跨片段拼接（输入样本序号 {source_positions[evidence.note_id]}，"
+                    f"字段 {evidence.field}，摘录 {len(evidence.quote)} 字，逐字匹配失败）"
+                )
 
 
 def _run_prepared(payload: dict[str, Any], complete: Callable[..., str], on_progress) -> tuple[AgentRun, dict]:

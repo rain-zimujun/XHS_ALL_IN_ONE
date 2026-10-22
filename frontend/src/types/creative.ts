@@ -58,6 +58,7 @@ export type CreativePipeline = {
     review_result: Record<string, unknown> | null;
     history: { role: string; revision: number; output: Record<string, unknown>; target_ids: string[]; finished_at: string }[];
     error?: string | null;
+    metadata?: Record<string, unknown>;
   }>;
 };
 

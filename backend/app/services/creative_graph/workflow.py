@@ -29,6 +29,7 @@ from backend.app.services.creative_graph.state import (
     TitleUpdate, TopicReviewUpdate, TopicUpdate,
 )
 from backend.app.services.creative_pipeline import new_pipeline_state, utc_now, validate_pipeline_state
+from backend.app.services.creative_diagnostics import diagnostic_event
 
 
 PRODUCTION_ORDER = ("topic", "title", "copy", "image")
@@ -191,6 +192,9 @@ class LangGraphWorkflow:
             raise
         output = (transform(run.output) if transform else run.output).model_dump(mode="json")
         reviewer = role in REVIEW_FIELD.values()
+        diagnostic_event("评审完成" if reviewer else "阶段完成", stage=stage, agent=agent.spec.name,
+                         request_count=self.budget.request_count,
+                         **({"review_status": output["status"]} if reviewer else {}))
         item["attempts"][-1].update(status="completed", finished_at=utc_now())
         metadata = {"response_type": agent.response_format.__name__, "request_count": len(run.attempts),
                     "quality_review_status": output["status"] if reviewer else "not_reviewed"}

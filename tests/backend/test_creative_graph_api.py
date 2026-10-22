@@ -89,6 +89,10 @@ def test_failed_api_task_keeps_global_drafts_and_specific_error_code(env, failur
         assert result["payload"]["graph_state"]["title_review"]["status"] == "passed"
     else:
         assert "结构或交接校验" not in result["payload"]["error"]
+        failures = result["payload"]["pipeline"]["stages"]["sample_analysis"]["metadata"]["failed_attempts"]
+        assert len(failures) == 2
+        assert all(f["duration_ms"] >= 0 for f in failures)
+        assert "observations" in failures[-1]["error"]
 
 
 def test_cancel_during_model_request_updates_both_saved_snapshots(env):
