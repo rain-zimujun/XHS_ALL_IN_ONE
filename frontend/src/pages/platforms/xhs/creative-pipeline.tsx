@@ -1,6 +1,6 @@
 import { Alert, Col, Collapse, Row, Space, Tag, Typography } from "antd";
 import type { CreativePipeline, CreativeStageStatus } from "../../../types/creative";
-import { readFailedAttempts, readNetworkAttempts } from "../../../lib/creative-diagnostics";
+import { formatQuoteDiagnostic, readFailedAttempts, readNetworkAttempts } from "../../../lib/creative-diagnostics";
 
 export const pipelineStageNames: Record<string, string> = {
   sample_analysis: "样本分析", audience: "读者需求", topic: "选题与评审", title: "标题与评审",
@@ -27,13 +27,19 @@ export function CreativePipelineProgress({ pipeline }: { pipeline: CreativePipel
         {attempts.map((attempt, index) => <div key={index}>
           <Typography.Text strong>第 {attempt.attempt} 次 · 耗时 {(attempt.duration_ms / 1000).toFixed(1)} 秒 · {attempt.status}</Typography.Text>
           <Typography.Paragraph copyable style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{attempt.error}</Typography.Paragraph>
+          {formatQuoteDiagnostic(attempt.quote_diagnostic) && <Collapse items={[{
+            key: "quote", label: "模型原句与原文对照",
+            children: <Typography.Paragraph copyable style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+              {formatQuoteDiagnostic(attempt.quote_diagnostic)}
+            </Typography.Paragraph>,
+          }]} />}
         </div>)}
         {network.map((attempt, index) => <div key={`network-${index}`}>
           <Typography.Text strong>网络请求第 {attempt.attempt}/{attempt.max_retries + 1} 次 · 耗时 {(attempt.duration_ms / 1000).toFixed(1)} 秒 · {attempt.role || key}</Typography.Text>
           <Typography.Paragraph copyable>{attempt.error}</Typography.Paragraph>
           <Typography.Text type="secondary">{attempt.will_retry ? `已安排等待 ${attempt.wait_seconds} 秒后重试` : "该次请求未安排后续自动重试"}</Typography.Text>
         </div>)}
-        <Typography.Text type="secondary">详情仅含字段位置与检查原因，不包含完整模型响应。历史任务只能显示当时已保存的诊断信息。</Typography.Text>
+        <Typography.Text type="secondary">引用校验失败时可查看模型原句及原文对照；换行等字符以 JSON 转义形式显示。不包含完整模型响应，历史任务只能显示当时已保存的信息。</Typography.Text>
       </Space>,
     }];
   });

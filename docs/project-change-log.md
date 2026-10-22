@@ -467,6 +467,15 @@ Git 状态：代码提交 `5c07259`（`feat: 新增选题评委 Agent 与程序�
 - 自审与验证：新增 8 项检查，覆盖 5～8 候选的分批上限、同组选题隔离、合并后顺序与选优、失败接续复用、版本/指纹/损坏评审缓存失效，以及原生 Schema 请求参数与轻量上下文。LangGraph 定向回归 **72 项通过**，完整后端回归 **721 项通过**（1 条既有 warning），`git diff --check` 通过。未调用真实模型、小红书或发布接口，未把离线通过表述为真实 524 下降比例。
 - 代码文件：`backend/app/schemas/creative_graph.py`、`backend/app/services/creative_graph/title_review.py`、`backend/app/services/creative_graph/agents.py`、`backend/app/services/creative_graph/workflow.py`、`tests/backend/test_creative_graph_api.py`、`tests/backend/test_creative_graph_workflow.py`、`tests/backend/test_creative_graph_title_review.py`，并同步更新 [LangGraph 实现说明](langgraph-workflow.md)。提交信息：`feat: 压缩标题评审请求并支持分批复用`，随本提交归档到本地 `master`，未推送 GitHub。可用于简历的事实：实现评审上下文裁剪、候选分批、基于输入指纹的已完成批次复用及缓存重验；真实耗时与成功率尚未验收。
 
+### 2026-10-22：保存引用校验失败时的模型原句与原文对照
+
+- 起因：75、77 号任务在样本分析阶段因原文引用逐字匹配失败停止，旧诊断只有字段、样本序号、引句长度与原因，没有模型原句，无法区分模型改写、空白/字符变化或引用错字段。按用户要求增加原句诊断，暂不放宽业务校验或增加模型调用。
+- 实现：`creative_diagnostics.py` 为引用失败生成有界原文窗口和字符差异；`creative_agents/sample_analysis.py` 将结构化诊断附在异常上；`creative_orchestrator.py` 和 `creative_graph/agents.py` 记录“原文引用不匹配”终端事件，并把 `quote_diagnostic` 保存至尝试轨迹。LangGraph 在 `model.py` 完整解析 JSON 后、TypedDict 空白处理前捕获已知 quote 字段，调用级上下文在异常后恢复；同时保留模型原句与实际校验引句。
+- 可追溯性：两次校验失败时随 `pipeline.stages.sample_analysis.metadata.failed_attempts` 保存；修复成功时随阶段历史轨迹保存。页面“失败详情 → 模型原句与原文对照”支持展开和复制，显示 JSON 转义换行、原文字段和窗口、忽略空白/兼容字符后的匹配提示及差异。旧任务不能补造此前未保存的模型输出，Schema/网络错误仍使用原有受控摘要。
+- 边界：只记录失败引句（最多 600 字、保留长度与截断标记）和对应样本的标题/独立正文片段窗口（每段最多 360 字）；最多 12 个差异块，每侧文本最多 80 字。近似窗口不是已证明的真实引用位置，归一化匹配仅作诊断，原文逐字通过规则不变。不保存完整模型响应、提示词或凭证，不将其他笔记/无关模型字段加入日志。未调用真实模型或小红书，待用户再次试用后分析新诊断。
+- 自审与验证：后端诊断/样本/Agent/API 定向 **87 项通过**，后端全量 **730 项通过**（1 条既有 warning），前端 **19 项通过**，TypeScript/Vite 生产构建及 `git diff --check` 通过（既有 bundle 提示）。覆盖结构校验前原句保留、新旧工作流、字段引用错误、空白/全半角差异、跨片段禁止拼接、窗口上限、上下文异常恢复、API 持久化和旧任务显示兼容。检查时真实 78 号任务仍在旧工作进程运行，开发服务正等待后台任务结束再完成热重载，未为验收强行中断用户任务。
+- 文档与交付：同步 [LangGraph 实现说明](langgraph-workflow.md)。提交信息：`feat: 记录引用失败的模型原句与原文差异`，随本提交归档到本地 `master`，未推送 GitHub。简历可用事实：实现结构化引用失败诊断、任务关联与持久化、模型原句和源文窗口对照及可复制的前端排错入口；不宣称已提高真实生成通过率。
+
 ## 10. 文档维护规则
 
 每个后续小任务完成后，在本文件追加一条变更记录，并同步更新：

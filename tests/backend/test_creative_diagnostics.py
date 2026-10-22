@@ -6,10 +6,14 @@ from loguru import logger
 from pydantic import ValidationError, TypeAdapter
 
 from backend.app.schemas.creative_graph import SampleAnalysisResponse
-from backend.app.services.creative_diagnostics import diagnostic_context, diagnostic_event, validation_summary
+from backend.app.services.creative_diagnostics import (
+    capture_model_quotes, diagnostic_context, diagnostic_event, quote_mismatch_details,
+    record_model_quotes, validation_summary,
+)
 from backend.app.services.creative_graph.agents import GraphOutputError, build_agents
 from backend.app.services.creative_graph.model import CompatibleChatModel, response_parameter
-from backend.app.services.creative_agents.sample_analysis import prepare_sample_input, validate_sample_evidence
+from backend.app.services.creative_agents.sample_analysis import prepare_sample_input, validate_sample_evidence, run_sample_analysis
+from backend.app.services.creative_orchestrator import AgentRunError
 from test_creative_sample_agent import SEARCH, OPTIONS, sources, valid_output
 
 
@@ -25,7 +29,8 @@ def capture_events():
 
 
 @pytest.mark.parametrize("field", ["observation", "evidence"])
-def test_failed_quote_diagnostics_locate_source_without_logging_model_text(field):
+@pytest.mark.parametrize("workflow", ["langgraph", "multi_agent"])
+def test_failed_quote_diagnostics_record_only_failed_quote_and_bounded_source_windows(field, workflow):
     payload = prepare_sample_input(SEARCH, sources(), OPTIONS)
     output = valid_output(payload)
     if field == "observation":
@@ -36,18 +41,93 @@ def test_failed_quote_diagnostics_locate_source_without_logging_model_text(field
         output["topic_patterns"][0]["evidence"][0]["quote"] = "private-generated-quote"
         path = "topic_patterns[0].evidence[0].quote"
         position = 1
-    agent = build_agents(CompatibleChatModel(lambda **_: json.dumps(output)))["sample_analysis"]
-    with capture_events() as events, diagnostic_context(task_id=123, workflow="langgraph"):
-        with pytest.raises(GraphOutputError) as caught:
-            agent.invoke(payload, validate_output=lambda r: validate_sample_evidence(r, payload))
+    output["summary"] = "unrelated-model-summary"
+    complete = lambda **_: json.dumps(output)
+    with capture_events() as events, diagnostic_context(task_id=123, workflow=workflow):
+        if workflow == "langgraph":
+            agent = build_agents(CompatibleChatModel(complete))["sample_analysis"]
+            with pytest.raises(GraphOutputError) as caught:
+                agent.invoke(payload, validate_output=lambda r: validate_sample_evidence(r, payload))
+        else:
+            with pytest.raises(AgentRunError) as caught:
+                run_sample_analysis(search=SEARCH, sources=sources(), options=OPTIONS, complete=complete)
     failures = [e for e in events if e["event"] == "输出校验失败"]
     assert len(failures) == 2
     assert [e["will_retry"] for e in failures] == [True, False]
     assert all(e["task_id"] == 123 and e["stage"] == "sample_analysis" for e in failures)
     assert path in caught.value.attempts[-1].error
     assert f"输入样本序号 {position}" in failures[-1]["reason"]
-    assert "private-generated-quote" not in json.dumps(events)
+    quotes = [event for event in events if event["event"] == "原文引用不匹配"]
+    assert len(quotes) == 2
+    assert quotes[0]["task_id"] == 123 and quotes[1]["attempt"] == 2
+    assert quotes[0]["model_quote"] == "private-generated-quote"
+    assert quotes[0]["validated_quote"] == "private-generated-quote"
+    assert quotes[0]["source_position"] == position
+    assert quotes[0]["source_candidates"][0]["source_window"] == payload["sources"][position - 1]["title"]
+    assert caught.value.attempts[-1].quote_diagnostic["model_quote"] == "private-generated-quote"
+    assert "private-generated-quote" not in json.dumps(failures)
+    assert "unrelated-model-summary" not in json.dumps(events)
     assert "sample-" not in json.dumps(events)
+
+
+def test_graph_logs_actual_quote_before_typed_dict_whitespace_normalization():
+    payload = prepare_sample_input(SEARCH, sources(), OPTIONS)
+    output = valid_output(payload)
+    output["observations"][0]["quote"] = " \n原文没有这句\t "
+    agent = build_agents(CompatibleChatModel(lambda **_: json.dumps(output)))["sample_analysis"]
+    with capture_events() as events, pytest.raises(GraphOutputError):
+        agent.invoke(payload, validate_output=lambda r: validate_sample_evidence(r, payload))
+    detail = next(event for event in events if event["event"] == "原文引用不匹配")
+    assert detail["model_quote"] == " \n原文没有这句\t "
+    assert detail["validated_quote"] == "原文没有这句"
+    assert detail["model_quote_changed_by_validation"] is True
+    assert detail["model_quote_truncated"] is False
+
+
+@pytest.mark.parametrize("kind", ["whitespace", "width", "wrong_field", "cross_segment", "long"])
+def test_quote_comparison_hints_do_not_relax_literal_matching_or_join_segments(kind):
+    source = {"title": "服装AI灵感", "body_segments": ["第一段：轻盈的裙摆\n设计细节", "第二段：海风"]}
+    quote, field = "裙摆设计细节", "body"
+    if kind == "width":
+        source["body_segments"] = ["ＡＩ服装"]
+        quote = "AI服装"
+    elif kind == "wrong_field":
+        quote, field = source["body_segments"][0], "title"
+    elif kind == "cross_segment":
+        quote = "设计细节第二段"
+    elif kind == "long":
+        source["body_segments"] = ["前" * 1400 + "原文：裙摆与海风" + "后" * 400]
+        quote = "原文：裙摆和海风"
+    detail = quote_mismatch_details(path=("observations", 0, "quote"), quote=quote,
+                                    source=source, source_position=1, field=field)
+    candidates = detail["source_candidates"]
+    body = candidates[1]
+    assert all(len(candidate["source_window"]) <= 360 for candidate in candidates)
+    assert len(detail["differences"]) <= 12
+    if kind == "whitespace":
+        assert body["whitespace_match"] and not body["exact_match"]
+    elif kind == "width":
+        assert body["nfkc_whitespace_match"] and not body["whitespace_match"]
+    elif kind == "wrong_field":
+        assert body["exact_match"] and not body["allowed"]
+    elif kind == "cross_segment":
+        assert not any(candidate["whitespace_match"] for candidate in candidates)
+    else:
+        assert body["window_start"] > 0
+        assert "原文：裙摆与海风" in body["source_window"]
+
+
+def test_raw_quote_capture_is_scoped_and_bounded():
+    with capture_model_quotes() as outer:
+        record_model_quotes({"observations": [{"quote": "外层"}]})
+        with pytest.raises(RuntimeError), capture_model_quotes() as inner:
+            record_model_quotes({"observations": [{"quote": "内" * 1000}]})
+            raise RuntimeError()
+        assert inner[("observations", 0, "quote")] == ("内" * 600, 1000)
+        record_model_quotes({"observations": [{"quote": "恢复外层"}]})
+        assert outer[("observations", 0, "quote")] == ("恢复外层", 4)
+    record_model_quotes({"observations": [{"quote": "不应写入"}]})
+    assert outer[("observations", 0, "quote")][0] == "恢复外层"
 
 
 def test_schema_diagnostics_locate_known_fields_but_hide_unknown_keys_and_values():

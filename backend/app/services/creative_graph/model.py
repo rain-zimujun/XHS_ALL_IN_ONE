@@ -13,6 +13,7 @@ from langchain_core.runnables import RunnableLambda
 from langchain_core.utils.function_calling import convert_to_json_schema
 from pydantic import PrivateAttr, TypeAdapter
 from typing_extensions import is_typeddict
+from backend.app.services.creative_diagnostics import record_model_quotes
 
 
 def response_parameter(response_format: type) -> dict:
@@ -61,6 +62,7 @@ class CompatibleChatModel(BaseChatModel):
 
         def validate(message):
             value = parse_json_object(message.content)
+            record_model_quotes(value)
             return adapter.validate_python(value, strict=True)
 
         return self.bind(response_format=parameter, temperature=temperature) | RunnableLambda(validate)

@@ -15,11 +15,13 @@ from pydantic import BaseModel, ValidationError
 
 from backend.app.services.creative_pipeline import PipelineStage
 from backend.app.services.structured_output import json_schema_response_format
-from backend.app.services.creative_diagnostics import diagnostic_event, exception_details, validation_summary
+from backend.app.services.creative_diagnostics import diagnostic_event, exception_details, failed_quote_diagnostic, validation_summary
 
 
 class AgentValidationError(Exception):
-    pass
+    def __init__(self, message: str, *, quote_diagnostic: dict | None = None):
+        super().__init__(message)
+        self.quote_diagnostic = quote_diagnostic
 
 
 class AgentRunError(Exception):
@@ -44,6 +46,7 @@ class AgentAttemptTrace:
     duration_ms: int
     status: str
     error: str | None = None
+    quote_diagnostic: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -95,6 +98,7 @@ def run_agent(
         context = {"stage": spec.stage, "agent": spec.name, "attempt": attempt, "max_attempts": spec.max_attempts}
         diagnostic_event("模型调用开始", **context)
         kind = "creative_schema_invalid"
+        value = None
         try:
             raw = complete(
                 system_prompt=spec.system_prompt,
@@ -102,7 +106,8 @@ def run_agent(
                 temperature=spec.temperature,
                 response_format=response_format,
             )
-            result = output_model.model_validate(parse_json_object(raw))
+            value = parse_json_object(raw)
+            result = output_model.model_validate(value)
             if validate_output:
                 # The stage supplies deterministic checks, not another model call.
                 # Raise AgentValidationError for an invalid reference/coverage;
@@ -120,7 +125,10 @@ def run_agent(
                 message = validation_summary(exc, schema)
             else:
                 message = str(exc)[:500] or exc.__class__.__name__
-            traces.append(AgentAttemptTrace(attempt, round((monotonic() - started) * 1000), "failed", message))
+            quote_detail = failed_quote_diagnostic(exc, value)
+            traces.append(AgentAttemptTrace(attempt, round((monotonic() - started) * 1000), "failed", message, quote_detail))
+            if quote_detail:
+                diagnostic_event("原文引用不匹配", level="WARNING", **context, **quote_detail)
             diagnostic_event("输出校验失败", level="WARNING", **context, duration_ms=traces[-1].duration_ms,
                              error_code=kind, reason=message, will_retry=attempt < spec.max_attempts)
             repair = (

@@ -93,6 +93,11 @@ def test_failed_api_task_keeps_global_drafts_and_specific_error_code(env, failur
         assert len(failures) == 2
         assert all(f["duration_ms"] >= 0 for f in failures)
         assert "observations" in failures[-1]["error"]
+        if failure == "handoff":
+            assert failures[-1]["quote_diagnostic"]["model_quote"] == "不属于原文的引文"
+            assert failures[-1]["quote_diagnostic"]["source_position"] == 1
+            reloaded = env.client.get(f"/api/xhs/creative/runs/{result['id']}", headers=env.headers).json()
+            assert reloaded["payload"]["pipeline"] == result["payload"]["pipeline"]
 
 
 def test_cancel_during_model_request_updates_both_saved_snapshots(env):

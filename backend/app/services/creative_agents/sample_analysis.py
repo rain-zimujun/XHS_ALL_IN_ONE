@@ -17,6 +17,7 @@ from backend.app.schemas.creative import CreativeAnalysisOptions
 from backend.app.schemas.creative_agents import SampleAnalysis
 from backend.app.services.creative_analysis import CreativeError, owned_text_model, request_analysis
 from backend.app.services.creative_orchestrator import AgentRun, AgentSpec, AgentValidationError, run_agent
+from backend.app.services.creative_diagnostics import quote_mismatch_details
 
 
 SAMPLE_PROMPT_VERSION = "sample-analysis-v1"
@@ -123,7 +124,11 @@ def validate_sample_evidence(result: SampleAnalysis, payload: dict[str, Any]) ->
         if not any(item.quote in text for text in [source["title"], *source["body_segments"]]):
             raise AgentValidationError(
                 f"observations[{index}].quote：observations.quote 必须是对应样本标题或已提供正文片段的连续原文"
-                f"（输入样本序号 {source_positions[item.note_id]}，摘录 {len(item.quote)} 字，逐字匹配失败）"
+                f"（输入样本序号 {source_positions[item.note_id]}，摘录 {len(item.quote)} 字，逐字匹配失败）",
+                quote_diagnostic=quote_mismatch_details(
+                    path=("observations", index, "quote"), quote=item.quote,
+                    source=source, source_position=source_positions[item.note_id],
+                )
             )
     dimensions = [item.dimension for item in result.style_patterns]
     if len(dimensions) != len(set(dimensions)):
@@ -145,7 +150,11 @@ def validate_sample_evidence(result: SampleAnalysis, payload: dict[str, Any]) ->
                 raise AgentValidationError(
                     f"{name}[{index}].evidence[{evidence_index}].quote：evidence.quote 必须逐字出现在对应字段，"
                     f"不能引用省略正文、改写或跨片段拼接（输入样本序号 {source_positions[evidence.note_id]}，"
-                    f"字段 {evidence.field}，摘录 {len(evidence.quote)} 字，逐字匹配失败）"
+                    f"字段 {evidence.field}，摘录 {len(evidence.quote)} 字，逐字匹配失败）",
+                    quote_diagnostic=quote_mismatch_details(
+                        path=(name, index, "evidence", evidence_index, "quote"), quote=evidence.quote,
+                        source=source, source_position=source_positions[evidence.note_id], field=evidence.field,
+                    )
                 )
 
 

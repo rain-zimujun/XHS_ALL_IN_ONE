@@ -22,7 +22,7 @@ from backend.app.services.creative_agents.final_review import FINAL_REVIEW_AGENT
 from backend.app.services.creative_analysis import CreativeError
 from backend.app.services.creative_orchestrator import AgentAttemptTrace, AgentRun, AgentSpec, AgentValidationError
 from backend.app.services.creative_graph.model import CompatibleChatModel, response_parameter
-from backend.app.services.creative_diagnostics import diagnostic_event, exception_details, validation_summary
+from backend.app.services.creative_diagnostics import capture_model_quotes, diagnostic_event, exception_details, failed_quote_diagnostic, validation_summary
 
 
 class GraphOutputError(CreativeError):
@@ -87,13 +87,16 @@ class StructuredAgent:
                 context.update(batch_index=payload["batch"]["index"], batch_count=payload["batch"]["count"])
             diagnostic_event("模型调用开始", **context, **size_details)
             kind = "creative_schema_invalid"
+            value = None
+            raw_quotes = {}
             try:
                 # Output is constrained in the actual request, then validated
                 # against TypedDict at runtime before business checks see it.
-                value = self.runnable.invoke([
-                    SystemMessage(content=graph_prompt(self.spec)),
-                    HumanMessage(content=prompt + repair),
-                ])
+                with capture_model_quotes() as raw_quotes:
+                    value = self.runnable.invoke([
+                        SystemMessage(content=graph_prompt(self.spec)),
+                        HumanMessage(content=prompt + repair),
+                    ])
                 # Version/fingerprint are owned by this invocation's global
                 # state, never copied or chosen by the model.
                 adapted = self.output_adapter(value) if self.output_adapter else value
@@ -108,7 +111,10 @@ class StructuredAgent:
                 return AgentRun(self.spec.stage, self.spec.name, result, tuple(traces))
             except (ValidationError, AgentValidationError) as exc:
                 message = validation_summary(exc, parameter["json_schema"]["schema"]) if isinstance(exc, ValidationError) else str(exc)[:500]
-                traces.append(AgentAttemptTrace(attempt, round((monotonic() - started) * 1000), kind, message))
+                quote_detail = failed_quote_diagnostic(exc, value, raw_quotes)
+                traces.append(AgentAttemptTrace(attempt, round((monotonic() - started) * 1000), kind, message, quote_detail))
+                if quote_detail:
+                    diagnostic_event("原文引用不匹配", level="WARNING", **context, **quote_detail)
                 diagnostic_event("输出校验失败", level="WARNING", **context, duration_ms=traces[-1].duration_ms,
                                  error_code=kind, reason=message, will_retry=attempt < self.spec.max_attempts)
                 repair = f"\n上一次输出未通过校验（{kind}），请按同一 Schema 返回完整对象。修正原因：{message}\n"
