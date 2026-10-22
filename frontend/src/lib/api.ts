@@ -83,6 +83,9 @@ const http = axios.create({
   timeout: 120000,
 });
 
+// Authentication requests must not enter the business API's refresh interceptor.
+const authHttp = axios.create({ baseURL: "/api", timeout: 15000 });
+
 export async function searchCreativeNotes(payload: CreativeSearch): Promise<CreativeRun> {
   return (await http.post<CreativeRun>("/xhs/creative/search", payload, { timeout: 240000 })).data;
 }
@@ -113,6 +116,14 @@ export async function exportCreativeReport(id: number): Promise<CreativeRun> {
 
 const REFRESH_TOKEN_KEY = "spider_xhs_refresh_token";
 let accessToken: string | null = null;
+let authVersion = 0;
+let refreshPromise: Promise<string> | null = null;
+const authExpiredListeners = new Set<() => void>();
+
+export function onAuthExpired(listener: () => void): () => void {
+  authExpiredListeners.add(listener);
+  return () => authExpiredListeners.delete(listener);
+}
 
 export type AuthCredentials = {
   username: string;
@@ -136,6 +147,8 @@ function setAccessToken(token: string | null): void {
 }
 
 function persistAuthPayload(payload: AuthPayload): AuthPayload {
+  authVersion++;
+  refreshPromise = null;
   setAccessToken(payload.access_token);
   if (payload.refresh_token) {
     window.localStorage.setItem(REFRESH_TOKEN_KEY, payload.refresh_token);
@@ -144,8 +157,16 @@ function persistAuthPayload(payload: AuthPayload): AuthPayload {
 }
 
 export function clearAuthTokens(): void {
+  authVersion++;
+  refreshPromise = null;
   setAccessToken(null);
   window.localStorage.removeItem(REFRESH_TOKEN_KEY);
+}
+
+function expireAuth(): void {
+  clearAuthTokens();
+  authExpiredListeners.forEach((listener) => listener());
+  message.error("登录已失效或验证失败，请重新登录");
 }
 
 http.interceptors.request.use((config) => {
@@ -159,7 +180,10 @@ http.interceptors.response.use(
   (response) => response,
   async (error) => {
     const originalRequest = error.config as typeof error.config & { _authRetry?: boolean; _silent?: boolean };
-    if (error.response?.status !== 401 || originalRequest?._authRetry || !getRefreshToken()) {
+    if (error.response?.status !== 401 || !originalRequest || originalRequest._authRetry || !getRefreshToken()) {
+      if (error.response?.status === 401 && accessToken && originalRequest?.headers.Authorization === `Bearer ${accessToken}`) {
+        expireAuth();
+      }
       if (!originalRequest?._silent) {
         const detail = error.response?.data?.detail;
         const msg = typeof detail === "string" ? detail : "请求失败，请稍后重试";
@@ -169,43 +193,65 @@ http.interceptors.response.use(
     }
 
     originalRequest._authRetry = true;
-    try {
-      const token = await refreshAccessToken();
-      originalRequest.headers.Authorization = `Bearer ${token}`;
-      return http(originalRequest);
-    } catch (refreshError) {
-      clearAuthTokens();
-      message.error("登录已过期，请重新登录");
-      return Promise.reject(refreshError);
-    }
+    // A late 401 may belong to the old access token after another request refreshed it.
+    const token = accessToken && originalRequest.headers.Authorization !== `Bearer ${accessToken}`
+      ? accessToken
+      : await refreshAccessToken();
+    originalRequest.headers.Authorization = `Bearer ${token}`;
+    return http(originalRequest);
   }
 );
 
 export async function login(credentials: AuthCredentials): Promise<AuthPayload> {
-  const response = await http.post<AuthPayload>("/auth/login", credentials);
+  const response = await authHttp.post<AuthPayload>("/auth/login", credentials);
   return persistAuthPayload(response.data);
 }
 
 export async function register(credentials: AuthCredentials): Promise<AuthPayload> {
-  const response = await http.post<AuthPayload>("/auth/register", credentials);
+  const response = await authHttp.post<AuthPayload>("/auth/register", credentials);
   return persistAuthPayload(response.data);
 }
 
-export async function refreshAccessToken(): Promise<string> {
+export function refreshAccessToken(): Promise<string> {
+  if (refreshPromise) {
+    return refreshPromise;
+  }
   const refreshToken = getRefreshToken();
   if (!refreshToken) {
-    throw new Error("Missing refresh token");
+    return Promise.reject(new Error("Missing refresh token"));
   }
 
-  const response = await http.post<{ access_token: string; token_type: "bearer" }>("/auth/refresh", {
+  const version = authVersion;
+  const pending = authHttp.post<{ access_token: string; token_type: "bearer" }>("/auth/refresh", {
     refresh_token: refreshToken
+  }).then((response) => {
+    if (version !== authVersion) {
+      throw new Error("Authentication session changed");
+    }
+    const token = response.data.access_token;
+    if (typeof token !== "string" || !token.trim()) {
+      throw new Error("Invalid access token response");
+    }
+    setAccessToken(token);
+    return token;
+  }).catch((error: unknown) => {
+    if (version === authVersion) {
+      expireAuth();
+    }
+    throw error;
+  }).finally(() => {
+    if (refreshPromise === pending) {
+      refreshPromise = null;
+    }
   });
-  setAccessToken(response.data.access_token);
-  return response.data.access_token;
+  refreshPromise = pending;
+  return pending;
 }
 
 export async function fetchMe(): Promise<PlatformUser> {
-  const response = await http.get<PlatformUser>("/auth/me");
+  const response = await authHttp.get<PlatformUser>("/auth/me", {
+    headers: { Authorization: `Bearer ${getAccessToken()}` }
+  });
   return response.data;
 }
 

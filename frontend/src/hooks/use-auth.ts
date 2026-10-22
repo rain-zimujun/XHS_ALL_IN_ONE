@@ -106,7 +106,11 @@ export function useAuth() {
   const current = useSyncExternalStore(subscribe, getSnapshot, getSnapshot);
 
   useEffect(() => {
+    const unsubscribe = api.onAuthExpired(() => {
+      emit({ status: "anonymous", user: null, error: "登录已失效或验证失败，请重新登录。" });
+    });
     void bootstrap();
+    return unsubscribe;
   }, []);
 
   return {
