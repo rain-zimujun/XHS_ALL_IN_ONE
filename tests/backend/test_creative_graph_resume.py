@@ -14,7 +14,7 @@ from test_creative_graph_workflow import GraphCompletion, workflow
 from test_creative_workflow import install_client
 
 
-ROLES = ["SampleAnalysisResponse", "AudienceResponse", "TopicResponse", "TopicReviewResponse", "TitleResponse",
+ROLES = ["SampleAnalysisResponse", "AudienceGroupingResponse", "AudienceNeedsResponse", "TopicResponse", "TopicReviewResponse", "TitleResponse",
          "TitleReviewResponse", "CopyResponse", "CopyReviewResponse", "ImageResponse", "FinalReviewResponse"]
 
 
@@ -44,7 +44,7 @@ def test_resume_starts_at_exact_agent_preserving_every_upstream_artifact(failed_
     assert result["ideas"]
     assert recovery.wire_calls[0]["response_format"]["json_schema"]["name"] == failed_role
     assert len(recovery.calls) == len(ROLES) - ROLES.index(failed_role)
-    assert metadata["request_count"] == 11  # one original failure + ten successes
+    assert metadata["request_count"] == 12  # one original failure + eleven successes
     for key in ("sample_analysis", "audience", "topic", "topic_review", "title", "title_review", "copy", "copy_review", "image", "final_review"):
         if saved[key] is not None:
             assert resumed.state[key] == saved[key]
@@ -73,7 +73,7 @@ def test_resume_api_preserves_original_and_is_idempotent_with_ownership(env):
     assert child["parent_task_id"] == original["id"]
     assert child["payload"]["resume"]["role"] == "title_review"
     assert child["payload"]["sources"] == original["payload"]["sources"]
-    assert child["payload"]["pipeline"]["request_count"] == 14
+    assert child["payload"]["pipeline"]["request_count"] == 15
     assert child["payload"]["graph_state"]["pipeline"] == child["payload"]["pipeline"]
     assert len(recovery.calls) == 5
     assert recovery.wire_calls[0]["response_format"]["json_schema"]["name"] == "TitleReviewResponse"
@@ -94,8 +94,8 @@ def test_transient_failure_recovers_in_place_without_repeating_upstream(env):
     install_client(complete)
     result = collect_for_analysis(env, {"model_id": env.model_id, "workflow": "langgraph", "idea_count": 1, "variant_count": 2})
     assert result["status"] == "completed"
-    assert result["payload"]["pipeline"]["request_count"] == 13
-    assert len(model.calls) == 10
+    assert result["payload"]["pipeline"]["request_count"] == 14
+    assert len(model.calls) == 11
     stage = result["payload"]["pipeline"]["stages"]["title"]
     assert len(stage["metadata"]["network_attempts"]) == 3
     assert stage["history"][-1]["metadata"]["request_count"] == 4

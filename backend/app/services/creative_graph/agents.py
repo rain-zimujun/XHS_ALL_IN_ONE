@@ -62,7 +62,7 @@ class StructuredAgent:
             temperature=self.spec.temperature,
         ))
 
-    def invoke(self, payload, *, validate_output, on_progress=None, revision=None):
+    def invoke(self, payload, *, validate_output, on_progress=None, revision=None, repair_output=None):
         parameter = response_parameter(self.response_format)
         envelope = {"input": payload}
         if self.include_prompt_schema:
@@ -118,6 +118,10 @@ class StructuredAgent:
                 diagnostic_event("输出校验失败", level="WARNING", **context, duration_ms=traces[-1].duration_ms,
                                  error_code=kind, reason=message, will_retry=attempt < self.spec.max_attempts)
                 repair = f"\n上一次输出未通过校验（{kind}），请按同一 Schema 返回完整对象。修正原因：{message}\n"
+                if repair_output:
+                    envelope["input"] = repair_output(value if value is not None else getattr(exc, "structured_output", None), message)
+                    prompt = json.dumps(envelope, ensure_ascii=False)
+                    repair = "\n仅返回 repair 指定的缺失或错误项目，已接受的项目由程序保留，不要重复输出。\n"
             except Exception as exc:
                 diagnostic_event("模型调用中断", level="ERROR", **context,
                                  duration_ms=round((monotonic() - started) * 1000),

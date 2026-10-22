@@ -73,8 +73,8 @@ class AudienceEvidence(TypedDict):
 
 
 @strict_response
-class AudienceSegment(TypedDict):
-    segment_id: SegmentId
+class AudienceGroup(TypedDict):
+    """Semantic grouping only; identifiers are assigned by the program."""
     audience_terms: Annotated[list[AudienceTerm], Field(min_length=1, max_length=4)]
     role_context: Text
     primary_scenario: Text
@@ -83,6 +83,18 @@ class AudienceSegment(TypedDict):
     suitable_formats: Annotated[list[ContentType], Field(min_length=1, max_length=4)]
     evidence: Annotated[list[AudienceEvidence], Field(min_length=1, max_length=5)]
     uncertainties: Annotated[list[Text], Field(max_length=5)]
+
+
+@strict_response
+class AudienceSegment(AudienceGroup):
+    segment_id: SegmentId
+
+
+@strict_response
+class AudienceGroupingResponse(TypedDict):
+    # A partial repair may need no new groups; merged coverage must still
+    # include all audience terms before this step can complete.
+    segments: Annotated[list[AudienceGroup], Field(max_length=8)]
 
 
 @strict_response

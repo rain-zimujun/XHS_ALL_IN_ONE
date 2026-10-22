@@ -109,10 +109,11 @@ def validate_audience_brief(result: AudienceBrief, payload: dict[str, Any]) -> N
         covered.extend(segment.audience_terms)
         _validate_evidence(segment.evidence, payload)
     if set(covered) != expected_set:
-        raise AgentValidationError("segments 必须覆盖全部用户受众词，但不要求一篇内容同时服务所有人")
+        missing = [term for term in expected if term not in covered]
+        raise AgentValidationError(f"segments 必须覆盖全部用户受众词，缺少受众词={missing}；不要求一篇内容同时服务所有人")
 
-    for need in result.shared_needs:
-        _validate_segment_refs(need.applies_to_segment_ids, segment_ids)
+    for index, need in enumerate(result.shared_needs):
+        _validate_segment_refs(need.applies_to_segment_ids, segment_ids, f"shared_needs[{index}].applies_to_segment_ids")
         _validate_evidence(need.evidence, payload)
         bases = {evidence.basis for evidence in need.evidence}
         if need.confidence == "evidence" and not bases.intersection({"sample_evidence", "user_requirement"}):
@@ -120,13 +121,15 @@ def validate_audience_brief(result: AudienceBrief, payload: dict[str, Any]) -> N
         if need.confidence == "hypothesis" and "hypothesis" not in bases:
             raise AgentValidationError("confidence=hypothesis 必须明确包含 hypothesis 依据")
 
-    for recommendation in result.format_recommendations:
-        _validate_segment_refs(recommendation.for_segment_ids, segment_ids)
+    for index, recommendation in enumerate(result.format_recommendations):
+        _validate_segment_refs(recommendation.for_segment_ids, segment_ids, f"format_recommendations[{index}].for_segment_ids")
 
 
-def _validate_segment_refs(refs: list[str], known: list[str]) -> None:
+def _validate_segment_refs(refs: list[str], known: list[str], field: str = "segment_id") -> None:
     if len(refs) != len(set(refs)) or not set(refs).issubset(set(known)):
-        raise AgentValidationError("产物引用了未知或重复的 segment_id")
+        unknown = [ref for ref in refs if ref not in known]
+        duplicate = sorted({ref for ref in refs if refs.count(ref) > 1})
+        raise AgentValidationError(f"{field} 产物引用了未知或重复的 segment_id；未知={unknown}；重复={duplicate}；合法 ID={known}")
 
 
 def _validate_evidence(evidence: list[Any], payload: dict[str, Any]) -> None:

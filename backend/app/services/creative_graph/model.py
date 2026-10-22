@@ -11,7 +11,7 @@ from langchain_core.messages import AIMessage, BaseMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
 from langchain_core.runnables import RunnableLambda
 from langchain_core.utils.function_calling import convert_to_json_schema
-from pydantic import PrivateAttr, TypeAdapter
+from pydantic import PrivateAttr, TypeAdapter, ValidationError
 from typing_extensions import is_typeddict
 from backend.app.services.creative_diagnostics import record_model_quotes
 
@@ -63,6 +63,12 @@ class CompatibleChatModel(BaseChatModel):
         def validate(message):
             value = parse_json_object(message.content)
             record_model_quotes(value)
-            return adapter.validate_python(value, strict=True)
+            try:
+                return adapter.validate_python(value, strict=True)
+            except ValidationError as exc:
+                # In-memory only: a role may retain independently valid items
+                # for targeted repair. Never serialize/log the whole response.
+                exc.structured_output = value
+                raise
 
         return self.bind(response_format=parameter, temperature=temperature) | RunnableLambda(validate)

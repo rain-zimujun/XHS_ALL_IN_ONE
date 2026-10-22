@@ -28,6 +28,7 @@ from backend.app.services.creative_agents.revision import (
 )
 from backend.app.services.creative_graph.agents import GraphOutputError, build_agents
 from backend.app.services.creative_graph.model import CompatibleChatModel
+from backend.app.services.creative_graph.audience import run_audience_steps
 from backend.app.services.creative_graph.state import (
     AudienceUpdate, CopyReviewUpdate, CopyUpdate, CreativeGraphState, FinalReviewUpdate,
     ImageUpdate, ResultUpdate, RevisionPlanUpdate, SampleUpdate, TitleReviewUpdate,
@@ -233,6 +234,9 @@ class LangGraphWorkflow:
         item["attempts"][-1].update(status="completed", finished_at=utc_now())
         metadata = {**item["metadata"], "response_type": agent.response_format.__name__, "request_count": self.budget.request_count - requests_before,
                     "quality_review_status": output["status"] if reviewer else "not_reviewed"}
+        if role == "audience":
+            metadata.update(response_type="AudienceNeedsResponse",
+                            response_types=["AudienceGroupingResponse", "AudienceNeedsResponse"])
         if role == "sample_analysis":
             metadata.update(sample_count=payload["sample_count"], excerpt_chars_per_note=payload["excerpt_chars_per_note"],
                             excerpt_strategy=payload["excerpt_strategy"],
@@ -310,7 +314,14 @@ class LangGraphWorkflow:
     def audience_node(self, s: CreativeGraphState) -> AudienceUpdate:
         payload = reader_needs.prepare_audience_input(s["search"]["keyword"], s["options"]["audience"] or "内容创作者",
                                                      s["options"]["instruction"] or "围绕样本写自然精简的原创内容。", s["sample_analysis"])
-        return self._producer(s, "audience", payload, lambda r: reader_needs.validate_audience_brief(r, payload))
+        if s["audience"] is not None:
+            return {"pipeline": self.active_pipeline}
+        def invoke(agent, request, validator, pipeline, revision):
+            return run_audience_steps(agent, request, pipeline["stages"]["audience"]["metadata"],
+                                      lambda text: self._checkpoint(pipeline, text), validator)
+        output, pipeline = self._run_role(s, "audience", payload,
+                                         lambda r: reader_needs.validate_audience_brief(r, payload), invoke=invoke)
+        return {"audience": output, "pipeline": pipeline, "revision_plan": s["revision_plan"]}
 
     def topic_node(self, s: CreativeGraphState) -> TopicUpdate:
         payload = topic_selection.prepare_topic_input(**base_inputs(s))

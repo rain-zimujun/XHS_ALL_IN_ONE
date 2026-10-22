@@ -18,7 +18,7 @@ from test_creative_workflow import WorkflowCompletion
 class GraphCompletion(WorkflowCompletion):
     """Use the existing independent synthetic outputs with the new wire schema."""
     NAMES = {
-        "SampleAnalysisResponse": "SampleAnalysis", "AudienceResponse": "AudienceBrief",
+        "SampleAnalysisResponse": "SampleAnalysis", "AudienceGroupingResponse": "AudienceBrief", "AudienceNeedsResponse": "AudienceBrief",
         "TopicResponse": "TopicBrief", "TopicReviewResponse": "TopicReviewResponse",
         "TitleResponse": "TitleCandidates", "CopyResponse": "CopyVariants", "ImageResponse": "ImagePlans",
         "TitleReviewResponse": "ItemReviewResponse", "CopyReviewResponse": "ItemReviewResponse", "FinalReviewResponse": "ItemReviewResponse",
@@ -36,6 +36,19 @@ class GraphCompletion(WorkflowCompletion):
         prompt["output_schema"]["title"] = self.NAMES[prompt["output_schema"]["title"]]
         raw = super().__call__(**{**kwargs, "user_prompt": json.dumps(prompt, ensure_ascii=False) + kwargs["user_prompt"][end:]})
         output = json.loads(raw)
+        if wire_name == "AudienceGroupingResponse":
+            output = {"segments": [{k: v for k, v in group.items() if k != "segment_id"} for group in output["segments"]]}
+        elif wire_name == "AudienceNeedsResponse":
+            mapping = {group["segment_id"]: prompt["input"]["segments"][i]["segment_id"] for i, group in enumerate(output["segments"])}
+            for item in output["shared_needs"]:
+                item["applies_to_segment_ids"] = [mapping[ref] for ref in item["applies_to_segment_ids"]]
+            for item in output["format_recommendations"]:
+                item["for_segment_ids"] = [mapping[ref] for ref in item["for_segment_ids"]]
+            for key in ("segments", "requested_audience_terms"):
+                output.pop(key)
+        elif wire_name == "TopicResponse":
+            for idea in output["ideas"]:
+                idea["primary_segment_id"] = prompt["input"]["audience_brief"]["segments"][0]["segment_id"]
         for key in ("input_fingerprint", "revision", "topic_revision"):
             output.pop(key, None)
         for review in output.get("reviews", []):
@@ -64,7 +77,7 @@ def test_graph_executes_ten_roles_and_persists_serializable_global_state(count, 
     assert len(result["ideas"]) == count
     assert all(len(i["variants"]) == variants for i in result["ideas"])
     assert metadata["workflow"] == "langgraph"
-    assert len(model.calls) == metadata["request_count"] == 9 + count
+    assert len(model.calls) == metadata["request_count"] == 10 + count
     assert saved[-1]["result"] == result
     assert saved[-1]["pipeline"]["status"] == "completed"
     assert saved[-1]["revision_plan"] == {}
@@ -133,7 +146,7 @@ def test_conditional_review_edge_returns_to_producer_and_only_revises_failed_ite
     w = workflow(model, 3, 3)
     result, _ = w.run()
     assert len(result["ideas"]) == 3
-    assert len(model.calls) == (16 if stage == "title_review" else 14)
+    assert len(model.calls) == (17 if stage == "title_review" else 15)
     producer = {"TopicReviewResponse": "topic", "title_review": "title", "copy_review": "copy"}[stage]
     item = w.state["pipeline"]["stages"][producer]
     assert item["quality_revisions"] == 1
@@ -176,7 +189,7 @@ def test_budget_and_timeout_stop_without_further_requests_and_preserve_global_ou
         w.run()
     assert caught.value.code == "creative_budget_exhausted"
     assert len(model.calls) == w.state["pipeline"]["request_count"] == 3
-    assert w.state["topic"] and w.state["result"] is None
+    assert w.state["audience"] and w.state["topic"] is None and w.state["result"] is None
     model = GraphCompletion(timeout_stage="CopyVariants")
     w = workflow(model)
     with pytest.raises(requests.ReadTimeout):
