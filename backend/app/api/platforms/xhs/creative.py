@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.app.api.platforms.xhs.pc import _get_owned_pc_account_cookies, get_xhs_pc_api_adapter_factory
@@ -16,6 +16,7 @@ from backend.app.services.creative_runner import analyze_collection, collect_sam
 from backend.app.services.creative_report import export_report
 from backend.app.services.creative_copy import normalize_result_copy
 from backend.app.services.creative_service import search_samples
+from backend.app.services.creative_graph.recovery import can_resume, prepare_resume
 
 router = APIRouter(prefix="/xhs/creative", tags=["xhs-creative"])
 
@@ -29,6 +30,7 @@ def has_timestamp(value) -> bool:
 
 def serialize_creative_task(db: Session, task: Task) -> dict:
     result = serialize_task(task)
+    result["resume_available"] = can_resume(task)
     if result["payload"].get("result"):
         # Read-through formatting for old results; never rewrite saved prose.
         result["payload"] = {**result["payload"], "result": normalize_result_copy(result["payload"]["result"])}
@@ -177,6 +179,47 @@ def cancel(task_id: int, current_user: User = Depends(get_current_user), db: Ses
         task.payload = {**task.payload, "stage": "已停止"}
         db.commit()
     return serialize_task(task)
+
+
+@router.post("/runs/{task_id}/resume", status_code=202)
+def resume(
+    task_id: int, background: BackgroundTasks,
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
+    client_factory=Depends(get_creative_text_client_factory),
+):
+    original = owned_task(db, current_user, task_id)
+    existing_id = (original.payload or {}).get("resume_task_id")
+    if existing_id:
+        existing = owned_task(db, current_user, existing_id)
+        if existing.status in ("pending", "running", "completed"):
+            return serialize_creative_task(db, existing)
+        raise HTTPException(409, "已创建过接续任务，请打开最新的接续任务继续操作。")
+    try:
+        state, role = prepare_resume(original)
+        owned_text_model(db, current_user.id, state["options"]["model_id"])
+    except CreativeError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    child = Task(
+        user_id=current_user.id, platform="xhs", task_type="creative_analysis", status="pending", progress=0,
+        parent_task_id=original.id,
+        payload={"search": state["search"], "sources": state["sources"], "analysis": state["options"],
+                 "failures": original.payload.get("failures", []), "graph_state": state, "pipeline": state["pipeline"],
+                 "stage": "等待从失败阶段继续", "resume": {"from_task_id": original.id, "role": role}},
+    )
+    db.add(child)
+    db.flush()
+    # An optimistic compare-and-swap prevents double clicks/concurrent requests
+    # from enqueuing two billable children. Keep the original failure for audit.
+    claimed = db.execute(update(Task).where(
+        Task.id == original.id, Task.user_id == current_user.id, Task.status == "failed",
+        Task.retry_count == original.retry_count,
+    ).values(retry_count=original.retry_count + 1, payload={**original.payload, "resume_task_id": child.id}))
+    if claimed.rowcount != 1:
+        db.rollback()
+        raise HTTPException(409, "该任务已被接续，请刷新任务历史。")
+    db.commit(); db.refresh(child)
+    background.add_task(analyze_collection, child.id, sessionmaker(bind=db.get_bind()), client_factory)
+    return serialize_creative_task(db, child)
 
 
 @router.post("/runs/{task_id}/export")

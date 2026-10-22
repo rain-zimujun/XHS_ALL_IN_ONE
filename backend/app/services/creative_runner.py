@@ -63,10 +63,13 @@ def _generate_for_task(db, task, client_factory):
     # An old saved/pending task without a workflow flag keeps its original behavior.
     if task.payload["analysis"].get("workflow") == "langgraph":
         from backend.app.services.creative_graph.workflow import analyze_langgraph
+        resume = task.payload.get("resume")
         result, metadata = analyze_langgraph(
             db, task.user_id, task.payload["search"], task.payload["sources"],
             task.payload["analysis"], client_factory,
             lambda state: save_pipeline(state["pipeline"], graph_state=state),
+            resume_state=task.payload.get("graph_state") if resume else None,
+            resume_role=resume["role"] if resume else None,
         )
     elif task.payload["analysis"].get("workflow") == "multi_agent":
         result, metadata = analyze_multi_agent(

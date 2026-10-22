@@ -294,6 +294,8 @@ async function main() {
     await page.getByRole("button", { name: "复制完整笔记", exact: true }).click();
     await page.getByText("浏览器未允许复制，请选中正文手动复制。", { exact: true }).waitFor();
     await page.getByRole("button", { name: /#99 AI 模特穿搭/ }).click();
+    await page.getByText("创作任务 #99 · AI 模特穿搭", { exact: true }).waitFor();
+    await page.getByTestId("creative-results").waitFor({ state: "detached" });
     assert.equal(await page.getByTestId("creative-results").count(), 0);
     const audit = page.getByTestId("creative-review-audit");
     assert.equal(await audit.getByText("配图缺少支撑，需人工处理", { exact: true }).count(), 0);

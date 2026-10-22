@@ -10,6 +10,7 @@ export type CreativeSearch = {
 };
 
 export type CreativeRun = Omit<TaskRecord, "payload"> & {
+  resume_available?: boolean;
   payload: {
     search: CreativeSearch;
     items?: XhsSearchNote[];

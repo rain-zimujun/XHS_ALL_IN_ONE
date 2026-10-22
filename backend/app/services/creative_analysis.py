@@ -2,6 +2,9 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
+from email.utils import parsedate_to_datetime
+import math
 
 import requests
 from sqlalchemy import select
@@ -21,9 +24,25 @@ AI_READ_TIMEOUT_SECONDS = 180
 class CreativeError(Exception):
     """Only controlled, user-safe messages may use this exception."""
 
-    def __init__(self, message: str, code: str = "creative_error"):
+    def __init__(self, message: str, code: str = "creative_error", *, retryable=False, http_status=None, retry_after=None):
         super().__init__(message)
         self.code = code
+        self.retryable = retryable
+        self.http_status = http_status
+        self.retry_after = retry_after
+
+
+def retry_after_seconds(value):
+    if not isinstance(value, str):
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        try:
+            seconds = (parsedate_to_datetime(value) - datetime.now(timezone.utc)).total_seconds()
+        except (ValueError, TypeError, OverflowError):
+            return None
+    return max(0, seconds) if math.isfinite(seconds) else None
 
 
 def is_read_timeout(exc: Exception) -> bool:
@@ -44,18 +63,21 @@ def request_analysis(client, **kwargs) -> str:
     try:
         return client._complete(**kwargs, timeout=(AI_CONNECT_TIMEOUT_SECONDS, AI_READ_TIMEOUT_SECONDS))
     except requests.ConnectTimeout as exc:
-        raise CreativeError("连接模型服务超时（10 秒），请检查网络或中转服务。采集数据已保留。", "ai_connect_timeout") from exc
+        raise CreativeError("连接模型服务超时（10 秒），请检查网络或中转服务。采集数据已保留。", "ai_connect_timeout", retryable=True) from exc
     except (requests.Timeout, requests.ConnectionError) as exc:
         if is_read_timeout(exc):
             raise CreativeError(
                 "等待模型响应超时（3 分钟 / 180 秒）。中转站仍可能完成请求并计费，请先核对其记录，避免立即重复提交；采集数据已保留。",
                 "ai_read_timeout",
+                retryable=True,
             ) from exc
-        raise CreativeError("模型请求超时或连接中断，未收到完整结果。请核对网络和中转记录；采集数据已保留。", "ai_network_error") from exc
+        raise CreativeError("模型请求超时或连接中断，未收到完整结果。请核对网络和中转记录；采集数据已保留。", "ai_network_error", retryable=True) from exc
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else None
         label = f"（HTTP {status}）" if isinstance(status, int) else ""
-        raise CreativeError(f"模型服务返回错误{label}，请检查模型权限、额度或服务状态；采集数据已保留。", "ai_http_error") from exc
+        delay = retry_after_seconds(exc.response.headers.get("Retry-After")) if exc.response is not None else None
+        raise CreativeError(f"模型服务返回错误{label}，请检查模型权限、额度或服务状态；采集数据已保留。", "ai_http_error",
+                            retryable=status in {408, 429, 500, 502, 503, 504, 524}, http_status=status, retry_after=delay) from exc
     except ValueError as exc:
         raise CreativeError("模型服务已响应，但返回格式或正文无法解析。请核对 Base URL 和接口兼容性；HTTP 200 不代表有效生成结果。采集数据已保留。", "ai_response_invalid") from exc
 

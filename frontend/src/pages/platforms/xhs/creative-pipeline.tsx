@@ -1,6 +1,6 @@
 import { Alert, Col, Collapse, Row, Space, Tag, Typography } from "antd";
 import type { CreativePipeline, CreativeStageStatus } from "../../../types/creative";
-import { readFailedAttempts } from "../../../lib/creative-diagnostics";
+import { readFailedAttempts, readNetworkAttempts } from "../../../lib/creative-diagnostics";
 
 export const pipelineStageNames: Record<string, string> = {
   sample_analysis: "样本分析", audience: "读者需求", topic: "选题与评审", title: "标题与评审",
@@ -16,7 +16,8 @@ const statuses: Record<CreativeStageStatus, { label: string; color: string }> = 
 export function CreativePipelineProgress({ pipeline }: { pipeline: CreativePipeline }) {
   const failures = Object.entries(pipeline.stages).flatMap(([key, item]) => {
     const attempts = readFailedAttempts(item.metadata);
-    if (!attempts.length && !item.error) return [];
+    const network = readNetworkAttempts(item.metadata);
+    if (!attempts.length && !network.length && !item.error) return [];
     return [{
       key,
       label: `${pipelineStageNames[key] || key} · 失败详情`,
@@ -26,6 +27,11 @@ export function CreativePipelineProgress({ pipeline }: { pipeline: CreativePipel
         {attempts.map((attempt, index) => <div key={index}>
           <Typography.Text strong>第 {attempt.attempt} 次 · 耗时 {(attempt.duration_ms / 1000).toFixed(1)} 秒 · {attempt.status}</Typography.Text>
           <Typography.Paragraph copyable style={{ whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>{attempt.error}</Typography.Paragraph>
+        </div>)}
+        {network.map((attempt, index) => <div key={`network-${index}`}>
+          <Typography.Text strong>网络请求第 {attempt.attempt}/{attempt.max_retries + 1} 次 · 耗时 {(attempt.duration_ms / 1000).toFixed(1)} 秒 · {attempt.role || key}</Typography.Text>
+          <Typography.Paragraph copyable>{attempt.error}</Typography.Paragraph>
+          <Typography.Text type="secondary">{attempt.will_retry ? `已安排等待 ${attempt.wait_seconds} 秒后重试` : "该次请求未安排后续自动重试"}</Typography.Text>
         </div>)}
         <Typography.Text type="secondary">详情仅含字段位置与检查原因，不包含完整模型响应。历史任务只能显示当时已保存的诊断信息。</Typography.Text>
       </Space>,
@@ -47,7 +53,7 @@ export function CreativePipelineProgress({ pipeline }: { pipeline: CreativePipel
         </Col>;
       })}
     </Row>
-    <Typography.Text type="secondary">已发出 {pipeline.request_count} / {pipeline.max_requests} 次模型请求（包括评审、格式修复和质量返工）。阶段进度不是剩余耗时估计。</Typography.Text>
+    <Typography.Text type="secondary">已发出 {pipeline.request_count} / {pipeline.max_requests} 次模型请求（包括评审、网络重试、格式修复和质量返工）。临时网络故障最多额外重试 3 次；阶段进度不是剩余耗时估计。</Typography.Text>
     {pipeline.status === "revision_required" && <Alert type="warning" title="达到返工上限，仍有内容未通过评审" description="稿件、评分和修改意见已保留，不会将其作为已通过成稿。重新生成会创建新任务并再次调用模型，不会自动续跑。" />}
     {pipeline.status === "failed" && <Alert type="info" title="已保存完成阶段的稿件与评审" description="本次没有继续调用模型。若是超时，请先核对中转服务记录，避免重复计费。" />}
     {failures.length > 0 && <Collapse items={failures} />}

@@ -74,10 +74,13 @@ class RequestBudget:
         self.request_count = 0
         self.before_request = before_request
 
-    def __call__(self, **kwargs):
+    def ensure_available(self):
         if self.before_request:
             self.before_request()
         if self.request_count >= self.max_requests or self.clock() - self.started >= self.max_seconds:
             raise CreativeError("多阶段生成已达到调用次数或执行时间上限，当前稿件和评审已保存，请人工查看后再决定是否重新生成。", "creative_budget_exhausted")
+
+    def __call__(self, **kwargs):
+        self.ensure_available()
         self.request_count += 1
         return self.complete(**kwargs)

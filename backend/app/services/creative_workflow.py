@@ -28,6 +28,7 @@ from backend.app.services.creative_analysis import CreativeError, owned_text_mod
 from backend.app.services.creative_orchestrator import AgentRunError
 from backend.app.services.creative_pipeline import new_pipeline_state, utc_now, validate_pipeline_state
 from backend.app.services.creative_diagnostics import diagnostic_event
+from backend.app.services.creative_retries import request_with_retries
 
 
 PRODUCERS = {"topic": run_topic_selection, "title": run_title_generation, "copy": run_copy_generation, "image": run_image_planning}
@@ -60,9 +61,17 @@ class CreativeWorkflow:
     def complete(self, **kwargs):
         # Persist intent/count before network IO, and observe cancellation on both sides.
         self.save()
-        raw = self.budget(**kwargs)
+        raw = request_with_retries(self.budget, before_attempt=self._network_progress,
+                                   on_failure=self._network_failure, diagnostic_fields={"stage": self.current}, **kwargs)
         self.save()
         return raw
+
+    def _network_progress(self, retry):
+        self.save(f"当前 Agent 正在进行网络重试 {retry}/3" if retry else None)
+
+    def _network_failure(self, record):
+        self.state["stages"][self.current]["metadata"].setdefault("network_attempts", []).append(record)
+        self.save(f"网络异常，{record['wait_seconds']:g} 秒后重试 {record['attempt']}/3" if record["will_retry"] else "当前模型请求的网络重试已停止")
 
     def recorded_transport(self, **kwargs):
         self.save()  # RequestBudget has now counted the attempted request.
@@ -81,17 +90,19 @@ class CreativeWorkflow:
         completion = self.complete
         if revision:
             completion = revision_completion(completion, stage=stage, **revision)
+        requests_before = self.budget.request_count
         try:
             run, metadata = fn(**inputs, complete=completion, on_progress=self.save)
         except AgentRunError as exc:
             item["metadata"]["failed_attempts"] = [asdict(a) for a in exc.attempts]
             raise CreativeError("当前阶段两次输出未通过结构或交接校验，已保留此前稿件与评审。", "creative_output_invalid") from exc
         output = run.output.model_dump(mode="json")
+        metadata["request_count"] = self.budget.request_count - requests_before
         diagnostic_event("评审完成" if reviewer else "阶段完成", stage=stage,
                          request_count=self.budget.request_count,
                          **({"review_status": output["status"]} if reviewer else {}))
         attempt.update(status="completed", finished_at=utc_now())
-        item["metadata"] = metadata
+        item["metadata"] = {**item["metadata"], **metadata}
         if reviewer:
             item["review_result"] = output
             self.reviews[stage] = output
@@ -101,7 +112,7 @@ class CreativeWorkflow:
             self.outputs[stage] = output
         item["history"].append({
             "role": "reviewer" if reviewer else "producer", "revision": item["revision"],
-            "output": output, "metadata": metadata, "traces": [asdict(a) for a in run.attempts],
+            "output": output, "metadata": deepcopy(item["metadata"]), "traces": [asdict(a) for a in run.attempts],
             "target_ids": revision["target_ids"] if revision else [], "finished_at": utc_now(),
         })
         item["status"] = "completed"

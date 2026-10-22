@@ -84,7 +84,7 @@ def test_failed_api_task_keeps_global_drafts_and_specific_error_code(env, failur
     assert "result" not in result["payload"]
     assert result["payload"]["graph_state"]["result"] is None
     assert result["payload"]["graph_state"]["pipeline"] == result["payload"]["pipeline"]
-    assert len(model.calls) == (14 if failure == "quality" else 7 if failure == "timeout" else 2)
+    assert len(model.calls) == (14 if failure == "quality" else 10 if failure == "timeout" else 2)
     if failure in ("quality", "timeout"):
         assert result["payload"]["graph_state"]["title_review"]["status"] == "passed"
     else:

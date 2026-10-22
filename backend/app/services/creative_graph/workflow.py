@@ -30,6 +30,7 @@ from backend.app.services.creative_graph.state import (
 )
 from backend.app.services.creative_pipeline import new_pipeline_state, utc_now, validate_pipeline_state
 from backend.app.services.creative_diagnostics import diagnostic_event
+from backend.app.services.creative_retries import request_with_retries
 
 
 PRODUCTION_ORDER = ("topic", "title", "copy", "image")
@@ -90,7 +91,8 @@ def add_dependents(s, plan, stage, ids, feedback):
 
 
 class LangGraphWorkflow:
-    def __init__(self, *, search, sources, options, complete, on_state=None, on_graph_state=None, max_requests=MAX_MODEL_REQUESTS):
+    def __init__(self, *, search, sources, options, complete, on_state=None, on_graph_state=None, max_requests=MAX_MODEL_REQUESTS,
+                 resume_state=None, resume_role=None):
         config = CreativeAnalysisOptions.model_validate(options)
         pipeline = new_pipeline_state()
         pipeline["max_requests"] = max_requests
@@ -100,10 +102,21 @@ class LangGraphWorkflow:
             "pipeline": pipeline, "revision_plan": {}, "metadata": {},
         }
         self.on_state, self.on_graph_state = on_state, on_graph_state
-        self.transport, self.current = complete, "sample_analysis"
+        self.transport, self.current, self.current_role = complete, "sample_analysis", "sample_analysis"
         self.active_pipeline = pipeline
         self.budget = RequestBudget(self._recorded_transport, max_requests=max_requests)
         self.agents = build_agents(CompatibleChatModel(self._complete))
+        self.entry_role = resume_role or "sample_analysis"
+        self.resuming_producer = resume_role if resume_state is not None else None
+        if resume_state is not None:
+            if resume_role not in self.agents:
+                raise CreativeError("恢复节点无效。", "creative_resume_invalid")
+            self.state = deepcopy(resume_state)
+            self.active_pipeline = self.state["pipeline"]
+            self.budget.request_count = self.active_pipeline["request_count"]
+            self.budget.max_requests = self.active_pipeline["max_requests"]
+            self.current = self.agents[resume_role].spec.stage
+            self.current_role = resume_role
         self.graph = self._build_graph()
 
     def _checkpoint(self, pipeline, activity=None):
@@ -124,9 +137,22 @@ class LangGraphWorkflow:
 
     def _complete(self, **kwargs):
         self._checkpoint(self.active_pipeline)
-        raw = self.budget(**kwargs)
+        raw = request_with_retries(self.budget, before_attempt=self._network_progress,
+                                   on_failure=self._network_failure,
+                                   diagnostic_fields={"stage": self.current, "agent": self.agents[self.current_role].spec.name}, **kwargs)
         self._checkpoint(self.active_pipeline)
         return raw
+
+    def _network_progress(self, retry):
+        activity = f"{self.agents[self.current_role].spec.name} · 正在进行网络重试 {retry}/3" if retry else None
+        self._checkpoint(self.active_pipeline, activity)
+
+    def _network_failure(self, record):
+        item = self.active_pipeline["stages"][self.current]
+        item["metadata"].setdefault("network_attempts", []).append({**record, "role": self.current_role})
+        activity = (f"{self.agents[self.current_role].spec.name} · 网络异常，{record['wait_seconds']:g} 秒后重试 {record['attempt']}/3"
+                    if record["will_retry"] else "当前模型请求的网络重试已停止")
+        self._checkpoint(self.active_pipeline, activity)
 
     def _node(self, name, fn, update_type):
         def invoke(state):
@@ -155,7 +181,7 @@ class LangGraphWorkflow:
         )
         for name, fn, update in nodes:
             graph.add_node(name, self._node(name, fn, update))
-        graph.add_edge(START, "sample_analysis")
+        graph.add_conditional_edges(START, lambda _: self.entry_role, {name: name for name in self.agents})
         graph.add_edge("sample_analysis", "audience")
         graph.add_edge("audience", "topic")
         for stage, following in (("topic", "title"), ("title", "copy"), ("copy", "image")):
@@ -177,6 +203,7 @@ class LangGraphWorkflow:
         return next(s for s in PRODUCTION_ORDER if s in state["revision_plan"])
 
     def _run_role(self, s, role, payload, validator, *, transform=None, revision=None):
+        self.current_role = role
         agent = self.agents[role]
         stage, pipeline = agent.spec.stage, self.active_pipeline
         item = pipeline["stages"][stage]
@@ -184,6 +211,7 @@ class LangGraphWorkflow:
         pipeline.update(status="running", current_stage=stage, error_code=None)
         item["attempts"].append({"attempt": len(item["attempts"]) + 1, "started_at": utc_now(), "finished_at": None, "status": "running", "error": None})
         self._checkpoint(pipeline, agent.spec.name)
+        requests_before = self.budget.request_count
         try:
             run = agent.invoke(payload, validate_output=validator,
                                on_progress=lambda text: self._checkpoint(pipeline, text), revision=revision)
@@ -196,7 +224,7 @@ class LangGraphWorkflow:
                          request_count=self.budget.request_count,
                          **({"review_status": output["status"]} if reviewer else {}))
         item["attempts"][-1].update(status="completed", finished_at=utc_now())
-        metadata = {"response_type": agent.response_format.__name__, "request_count": len(run.attempts),
+        metadata = {**item["metadata"], "response_type": agent.response_format.__name__, "request_count": self.budget.request_count - requests_before,
                     "quality_review_status": output["status"] if reviewer else "not_reviewed"}
         if role == "sample_analysis":
             metadata.update(sample_count=payload["sample_count"], excerpt_chars_per_note=payload["excerpt_chars_per_note"],
@@ -209,7 +237,7 @@ class LangGraphWorkflow:
             item["revision"] += 1
             item["output"] = output
         item["history"].append({"role": "reviewer" if reviewer else "producer", "revision": item["revision"],
-                                "output": output, "metadata": metadata, "traces": [asdict(a) for a in run.attempts],
+                                "output": output, "metadata": deepcopy(metadata), "traces": [asdict(a) for a in run.attempts],
                                 "target_ids": revision["target_ids"] if revision else [], "finished_at": utc_now()})
         item["status"] = "revision_required" if reviewer and output["status"] != "passed" else "completed"
         return output, pipeline
@@ -223,9 +251,14 @@ class LangGraphWorkflow:
                 return {"pipeline": self.active_pipeline}
             item = self.active_pipeline["stages"][stage]
             if request["direct"]:
-                if item["quality_revisions"] >= MAX_QUALITY_REVISIONS:
-                    self._quality_stop("当前阶段已达到两次质量返工上限。")
-                item["quality_revisions"] += 1
+                if self.resuming_producer == stage:
+                    # This quality revision was counted before its failed
+                    # transport. Resuming it must not consume another round.
+                    self.resuming_producer = None
+                else:
+                    if item["quality_revisions"] >= MAX_QUALITY_REVISIONS:
+                        self._quality_stop("当前阶段已达到两次质量返工上限。")
+                    item["quality_revisions"] += 1
             previous = deepcopy(s[stage])
             if stage == "copy":
                 for idea in previous["ideas"]:
@@ -364,6 +397,8 @@ class LangGraphWorkflow:
         safe = "任务已停止" if cancelled else str(exc) if isinstance(exc, CreativeError) else "多阶段生成中断，已保存此前稿件和评审。"
         pipeline.update(status=status, error_code=getattr(exc, "code", "creative_cancelled" if cancelled else "creative_failed"), current_stage=self.current)
         item = pipeline["stages"][self.current]
+        item["metadata"]["failed_role"] = self.current_role
+        item["metadata"]["retryable_model_error"] = isinstance(exc, CreativeError) and exc.retryable
         item.update(status=status, error=safe)
         if item["attempts"] and item["attempts"][-1]["status"] == "running":
             item["attempts"][-1].update(status="failed", finished_at=utc_now(), error=safe)
@@ -386,9 +421,10 @@ class LangGraphWorkflow:
             raise
 
 
-def analyze_langgraph(db, user_id, search, sources, options, client_factory, on_graph_state):
+def analyze_langgraph(db, user_id, search, sources, options, client_factory, on_graph_state, *, resume_state=None, resume_role=None):
     config = CreativeAnalysisOptions.model_validate(options)
     model = owned_text_model(db, user_id, config.model_id)
     complete = partial(request_analysis, client_factory(), model_config=model, api_key=decrypt_text(model.encrypted_api_key))
-    result, metadata = LangGraphWorkflow(search=search, sources=sources, options=options, complete=complete, on_graph_state=on_graph_state).run()
+    result, metadata = LangGraphWorkflow(search=search, sources=sources, options=options, complete=complete, on_graph_state=on_graph_state,
+                                        resume_state=resume_state, resume_role=resume_role).run()
     return result, {**metadata, "model_name": model.model_name}
