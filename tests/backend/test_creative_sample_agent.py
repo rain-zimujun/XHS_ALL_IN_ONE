@@ -172,7 +172,7 @@ def test_output_metadata_and_stage_serialization_do_not_claim_quality_pass(count
     assert parsed.stages["audience"].status == "pending"
 
 
-@pytest.mark.parametrize("kind", ["omission", "duplicate_observation", "unknown_id", "fake_quote", "wrong_field", "duplicate_evidence", "duplicate_dimension", "extra_copy"])
+@pytest.mark.parametrize("kind", ["omission", "duplicate_observation", "unknown_id", "fake_quote", "duplicate_evidence", "duplicate_dimension", "extra_copy"])
 def test_reference_errors_use_only_one_bounded_repair(kind):
     def transform(result, call):
         if call > 1:
@@ -185,8 +185,6 @@ def test_reference_errors_use_only_one_bounded_repair(kind):
             result["topic_patterns"][0]["evidence"][0]["note_id"] = "not-in-this-batch"
         elif kind == "fake_quote":
             result["observations"][0]["quote"] = "正文中并不存在这段引文"
-        elif kind == "wrong_field":
-            result["topic_patterns"][0]["evidence"][0]["field"] = "title"
         elif kind == "duplicate_evidence":
             result["topic_patterns"][0]["evidence"] *= 2
         elif kind == "duplicate_dimension":
@@ -199,6 +197,21 @@ def test_reference_errors_use_only_one_bounded_repair(kind):
     assert len(complete.calls) == metadata["request_count"] == 2
     assert [attempt.status for attempt in run.attempts] == ["failed", "completed"]
     assert "证据校验" in complete.calls[1]["user_prompt"]
+
+
+def test_whitespace_variation_and_unique_wrong_field_are_normalized_without_retry():
+    def transform(result, _call):
+        result["observations"][0]["quote"] = result["observations"][0]["quote"].replace("裙摆", "裙\n摆")
+        result["topic_patterns"][0]["evidence"][0]["field"] = "title"
+        return result
+
+    complete = FakeCompletion(transform)
+    run, metadata = run_sample_analysis(search=SEARCH, sources=sources(), options=OPTIONS, complete=complete)
+    expected_quote = sources()[0]["content"][:12]
+    assert metadata["request_count"] == 1
+    assert run.output.observations[0].quote == expected_quote
+    assert run.output.topic_patterns[0].evidence[0].field == "body"
+    assert run.output.topic_patterns[0].evidence[0].quote == expected_quote
 
 
 @pytest.mark.parametrize("quote_kind", ["omitted", "cross_segment"])

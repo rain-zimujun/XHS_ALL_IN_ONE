@@ -21,7 +21,7 @@ from backend.app.services.creative_diagnostics import quote_mismatch_details
 from backend.app.services.creative_agents.title_generation import content_fingerprint
 
 
-SAMPLE_PROMPT_VERSION = "sample-analysis-v1"
+SAMPLE_PROMPT_VERSION = "sample-analysis-v2"
 SAMPLE_SCHEMA_VERSION = 1
 BODY_CHAR_BUDGET = 24000
 MAX_BODY_CHARS_PER_NOTE = 1800
@@ -35,7 +35,7 @@ SAMPLE_SYSTEM_PROMPT = """你是样本分析 Agent，只负责分析本批已采
 sources.relevance_tier=weak 表示弱相关辅助样本，只能提供有限方向参考，不可单独支撑核心共性结论或与高相关样本等权计数；其正文可能已截短，严格只引用提供的片段。
 随后跨样本提炼题材分组、读者价值、风格：标题、开头、口吻、段落长度、表情、话题和结尾。
 风格结论按 dimension 分组，同一维度只出现一次；样本间有差异时在 finding 中如实说明。
-每条 finding 都要有 evidence，引用真实 note_id，并标明 title 或 body。quote 必须是连续原文，不能改写或拼接。
+每条 finding 都要有 evidence，引用真实 note_id，并标明 title 或 body。quote 必须来自单个标题或单个正文片段，不能改写、拼接或引用未提供的中段；空格、换行和制表符差异会由程序忽略，但文字和标点仍需逐字对应。
 body_segments 是真实连续原文片段：两个片段表示中段已省略，不允许跨片段拼接引文。
 只有一篇依据时明确是个别样本；多篇共同结论需有多个不同 note_id 的证据，不编造覆盖比例。
 只归纳有依据的风格，不为凑齐维度虚构表情、话题或互动结尾。avoid_patterns 没有依据时返回空数组。
@@ -192,8 +192,43 @@ def merge_sample_batches(runs: list[SampleAnalysis]) -> SampleAnalysis:
     )
 
 
+def _compact_quote(value: str) -> str:
+    """Ignore presentation whitespace while preserving all visible characters."""
+    return "".join(value.split())
+
+
+def _canonical_source_quote(quote: str, text: str) -> str | None:
+    if quote in text:
+        return quote
+    compact_quote = _compact_quote(quote)
+    if len(compact_quote) < 2:
+        return None
+    compact_chars, positions = [], []
+    for index, char in enumerate(text):
+        if not char.isspace():
+            compact_chars.append(char)
+            positions.append(index)
+    start = "".join(compact_chars).find(compact_quote)
+    if start < 0:
+        return None
+    end = start + len(compact_quote) - 1
+    return text[positions[start]:positions[end] + 1]
+
+
+def _matching_evidence_fields(quote: str, source: dict[str, Any]) -> dict[str, str]:
+    matches = {}
+    title_quote = _canonical_source_quote(quote, source["title"])
+    if title_quote is not None:
+        matches["title"] = title_quote
+    body_quote = next((matched for segment in source["body_segments"]
+                       if (matched := _canonical_source_quote(quote, segment)) is not None), None)
+    if body_quote is not None:
+        matches["body"] = body_quote
+    return matches
+
+
 def validate_sample_evidence(result: SampleAnalysis, payload: dict[str, Any]) -> None:
-    """Check identity, coverage and literal quotes; do not claim semantic truth."""
+    """Check identity and bounded source quotes without rejecting formatting whitespace."""
     sources = {source["note_id"]: source for source in payload["sources"]}
     observed_ids = [item.note_id for item in result.observations]
     if len(observed_ids) != len(set(observed_ids)) or set(observed_ids) != set(sources):
@@ -201,15 +236,18 @@ def validate_sample_evidence(result: SampleAnalysis, payload: dict[str, Any]) ->
     source_positions = {note_id: i + 1 for i, note_id in enumerate(sources)}
     for index, item in enumerate(result.observations):
         source = sources[item.note_id]
-        if not any(item.quote in text for text in [source["title"], *source["body_segments"]]):
+        canonical_quote = next((matched for text in [source["title"], *source["body_segments"]]
+                                if (matched := _canonical_source_quote(item.quote, text)) is not None), None)
+        if canonical_quote is None:
             raise AgentValidationError(
-                f"observations[{index}].quote：observations.quote 必须是对应样本标题或已提供正文片段的连续原文"
+                f"observations[{index}].quote：observations.quote 必须来自对应样本标题或已提供正文片段（仅忽略空白差异）"
                 f"（输入样本序号 {source_positions[item.note_id]}，摘录 {len(item.quote)} 字，逐字匹配失败）",
                 quote_diagnostic=quote_mismatch_details(
                     path=("observations", index, "quote"), quote=item.quote,
                     source=source, source_position=source_positions[item.note_id],
                 )
             )
+        item.quote = canonical_quote
     dimensions = [item.dimension for item in result.style_patterns]
     if len(dimensions) != len(set(dimensions)):
         raise AgentValidationError("style_patterns.dimension 不可重复，请将同一风格维度合并说明")
@@ -220,22 +258,29 @@ def validate_sample_evidence(result: SampleAnalysis, payload: dict[str, Any]) ->
         for evidence_index, evidence in enumerate(finding.evidence):
             if evidence.note_id not in sources:
                 raise AgentValidationError("evidence.note_id 必须来自本批输入样本")
-            identity = (evidence.note_id, evidence.field, evidence.quote)
-            if identity in references:
-                raise AgentValidationError("同一结论不能重复同一条 evidence 来充当多篇依据")
-            references.add(identity)
             source = sources[evidence.note_id]
-            texts = [source["title"]] if evidence.field == "title" else source["body_segments"]
-            if not any(evidence.quote in text for text in texts):
+            matching_fields = _matching_evidence_fields(evidence.quote, source)
+            if evidence.field in matching_fields:
+                evidence.quote = matching_fields[evidence.field]
+            elif len(matching_fields) == 1:
+                # Models occasionally label a title quote as body (or vice
+                # versa). Correct only an unambiguous field mismatch; an
+                # ambiguous quote still fails instead of guessing.
+                evidence.field, evidence.quote = next(iter(matching_fields.items()))
+            if len(matching_fields) == 0:
                 raise AgentValidationError(
-                    f"{name}[{index}].evidence[{evidence_index}].quote：evidence.quote 必须逐字出现在对应字段，"
-                    f"不能引用省略正文、改写或跨片段拼接（输入样本序号 {source_positions[evidence.note_id]}，"
+                    f"{name}[{index}].evidence[{evidence_index}].quote：evidence.quote 必须来自对应标题或正文片段，"
+                    f"仅忽略空白差异，不能引用省略正文、改写或跨片段拼接（输入样本序号 {source_positions[evidence.note_id]}，"
                     f"字段 {evidence.field}，摘录 {len(evidence.quote)} 字，逐字匹配失败）",
                     quote_diagnostic=quote_mismatch_details(
                         path=(name, index, "evidence", evidence_index, "quote"), quote=evidence.quote,
                         source=source, source_position=source_positions[evidence.note_id], field=evidence.field,
                     )
                 )
+            identity = (evidence.note_id, evidence.field, evidence.quote)
+            if identity in references:
+                raise AgentValidationError("同一结论不能重复同一条 evidence 来充当多篇依据")
+            references.add(identity)
 
 
 def _run_prepared(payload: dict[str, Any], complete: Callable[..., str], on_progress) -> tuple[AgentRun, dict]:
