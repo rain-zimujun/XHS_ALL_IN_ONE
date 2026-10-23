@@ -239,6 +239,52 @@ def test_sample_analysis_batches_sequentially_and_resume_reuses_completed_sample
     assert pipeline_metadata["request_count"] == 15
 
 
+def test_sample_relevance_filter_preserves_raw_sources_and_batches_only_selected_notes():
+    notes = sources(7)
+    notes.append({"note_id": "weak-note", "title": "AI绘图工具记录", "content": ("AI绘图工具使用记录。" + "补充。" * 300)})
+    notes.append({"note_id": "unrelated-note", "title": "周末咖啡探店", "content": "這家咖啡店很安靜，甜品也不错。"})
+    original = copy.deepcopy(notes)
+    model = GraphCompletion()
+    w = LangGraphWorkflow(search=SEARCH, sources=notes,
+                          options={"model_id": 1, "workflow": "langgraph", "idea_count": 1, "variant_count": 2},
+                          complete=model)
+
+    update = w.sample_node(copy.deepcopy(w.state))
+
+    assert notes == original
+    sent = [json.loads(call["user_prompt"])["input"]
+            for call in model.wire_calls if call["response_format"]["json_schema"]["name"] == "SampleAnalysisResponse"]
+    sent_ids = [source["note_id"] for batch in sent for source in batch["sources"]]
+    assert "unrelated-note" not in sent_ids
+    assert "weak-note" in sent_ids
+    weak_input = next(source for batch in sent for source in batch["sources"] if source["note_id"] == "weak-note")
+    assert weak_input["relevance_tier"] == "weak"
+    assert weak_input["relevance_body_truncated"] is True
+    assert weak_input["original_body_chars"] > 500
+    assert weak_input["relevance_original_body_chars"] == weak_input["original_body_chars"]
+    relevance = update["pipeline"]["stages"]["sample_analysis"]["metadata"]["sample_relevance"]
+    assert relevance["total_count"] == 9
+    assert relevance["selected_count"] == 8
+    assert relevance["excluded_note_ids"] == ["unrelated-note"]
+    assert relevance["weak_note_ids"] == ["weak-note"]
+    assert relevance["version"] == "sample-relevance-v1"
+    assert len(sent) == 2
+
+
+def test_sample_relevance_filter_rejects_too_few_effective_samples():
+    notes = sources(2)
+    notes.append({"note_id": "unrelated-note", "title": "周末咖啡", "content": "咖啡很香。"})
+    model = GraphCompletion()
+    w = LangGraphWorkflow(search=SEARCH, sources=notes,
+                          options={"model_id": 1, "workflow": "langgraph", "idea_count": 1, "variant_count": 2},
+                          complete=model)
+    with pytest.raises(CreativeError) as caught:
+        w.sample_node(copy.deepcopy(w.state))
+    assert caught.value.code == "sample_relevance_insufficient"
+    assert "仅剩 2 篇可用样本" in str(caught.value)
+    assert model.calls == []
+
+
 @pytest.mark.parametrize("race", [False, True])
 def test_cancellation_at_request_boundary_keeps_results_uncommitted(race):
     model, states = GraphCompletion(timeout_stage="TopicBrief" if race else None), []

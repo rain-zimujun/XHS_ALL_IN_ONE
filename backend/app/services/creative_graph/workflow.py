@@ -19,6 +19,9 @@ from backend.app.services.creative_agents import (
     sample_analysis, reader_needs, topic_selection, topic_review, title_generation,
     title_review, copy_generation, copy_review, image_planning, final_review,
 )
+from backend.app.services.creative_agents.sample_relevance import (
+    FILTER_VERSION, filter_sample_sources, require_minimum_samples,
+)
 from backend.app.services.creative_agents.reviewing import decide_review
 from backend.app.services.creative_graph.title_review import (
     TITLE_REVIEW_VERSION, merge_title_review_results, prepare_title_review_batches,
@@ -320,18 +323,42 @@ class LangGraphWorkflow:
         return {role: output, "pipeline": pipeline, "revision_plan": plan}
 
     def sample_node(self, s: CreativeGraphState) -> SampleUpdate:
-        payload = sample_analysis.prepare_sample_input(s["search"], s["sources"], s["options"])
-        batches = sample_analysis.prepare_sample_batches(s["search"], s["sources"], s["options"])
+        filtered_sources, decisions = filter_sample_sources(
+            s["sources"], keyword=s["search"]["keyword"], audience=s["options"].get("audience", ""),
+        )
+        stage_metadata = self.active_pipeline["stages"]["sample_analysis"]["metadata"]
+        stage_metadata["sample_relevance"] = {
+            "version": FILTER_VERSION,
+            "total_count": len(s["sources"]),
+            "selected_count": len(filtered_sources),
+            "high_count": sum(item["tier"] == "high" for item in decisions),
+            "weak_count": sum(item["tier"] == "weak" for item in decisions),
+            "excluded_count": sum(item["tier"] == "excluded" for item in decisions),
+            "weak_note_ids": [item["note_id"] for item in decisions if item["tier"] == "weak"],
+            "excluded_note_ids": [item["note_id"] for item in decisions if item["tier"] == "excluded"],
+            "decisions": decisions,
+        }
+        self._checkpoint(self.active_pipeline)
+        require_minimum_samples(filtered_sources, decisions)
+        payload = sample_analysis.prepare_sample_input(s["search"], filtered_sources, s["options"])
+        batches = sample_analysis.prepare_sample_batches(s["search"], filtered_sources, s["options"])
+        for batch in batches:
+            if "input_fingerprint" in batch:
+                # The filter version is part of the cache identity. A changed
+                # classifier must not reuse a previous batch silently.
+                fingerprint_payload = {key: value for key, value in batch.items() if key != "input_fingerprint"}
+                fingerprint_payload["relevance_filter_version"] = FILTER_VERSION
+                batch["input_fingerprint"] = sample_analysis.content_fingerprint(fingerprint_payload)
         if len(batches) == 1:
             return self._producer(s, "sample_analysis", payload, lambda r: sample_analysis.validate_sample_evidence(r, payload))
 
         def invoke(agent, _original, _validator, pipeline, _revision):
             stage_metadata = pipeline["stages"]["sample_analysis"]["metadata"]
             cache = stage_metadata.get("sample_analysis_batches")
-            if (not isinstance(cache, dict) or cache.get("version") != "sample-analysis-by-batch-v1"
+            if (not isinstance(cache, dict) or cache.get("version") != "sample-analysis-by-batch-v2"
                     or cache.get("input_fingerprints") != [batch["input_fingerprint"] for batch in batches]
                     or not isinstance(cache.get("results"), dict)):
-                cache = {"version": "sample-analysis-by-batch-v1",
+                cache = {"version": "sample-analysis-by-batch-v2",
                          "input_fingerprints": [batch["input_fingerprint"] for batch in batches], "results": {}}
             valid_cache = {}
             for batch in batches:
