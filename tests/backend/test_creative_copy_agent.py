@@ -53,7 +53,7 @@ def test_copy_has_locked_titles_and_exact_variant_count(count, variants):
     assert meta["quality_review_status"] == "not_reviewed"
 
 
-@pytest.mark.parametrize("fault", ["wrong_title", "missing_idea", "missing_variant", "duplicate_id", "duplicate_body", "editorial", "placeholder", "tags_in_body", "duplicate_tag", "foreign_source", "missing_point", "fingerprint"])
+@pytest.mark.parametrize("fault", ["wrong_title", "missing_idea", "missing_variant", "duplicate_id", "duplicate_body", "editorial", "placeholder", "foreign_source", "missing_point", "fingerprint"])
 def test_copy_content_and_handoff_validation_repairs_once(fault):
     def transform(result, call):
         if call > 1:

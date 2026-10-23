@@ -4,7 +4,7 @@ from __future__ import annotations
 import re
 import unicodedata
 
-from backend.app.schemas.creative import COPY_TAG_COUNT
+from backend.app.schemas.creative import COPY_TAG_MAX_COUNT, COPY_TAG_MIN_COUNT
 
 
 TOPIC = r"[#＃]([^\s#＃]+)"
@@ -13,10 +13,11 @@ TOPIC_LINE = re.compile(rf"(?:{TOPIC}[#＃]?\s*)+")
 
 def validate_generated_tags(tags: list[str]) -> None:
     """Generation-only checks; historical copy keeps its original tag count."""
-    normalized = [unicodedata.normalize("NFKC", tag).casefold() for tag in tags]
-    if (len(tags) != COPY_TAG_COUNT or len(set(normalized)) != COPY_TAG_COUNT
+    normalized = [unicodedata.normalize("NFKC", tag).strip().lstrip("#＃").strip().casefold() for tag in tags]
+    if (not COPY_TAG_MIN_COUNT <= len(tags) <= COPY_TAG_MAX_COUNT
+            or len(set(normalized)) != len(normalized)
             or any(not tag or "#" in tag or any(c.isspace() for c in tag) for tag in normalized)):
-        raise ValueError("tags 必须是与本版最终正文最相关的 6 个不同话题，按相关性从高到低排列，不含井号或空白；请根据正文重新选择，不要截取或填入无关标签。")
+        raise ValueError("tags 清理后需要保留 5～8 个与本版正文相关的不同话题。")
 
 
 def normalize_note_copy(body: str, tags: list[str]) -> tuple[str, list[str]]:
@@ -34,10 +35,13 @@ def normalize_note_copy(body: str, tags: list[str]) -> tuple[str, list[str]]:
         else:
             break
     unique = []
+    seen = set()
     for tag in [*tags, *trailing_tags]:
         tag = tag.strip().strip("#＃").removesuffix("[话题]").strip()
-        if tag and tag not in unique:
+        normalized = unicodedata.normalize("NFKC", tag).casefold()
+        if tag and not any(c.isspace() for c in tag) and normalized not in seen and len(unique) < COPY_TAG_MAX_COUNT:
             unique.append(tag)
+            seen.add(normalized)
     return "\n".join(lines).strip(), unique
 
 

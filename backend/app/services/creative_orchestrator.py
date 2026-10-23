@@ -86,10 +86,14 @@ def run_agent(
 ) -> AgentRun:
     if spec.max_attempts < 1:
         raise ValueError("max_attempts must be positive")
-    from backend.app.schemas.creative import MAX_COPY_BODY_CHARS, COPY_TAG_COUNT
+    from backend.app.schemas.creative import COPY_TAG_MAX_COUNT, COPY_TAG_MIN_COUNT, MAX_COPY_BODY_CHARS
     from backend.app.services.creative_copy import validate_generated_tags
-    response_format = json_schema_response_format(output_model, max_body_chars=MAX_COPY_BODY_CHARS if spec.stage == "copy" else None,
-                                                  tag_count=COPY_TAG_COUNT if spec.stage == "copy" else None)
+    response_format = json_schema_response_format(
+        output_model,
+        max_body_chars=MAX_COPY_BODY_CHARS if spec.stage == "copy" else None,
+        tag_min_count=COPY_TAG_MIN_COUNT if spec.stage == "copy" else None,
+        tag_max_count=COPY_TAG_MAX_COUNT if spec.stage == "copy" else None,
+    )
     schema = response_format["json_schema"]["schema"]
     user_prompt = json.dumps({"input": input_payload, "output_schema": schema}, ensure_ascii=False)
     repair = ""
@@ -110,6 +114,9 @@ def run_agent(
                 response_format=response_format,
             )
             value = parse_json_object(raw)
+            if spec.stage == "copy":
+                from backend.app.services.creative_copy import normalize_result_copy
+                value = normalize_result_copy(value)
             result = output_model.model_validate(value)
             if spec.stage == "copy" and hasattr(result, "ideas"):
                 if any(len(v.body) > MAX_COPY_BODY_CHARS for idea in result.ideas for v in idea.variants):

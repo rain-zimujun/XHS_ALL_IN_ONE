@@ -102,6 +102,9 @@ class StructuredAgent:
                 # Version/fingerprint are owned by this invocation's global
                 # state, never copied or chosen by the model.
                 adapted = self.output_adapter(value) if self.output_adapter else value
+                if self.spec.stage == "copy":
+                    from backend.app.services.creative_copy import normalize_result_copy
+                    adapted = normalize_result_copy(adapted)
                 result = self.output_model.model_validate({**adapted, **{k: payload[k] for k in self.state_fields}})
                 kind = "creative_handoff_invalid"
                 validate_output(result)
@@ -118,7 +121,7 @@ class StructuredAgent:
                     message += "；正文最多 500 字（含空白、标点和换行，标题与标签另算），请精简并保留完整语句，不要直接截断。"
                 if (self.spec.stage == "copy" and isinstance(exc, ValidationError)
                         and any(e["loc"][-1:] == ("tags",) for e in exc.errors())):
-                    message += "；每版 tags 必须恰好 6 个不同话题，根据本版最终正文选择并按相关性降序排列，不要截取或凑无关热词。"
+                        message += "；优先选择 5～8 个与本版最终正文相关的话题，不需要凑无关热词，程序会清理格式。"
                 quote_detail = failed_quote_diagnostic(exc, value, raw_quotes)
                 traces.append(AgentAttemptTrace(attempt, round((monotonic() - started) * 1000), kind, message, quote_detail))
                 if quote_detail:

@@ -234,7 +234,7 @@ class CopyVariant(AgentOutputModel):
     variant_id: str = Field(pattern=r"^copy_[a-z0-9_]{1,60}$")
     label: str = Field(min_length=1, max_length=40)
     body: str = Field(min_length=1, max_length=3000)
-    tags: list[Annotated[str, Field(min_length=1, max_length=40)]] = Field(min_length=1, max_length=10)
+    tags: list[str] = Field(min_length=1, max_length=10)
     covered_points: list[FindingText] = Field(min_length=1, max_length=8)
     source_note_ids: list[NoteId] = Field(min_length=2, max_length=8)
 

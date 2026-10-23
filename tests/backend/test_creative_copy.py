@@ -53,6 +53,14 @@ def test_normalization_does_not_mutate_saved_result_or_drop_other_fields():
     assert normalize_result_copy(normalized) == normalized
 
 
+def test_generated_tags_are_cleaned_deduplicated_and_capped_without_rejecting_copy():
+    result = {"ideas": [{"variants": [{"body": "可直接发布的正文。", "tags": [
+        "#AI服装", "ＡＩ服装", "设计", "  配色  ", "含 空格", "＃廓形", "风格", "材质", "细节", "多余",
+    ]}]}]}
+    normalized = normalize_result_copy(result)
+    assert normalized["ideas"][0]["variants"][0]["tags"] == ["AI服装", "设计", "配色", "廓形", "风格", "材质", "细节", "多余"]
+
+
 @pytest.mark.parametrize("value", [None, [], {"ideas": None}, {"ideas": [None]}, {"ideas": [{"variants": [{"body": 1, "tags": [None]}]}]}])
 def test_malformed_output_remains_for_schema_validation(value):
     assert normalize_result_copy(value) == value

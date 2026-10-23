@@ -6,7 +6,11 @@ from typing import Any
 from pydantic import BaseModel
 
 
-def json_schema_response_format(output_model: type[BaseModel], *, max_body_chars: int | None = None, tag_count: int | None = None) -> dict[str, Any]:
+def json_schema_response_format(
+    output_model: type[BaseModel], *, max_body_chars: int | None = None,
+    tag_count: int | None = None, tag_min_count: int | None = None,
+    tag_max_count: int | None = None,
+) -> dict[str, Any]:
     schema = output_model.model_json_schema()
 
     def make_strict(node: dict[str, Any]) -> None:
@@ -21,8 +25,14 @@ def json_schema_response_format(output_model: type[BaseModel], *, max_body_chars
             if max_body_chars is not None and isinstance(body, dict) and body.get("type") == "string":
                 body["maxLength"] = min(body.get("maxLength", max_body_chars), max_body_chars)
             tags = node.get("properties", {}).get("tags")
-            if tag_count is not None and isinstance(tags, dict) and tags.get("type") == "array":
-                tags.update(minItems=tag_count, maxItems=tag_count)
+            if isinstance(tags, dict) and tags.get("type") == "array":
+                if tag_count is not None:
+                    tags.update(minItems=tag_count, maxItems=tag_count)
+                else:
+                    if tag_min_count is not None:
+                        tags["minItems"] = tag_min_count
+                    if tag_max_count is not None:
+                        tags["maxItems"] = tag_max_count
         for key in ("$defs", "properties"):
             for child in node.get(key, {}).values():
                 make_strict(child)

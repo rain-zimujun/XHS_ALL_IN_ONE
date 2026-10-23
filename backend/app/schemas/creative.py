@@ -4,6 +4,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 MAX_COPY_BODY_CHARS = 500
+COPY_TAG_MIN_COUNT = 5
+COPY_TAG_MAX_COUNT = 8
+# Kept as a compatibility alias for callers that use the historical target.
 COPY_TAG_COUNT = 6
 
 
@@ -56,7 +59,7 @@ class CreativeVariant(BaseModel):
 
     label: str = Field(min_length=1, max_length=40, description="该版本的表达角度或写法，需符合样本风格")
     body: str = Field(min_length=1, max_length=6000, description="给小红书读者看的纯正文成稿；默认自然分享作品或灵感，不写给发布者的指导。不得包含标题、话题标签、配图/生图说明、分析注释或待填占位符。")
-    tags: list[ShortText] = Field(min_length=1, max_length=10, description="新生成时选择与本版最终正文最相关的 6 个不同话题，按相关性从高到低排列，不带 #，不重复写进 body")
+    tags: list[ShortText] = Field(min_length=1, max_length=10, description="历史结果兼容读取；新生成时选择与本版最终正文最相关的 5～8 个不同话题，按相关性从高到低排列，不带 #，不重复写进 body")
     cover_text: ShortText
     image_plan: list[CreativeImagePlan] = Field(min_length=1, max_length=6)
 

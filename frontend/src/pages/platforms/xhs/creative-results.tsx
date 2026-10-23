@@ -23,7 +23,7 @@ function VariantContent({ title, variant }: { title: string; variant: CreativeVa
   async function copyNote(kind: "body" | "note") {
     setCopyError(false);
     try {
-      await navigator.clipboard.writeText(kind === "body" ? variant.body : [title, variant.body, tags].join("\n\n"));
+      await navigator.clipboard.writeText(kind === "body" ? [variant.body, tags].join("\n\n") : [title, variant.body, tags].join("\n\n"));
       setCopied(kind);
     } catch { setCopyError(true); }
   }
@@ -32,10 +32,10 @@ function VariantContent({ title, variant }: { title: string; variant: CreativeVa
       <Card size="small" title="正文文案">
         {copyError && <Alert type="warning" title="浏览器未允许复制，请选中正文手动复制。" style={{ marginBottom: 12 }} />}
         <Space wrap style={{ marginBottom: 16 }}>
-          <Button onClick={() => void copyNote("body")}>{copied === "body" ? "已复制正文" : "复制正文"}</Button>
+          <Button onClick={() => void copyNote("body")}>{copied === "body" ? "已复制正文和话题" : "复制正文和话题"}</Button>
           <Button onClick={() => void copyNote("note")}>{copied === "note" ? "已复制完整笔记" : "复制完整笔记"}</Button>
         </Space>
-        <Paragraph copyable={{ text: variant.body }} style={{ whiteSpace: "pre-wrap" }} data-testid="creative-body">{variant.body}</Paragraph>
+        <Paragraph copyable={{ text: [variant.body, tags].join("\n\n") }} style={{ whiteSpace: "pre-wrap" }} data-testid="creative-body">{variant.body}</Paragraph>
         <Title level={5}>话题标签</Title>
         <Paragraph copyable={{ text: tags }}>{variant.tags.map((tag, i) => <Tag key={i}>{tag}</Tag>)}</Paragraph>
       </Card>
