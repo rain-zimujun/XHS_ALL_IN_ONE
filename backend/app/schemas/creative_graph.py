@@ -347,9 +347,9 @@ class VariantImages(TypedDict):
 
 @strict_response
 class ImageResponse(TypedDict):
-    """Plan images for every locked copy variant without editing the copy."""
+    """Plan images for exactly one locked copy variant."""
 
-    variants: Annotated[list[VariantImages], Field(min_length=2, max_length=15)]
+    variants: Annotated[list[VariantImages], Field(min_length=1, max_length=1)]
     limitations: Annotated[list[Text], Field(min_length=1, max_length=8)]
 
 
@@ -358,5 +358,5 @@ class FinalReviewResponse(TypedDict):
     """Review each complete note and identify the owner of every issue."""
 
     summary: Summary
-    reviews: Annotated[list[ItemJudgement], Field(min_length=1, max_length=40)]
+    reviews: Annotated[list[ItemJudgement], Field(min_length=1, max_length=1)]
     limitations: Annotated[list[Text], Field(min_length=1, max_length=8)]

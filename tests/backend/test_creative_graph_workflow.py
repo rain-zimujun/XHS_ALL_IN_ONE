@@ -77,7 +77,7 @@ def test_graph_executes_ten_roles_and_persists_serializable_global_state(count, 
     assert len(result["ideas"]) == count
     assert all(len(i["variants"]) == variants for i in result["ideas"])
     assert metadata["workflow"] == "langgraph"
-    assert len(model.calls) == metadata["request_count"] == 9 + 2 * count
+    assert len(model.calls) == metadata["request_count"] == 7 + 2 * count + 2 * count * variants
     assert saved[-1]["result"] == result
     assert saved[-1]["pipeline"]["status"] == "completed"
     assert saved[-1]["revision_plan"] == {}
@@ -146,7 +146,7 @@ def test_conditional_review_edge_returns_to_producer_and_only_revises_failed_ite
     w = workflow(model, 3, 3)
     result, _ = w.run()
     assert len(result["ideas"]) == 3
-    assert len(model.calls) == (17 if stage == "TopicReviewResponse" else 19)
+    assert len(model.calls) == (33 if stage == "TopicReviewResponse" else 35)
     producer = {"TopicReviewResponse": "topic", "title_review": "title", "copy_review": "copy"}[stage]
     item = w.state["pipeline"]["stages"][producer]
     assert item["quality_revisions"] == 1
@@ -159,7 +159,7 @@ def test_final_conditional_route_invalidates_and_rebuilds_only_dependencies(owne
     model, states = GraphCompletion(fail_stage="final_review", final_owner=owner), []
     w = workflow(model, 3, 2, on_graph_state=states.append)
     result, _ = w.run()
-    assert result and model.counts["final_review"] == 2
+    assert result and model.counts["final_review"] == 12
     assert any(s["pipeline"]["stages"]["final_review"]["status"] == "invalidated" and s["final_review"] is None for s in states)
     assert w.state["pipeline"]["stages"][owner]["quality_revisions"] == 1
     for stage in ("topic", "title", "copy", "image"):
@@ -179,7 +179,7 @@ def test_exhausted_review_cycle_stops_with_drafts_and_no_final_result(stage, own
     assert w.state["result"] is None
     assert w.state["pipeline"]["status"] == "revision_required"
     assert w.state["pipeline"]["stages"][owner]["quality_revisions"] == 2
-    assert model.counts[stage] == 3
+    assert model.counts[stage] == (6 if stage == "final_review" else 3)
 
 
 def test_budget_and_timeout_stop_without_further_requests_and_preserve_global_outputs():

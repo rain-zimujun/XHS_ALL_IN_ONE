@@ -227,7 +227,7 @@ export function HotContentPage() {
           </Space>
         </Form>
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>正文参考本批有效样本的共同语气、开头、分段与互动方式，保持原创。每个标题对应 {variantCount} 版不同文案，每版都有独立配图建议与提示词；共生成 {ideaCount * variantCount} 版，数量越多通常耗时和费用越高。</Paragraph>
-        {workflow !== "legacy" && <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>当前使用{workflow === "langgraph" ? " LangGraph 试用流程" : "多 Agent"}：样本 → 受众 → 选题 → 标题 → 正文 → 配图 → 终审。首次全部通过通常为 10 次模型请求；每个生产阶段最多质量返工 2 次，任务总计最多 36 次请求，30 分钟后不再开始新请求。模型评分仅供参考，仍需人工确认。</Paragraph>}
+        {workflow !== "legacy" && <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>当前使用{workflow === "langgraph" ? " LangGraph 试用流程" : "多 Agent"}：样本 → 受众 → 选题 → 标题 → 正文 → 配图 → 终审。{workflow === "langgraph" ? `配图与终审逐篇处理，每篇完成后保存进度；当前数量首次全部通过通常需 ${7 + 2 * ideaCount + 2 * ideaCount * variantCount} 次模型请求，新任务最多 72 次。` : "首次全部通过通常为 10 次模型请求，任务总计最多 36 次。"}每个生产阶段最多质量返工 2 次，30 分钟后不再开始新请求。模型评分仅供参考，仍需人工确认。</Paragraph>}
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>点击生成会将样本文字发送给所选模型服务，按其规则计费；每次请求读取超时为 3 分钟。多 Agent 与 LangGraph 遇到临时网络故障最多额外重试 3 次，通常分别等待 15、30、60 秒；格式修复另计，最多一次。超时的原请求仍可能完成并计费。LangGraph 模型服务失败可从失败阶段继续；停止任务无法撤回已发出的请求。</Paragraph>
       </Card>
       {collection && <Card title={`创作任务 #${collection.id} · ${collection.payload.search.keyword}`} extra={collecting && <Button onClick={() => void stopTask()}>停止任务</Button>}>

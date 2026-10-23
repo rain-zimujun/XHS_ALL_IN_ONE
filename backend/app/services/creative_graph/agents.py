@@ -17,8 +17,7 @@ from backend.app.services.creative_agents.title_generation import TITLE_AGENT
 from backend.app.services.creative_graph.title_review import TITLE_REVIEW_AGENT, expand_title_review
 from backend.app.services.creative_agents.copy_generation import COPY_AGENT
 from backend.app.services.creative_graph.copy_review import COPY_REVIEW_AGENT
-from backend.app.services.creative_agents.image_planning import IMAGE_AGENT
-from backend.app.services.creative_agents.final_review import FINAL_REVIEW_AGENT
+from backend.app.services.creative_graph.visual_batches import IMAGE_AGENT, FINAL_REVIEW_AGENT, ImageBatchOutput
 from backend.app.services.creative_analysis import CreativeError
 from backend.app.services.creative_orchestrator import AgentAttemptTrace, AgentRun, AgentSpec, AgentValidationError
 from backend.app.services.creative_graph.model import CompatibleChatModel, response_parameter
@@ -80,7 +79,7 @@ class StructuredAgent:
             size_details = {
                 "input_chars": len(prompt + repair),
                 "schema_chars": len(json.dumps(parameter, ensure_ascii=False)),
-                "item_count": len(payload.get("items", [])), "rubric_count": len(payload.get("rubric", [])),
+                "item_count": len(payload.get("items", payload.get("locked_copies", []))), "rubric_count": len(payload.get("rubric", [])),
                 "score_count": len(payload.get("items", [])) * len(payload.get("rubric", [])),
             }
             if "batch" in payload:
@@ -142,6 +141,6 @@ def build_agents(model: CompatibleChatModel) -> dict[str, StructuredAgent]:
         "title_review": StructuredAgent(model, TITLE_REVIEW_AGENT, response_format=responses.TitleReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), output_adapter=expand_title_review, include_prompt_schema=False),
         "copy": StructuredAgent(model, COPY_AGENT, response_format=responses.CopyResponse, output_model=legacy.CopyVariants, state_fields=("input_fingerprint",)),
         "copy_review": StructuredAgent(model, COPY_REVIEW_AGENT, response_format=responses.CopyReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False),
-        "image": StructuredAgent(model, IMAGE_AGENT, response_format=responses.ImageResponse, output_model=legacy.ImagePlans, state_fields=("input_fingerprint",)),
-        "final_review": StructuredAgent(model, FINAL_REVIEW_AGENT, response_format=responses.FinalReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint")),
+        "image": StructuredAgent(model, IMAGE_AGENT, response_format=responses.ImageResponse, output_model=ImageBatchOutput, state_fields=("input_fingerprint",), include_prompt_schema=False),
+        "final_review": StructuredAgent(model, FINAL_REVIEW_AGENT, response_format=responses.FinalReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False),
     }
