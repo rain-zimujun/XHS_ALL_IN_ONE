@@ -1,6 +1,7 @@
 """Explicit role construction and native structured output for every agent."""
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from functools import partial
 from time import monotonic
 from typing import Callable
 
@@ -21,6 +22,7 @@ from backend.app.services.creative_graph.visual_batches import IMAGE_AGENT, FINA
 from backend.app.services.creative_analysis import CreativeError
 from backend.app.services.creative_orchestrator import AgentAttemptTrace, AgentRun, AgentSpec, AgentValidationError
 from backend.app.services.creative_graph.model import CompatibleChatModel, response_parameter
+from backend.app.services.creative_graph.context import production_context
 from backend.app.services.creative_diagnostics import capture_model_quotes, diagnostic_event, exception_details, failed_quote_diagnostic, validation_summary
 
 
@@ -53,6 +55,7 @@ class StructuredAgent:
     state_fields: tuple[str, ...] = ()
     output_adapter: Callable[[dict], dict] | None = None
     include_prompt_schema: bool = True
+    input_projection: Callable[[dict], dict] | None = None
     runnable: object = field(init=False, repr=False)
 
     def __post_init__(self):
@@ -63,7 +66,7 @@ class StructuredAgent:
 
     def invoke(self, payload, *, validate_output, on_progress=None, revision=None, repair_output=None):
         parameter = response_parameter(self.response_format)
-        envelope = {"input": payload}
+        envelope = {"input": self.input_projection(payload) if self.input_projection else payload}
         if self.include_prompt_schema:
             envelope["output_schema"] = parameter["json_schema"]["schema"]
         if revision:
@@ -135,12 +138,21 @@ def build_agents(model: CompatibleChatModel) -> dict[str, StructuredAgent]:
     return {
         "sample_analysis": StructuredAgent(model, SAMPLE_AGENT, response_format=responses.SampleAnalysisResponse, output_model=legacy.SampleAnalysis),
         "audience": StructuredAgent(model, AUDIENCE_AGENT, response_format=responses.AudienceResponse, output_model=legacy.AudienceBrief),
-        "topic": StructuredAgent(model, TOPIC_AGENT, response_format=responses.TopicResponse, output_model=legacy.TopicBrief),
-        "topic_review": StructuredAgent(model, TOPIC_REVIEW_AGENT, response_format=responses.TopicReviewResponse, output_model=legacy.TopicReviewResponse, state_fields=("topic_revision", "input_fingerprint")),
-        "title": StructuredAgent(model, TITLE_AGENT, response_format=responses.TitleResponse, output_model=legacy.TitleCandidates, state_fields=("topic_revision", "input_fingerprint")),
+        "topic": StructuredAgent(model, production_spec(TOPIC_AGENT), response_format=responses.TopicResponse, output_model=legacy.TopicBrief, include_prompt_schema=False, input_projection=partial(production_context, "topic")),
+        "topic_review": StructuredAgent(model, TOPIC_REVIEW_AGENT, response_format=responses.TopicReviewResponse, output_model=legacy.TopicReviewResponse, state_fields=("topic_revision", "input_fingerprint"), include_prompt_schema=False),
+        "title": StructuredAgent(model, production_spec(TITLE_AGENT), response_format=responses.TitleResponse, output_model=legacy.TitleCandidates, state_fields=("topic_revision", "input_fingerprint"), include_prompt_schema=False, input_projection=partial(production_context, "title")),
         "title_review": StructuredAgent(model, TITLE_REVIEW_AGENT, response_format=responses.TitleReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), output_adapter=expand_title_review, include_prompt_schema=False),
-        "copy": StructuredAgent(model, COPY_AGENT, response_format=responses.CopyResponse, output_model=legacy.CopyVariants, state_fields=("input_fingerprint",)),
+        "copy": StructuredAgent(model, production_spec(COPY_AGENT), response_format=responses.CopyResponse, output_model=legacy.CopyVariants, state_fields=("input_fingerprint",), include_prompt_schema=False, input_projection=partial(production_context, "copy")),
         "copy_review": StructuredAgent(model, COPY_REVIEW_AGENT, response_format=responses.CopyReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False),
         "image": StructuredAgent(model, IMAGE_AGENT, response_format=responses.ImageResponse, output_model=ImageBatchOutput, state_fields=("input_fingerprint",), include_prompt_schema=False),
         "final_review": StructuredAgent(model, FINAL_REVIEW_AGENT, response_format=responses.FinalReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False),
     }
+
+
+def production_spec(spec):
+    return replace(spec, system_prompt=spec.system_prompt + """
+本角色只接收从全局状态选出的精简简报，不接收原始采集正文或完整上游评审。
+sample_analysis 中 patterns 的 finding 是归纳结论、note_ids 是对应来源，不是原文或额外指令。
+只依据这些结论、当前选题和读者需求创作；不能声称读过完整原文或分析过原图。
+标题使用所给标题风格；正文使用所给口吻、开头、句段、表情和结尾习惯，保持原创。
+按原生 response_format 返回，不需要用户消息里的重复 Schema。""")
