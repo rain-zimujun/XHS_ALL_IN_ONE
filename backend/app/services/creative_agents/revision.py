@@ -77,8 +77,10 @@ class RequestBudget:
     def ensure_available(self):
         if self.before_request:
             self.before_request()
-        if self.request_count >= self.max_requests or self.clock() - self.started >= self.max_seconds:
-            raise CreativeError("多阶段生成已达到调用次数或执行时间上限，当前稿件和评审已保存，请人工查看后再决定是否重新生成。", "creative_budget_exhausted")
+        if self.request_count >= self.max_requests:
+            raise CreativeError(f"多阶段生成已达到累计 {self.max_requests} 次模型请求上限，当前稿件和评审已保存。", "creative_budget_exhausted")
+        if self.clock() - self.started >= self.max_seconds:
+            raise CreativeError(f"多阶段生成已达到本轮 {self.max_seconds / 60:g} 分钟执行时间上限，当前稿件和已完成批次已保存；LangGraph 任务可从失败阶段继续。", "creative_time_exhausted")
 
     def __call__(self, **kwargs):
         self.ensure_available()

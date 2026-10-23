@@ -82,11 +82,24 @@ def test_elapsed_budget_and_cancellation_prevent_request():
     calls = []
     times = iter([0, 11])
     budget = RequestBudget(lambda **_: calls.append(1), max_seconds=10, clock=lambda: next(times))
-    with pytest.raises(CreativeError, match="上限"):
+    with pytest.raises(CreativeError, match="执行时间上限") as error:
         budget()
+    assert error.value.code == "creative_time_exhausted"
+    assert budget.request_count == 0
     def cancel():
         raise RuntimeError("停止")
     budget = RequestBudget(lambda **_: calls.append(1), before_request=cancel)
     with pytest.raises(RuntimeError, match="停止"):
         budget()
     assert not calls
+
+
+def test_request_limit_takes_precedence_when_both_budgets_expire():
+    now = [0]
+    budget = RequestBudget(lambda: "ok", max_requests=1, max_seconds=10, clock=lambda: now[0])
+    assert budget() == "ok"
+    now[0] = 11
+    with pytest.raises(CreativeError, match="累计 1 次") as error:
+        budget()
+    assert error.value.code == "creative_budget_exhausted"
+    assert budget.request_count == 1

@@ -54,6 +54,7 @@ DISCLAIMER = "基于本批文字样本，未分析原图；模型评分未经人
 # At most 47 first-pass requests (5 topics x 3 variants); keep bounded room
 # for structural repair, quality revisions and network retries on new runs.
 MAX_GRAPH_REQUESTS = 72
+MAX_GRAPH_SECONDS = 90 * 60
 
 
 def base_inputs(s):
@@ -122,7 +123,7 @@ class LangGraphWorkflow:
         self.on_state, self.on_graph_state = on_state, on_graph_state
         self.transport, self.current, self.current_role = complete, "sample_analysis", "sample_analysis"
         self.active_pipeline = pipeline
-        self.budget = RequestBudget(self._recorded_transport, max_requests=max_requests)
+        self.budget = RequestBudget(self._recorded_transport, max_requests=max_requests, max_seconds=MAX_GRAPH_SECONDS)
         self.agents = build_agents(CompatibleChatModel(self._complete))
         self.entry_role = resume_role or "sample_analysis"
         self.resuming_producer = resume_role if resume_state is not None else None
@@ -546,6 +547,15 @@ class LangGraphWorkflow:
         item = pipeline["stages"][self.current]
         item["metadata"]["failed_role"] = self.current_role
         item["metadata"]["retryable_model_error"] = isinstance(exc, CreativeError) and exc.retryable
+        if isinstance(exc, CreativeError) and exc.code in {"creative_budget_exhausted", "creative_time_exhausted"}:
+            detail = {
+                "reason": "time" if exc.code == "creative_time_exhausted" else "requests",
+                "elapsed_seconds": round(max(0, self.budget.clock() - self.budget.started), 2),
+                "max_seconds": self.budget.max_seconds,
+                "request_count": self.budget.request_count, "max_requests": self.budget.max_requests,
+            }
+            item["metadata"]["budget_exhaustion"] = detail
+            diagnostic_event("执行预算耗尽", stage=self.current, role=self.current_role, **detail)
         item.update(status=status, error=safe)
         if item["attempts"] and item["attempts"][-1]["status"] == "running":
             item["attempts"][-1].update(status="failed", finished_at=utc_now(), error=safe)

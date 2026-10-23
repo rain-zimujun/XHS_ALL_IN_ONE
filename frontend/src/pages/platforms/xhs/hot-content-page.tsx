@@ -121,7 +121,7 @@ export function HotContentPage() {
     if (!collection) return;
     setStarting(true); setError("");
     try { setCollection(await resumeCreativeRun(collection.id)); void loadHistory(); }
-    catch { setError("无法接续该任务，请刷新历史任务并检查原模型配置。接续仅支持保存了完整状态的 LangGraph 模型服务失败任务。"); }
+    catch { setError("无法接续该任务，请刷新历史任务并检查原模型配置。接续支持保存了完整状态且累计请求次数未用尽的 LangGraph 模型服务失败或执行超时任务。"); }
     finally { setStarting(false); }
   }
 
@@ -227,8 +227,8 @@ export function HotContentPage() {
           </Space>
         </Form>
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>正文参考本批有效样本的共同语气、开头、分段与互动方式，保持原创。每个标题对应 {variantCount} 版不同文案，每版都有独立配图建议与提示词；共生成 {ideaCount * variantCount} 版，数量越多通常耗时和费用越高。</Paragraph>
-        {workflow !== "legacy" && <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>当前使用{workflow === "langgraph" ? " LangGraph 试用流程" : "多 Agent"}：样本 → 受众 → 选题 → 标题 → 正文 → 配图 → 终审。{workflow === "langgraph" ? `配图与终审逐篇处理，每篇完成后保存进度；当前数量首次全部通过通常需 ${7 + 2 * ideaCount + 2 * ideaCount * variantCount} 次模型请求，新任务最多 72 次。` : "首次全部通过通常为 10 次模型请求，任务总计最多 36 次。"}每个生产阶段最多质量返工 2 次，30 分钟后不再开始新请求。模型评分仅供参考，仍需人工确认。</Paragraph>}
-        <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>点击生成会将样本文字发送给所选模型服务，按其规则计费；每次请求读取超时为 3 分钟。多 Agent 与 LangGraph 遇到临时网络故障最多额外重试 3 次，通常分别等待 15、30、60 秒；格式修复另计，最多一次。超时的原请求仍可能完成并计费。LangGraph 模型服务失败可从失败阶段继续；停止任务无法撤回已发出的请求。</Paragraph>
+        {workflow !== "legacy" && <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>当前使用{workflow === "langgraph" ? " LangGraph 试用流程" : "多 Agent"}：样本 → 受众 → 选题 → 标题 → 正文 → 配图 → 终审。{workflow === "langgraph" ? `配图与终审逐篇处理，每篇完成后保存进度；当前数量首次全部通过通常需 ${7 + 2 * ideaCount + 2 * ideaCount * variantCount} 次模型请求，新任务最多 72 次，每轮执行窗口为 90 分钟。` : "首次全部通过通常为 10 次模型请求，任务总计最多 36 次，每轮执行窗口为 30 分钟。"}每个生产阶段最多质量返工 2 次，执行窗口到期后不再开始新请求。模型评分仅供参考，仍需人工确认。</Paragraph>}
+        <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>点击生成会将样本文字发送给所选模型服务，按其规则计费；每次请求读取超时为 3 分钟。多 Agent 与 LangGraph 遇到临时网络故障最多额外重试 3 次，通常分别等待 15、30、60 秒；格式修复另计，最多一次。超时的原请求仍可能完成并计费。LangGraph 模型服务失败或执行窗口到期，可在累计请求次数未用尽时从失败阶段继续；停止任务无法撤回已发出的请求。</Paragraph>
       </Card>
       {collection && <Card title={`创作任务 #${collection.id} · ${collection.payload.search.keyword}`} extra={collecting && <Button onClick={() => void stopTask()}>停止任务</Button>}>
         <Text>{collection.status === "failed" || collection.status === "cancelled" ? statusNames[collection.status] : collection.payload.stage || statusNames[collection.status] || collection.status}</Text>
@@ -237,7 +237,7 @@ export function HotContentPage() {
         <Paragraph>已保存 {collection.payload.sources?.length || 0} 篇正文，失败 {collection.payload.failures?.length || 0} 篇。</Paragraph>
         {collection.payload.error && <Alert type="error" title={collection.payload.error} />}
         {collection.resume_available && <Alert type="info" title="可以从失败阶段继续" description={<Space orientation="vertical">
-          <Text>复用原任务的素材、创作设置和已完成稿件，仅重试失败的 Agent。会再次调用原模型，可能产生费用；不会重新采集或重跑已完成阶段。</Text>
+          <Text>复用原任务的素材、创作设置、已完成稿件和有效批次，继续未完成部分。本轮执行窗口为 90 分钟，累计请求次数不清零。会再次调用原模型，可能产生费用；不会重新采集或重跑已完成阶段。</Text>
           <Button type="primary" onClick={() => void resumeFailedTask()} loading={starting} disabled={collecting || searching}>从失败阶段继续</Button>
         </Space>} />}
         {collection.payload.failures?.map(f => <Paragraph key={f.note_id} type="secondary">{f.title || f.note_id}：{f.reason}</Paragraph>)}

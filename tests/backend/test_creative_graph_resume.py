@@ -9,6 +9,7 @@ from backend.app.models import Task
 from backend.app.services.creative_analysis import CreativeError
 from backend.app.services.creative_graph.recovery import prepare_resume
 from backend.app.services.creative_graph.workflow import LangGraphWorkflow
+from backend.app.services.creative_agents.revision import RequestBudget
 from test_creative import env, collect_for_analysis
 from test_creative_graph_workflow import GraphCompletion, workflow
 from test_creative_workflow import install_client
@@ -173,3 +174,89 @@ def test_resume_rejects_business_failures_and_missing_checkpoints(env, failure):
     response = env.client.post(f"/api/xhs/creative/runs/{original['id']}/resume", headers=env.headers)
     assert response.status_code == 400
     assert len(model.calls) == before
+
+
+@pytest.mark.parametrize("error_code", ["creative_time_exhausted", "creative_budget_exhausted"])
+def test_expired_window_resumes_at_fifth_final_batch_with_cumulative_request_limit(error_code):
+    now, model = [0], GraphCompletion()
+    def complete(**kwargs):
+        raw = model(**kwargs)
+        if kwargs["response_format"]["json_schema"]["name"] == "FinalReviewResponse":
+            batch = json.loads(kwargs["user_prompt"])["input"]["batch"]
+            if batch["index"] == 4:
+                now[0] = 1801
+        return raw
+    original = workflow(complete, count=3, variants=3)
+    assert original.budget.max_seconds == 90 * 60
+    original.budget.clock, original.budget.started, original.budget.max_seconds = lambda: now[0], 0, 1800
+    with pytest.raises(CreativeError) as caught:
+        original.run()
+    assert caught.value.code == "creative_time_exhausted"
+    saved = copy.deepcopy(original.state)
+    saved["options"]["workflow"] = "langgraph"
+    pipeline = saved["pipeline"]
+    metadata = pipeline["stages"]["final_review"]["metadata"]
+    assert metadata["final_review_completed_batches"] == 4
+    assert metadata["final_review_batch"]["index"] == 5
+    assert metadata["budget_exhaustion"] == {
+        "reason": "time", "elapsed_seconds": 1801, "max_seconds": 1800,
+        "request_count": 26, "max_requests": 72,
+    }
+    if error_code == "creative_budget_exhausted":
+        # Historical snapshots did not distinguish request and time limits.
+        pipeline["error_code"] = error_code
+        metadata.pop("budget_exhaustion")
+    task = SimpleNamespace(status="failed", error_type=error_code, payload={
+        "analysis": saved["options"], "search": saved["search"], "sources": saved["sources"], "graph_state": saved,
+    })
+    before = copy.deepcopy(task.payload)
+    for fault in ("count", "code", "reason"):
+        broken = copy.deepcopy(task)
+        bp = broken.payload["graph_state"]["pipeline"]
+        if fault == "count":
+            bp["request_count"] = bp["max_requests"]
+        elif fault == "code":
+            bp["error_code"] = "ai_http_error"
+        else:
+            bp["stages"]["final_review"]["metadata"]["budget_exhaustion"] = {"reason": "requests"}
+        with pytest.raises(CreativeError, match="没有可继续"):
+            prepare_resume(broken)
+    restored, role = prepare_resume(task)
+    recovery = GraphCompletion()
+    resumed = LangGraphWorkflow(search=restored["search"], sources=restored["sources"], options=restored["options"],
+                                complete=recovery, resume_state=restored, resume_role=role)
+    result, meta = resumed.run()
+    assert len(result["ideas"]) == 3
+    assert resumed.budget.max_seconds == 90 * 60
+    assert meta["request_count"] == 31
+    assert resumed.budget.max_requests == 72
+    assert len(recovery.wire_calls) == 5
+    assert [json.loads(c["user_prompt"])["input"]["batch"]["index"] for c in recovery.wire_calls] == [5, 6, 7, 8, 9]
+    assert all(c["response_format"]["json_schema"]["name"] == "FinalReviewResponse" for c in recovery.wire_calls)
+    assert task.payload == before
+
+
+def test_time_exhausted_task_api_exposes_resume_and_reuses_saved_final_batch(env, monkeypatch):
+    now, model = [0], GraphCompletion()
+    monkeypatch.setattr("backend.app.services.creative_graph.workflow.RequestBudget",
+                        lambda *args, **kwargs: RequestBudget(*args, **kwargs, clock=lambda: now[0]))
+    def complete(**kwargs):
+        raw = model(**kwargs)
+        if kwargs["response_format"]["json_schema"]["name"] == "FinalReviewResponse":
+            now[0] = 90 * 60 + 1
+        return raw
+    install_client(complete)
+    original = collect_for_analysis(env, {"model_id": env.model_id, "workflow": "langgraph", "idea_count": 1, "variant_count": 2})
+    assert original["status"] == "failed" and original["error_type"] == "creative_time_exhausted"
+    assert original["resume_available"] is True
+    assert original["payload"]["pipeline"]["stages"]["final_review"]["metadata"]["final_review_completed_batches"] == 1
+    recovery = GraphCompletion()
+    install_client(recovery)
+    response = env.client.post(f"/api/xhs/creative/runs/{original['id']}/resume", headers=env.headers)
+    assert response.status_code == 202, response.text
+    child = env.client.get(f"/api/xhs/creative/runs/{response.json()['id']}", headers=env.headers).json()
+    assert child["status"] == "completed"
+    assert child["payload"]["pipeline"]["request_count"] == 13
+    assert len(recovery.wire_calls) == 1
+    assert json.loads(recovery.wire_calls[0]["user_prompt"])["input"]["batch"]["index"] == 2
+    assert child["payload"]["pipeline"]["stages"]["final_review"]["metadata"]["final_review_reused_batches"] == 1
