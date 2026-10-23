@@ -318,10 +318,10 @@ class CopyResponse(TypedDict):
 
 @strict_response
 class CopyReviewResponse(TypedDict):
-    """Evaluate the actual bodies, not their self-reported coverage."""
+    """Evaluate the 2-3 bodies under one title, not self-reported coverage."""
 
     summary: Summary
-    reviews: Annotated[list[ItemJudgement], Field(min_length=1, max_length=40)]
+    reviews: Annotated[list[ItemJudgement], Field(min_length=2, max_length=3)]
     limitations: Annotated[list[Text], Field(min_length=1, max_length=8)]
 
 

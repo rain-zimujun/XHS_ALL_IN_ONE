@@ -16,7 +16,7 @@ from backend.app.services.creative_agents.topic_review import TOPIC_REVIEW_AGENT
 from backend.app.services.creative_agents.title_generation import TITLE_AGENT
 from backend.app.services.creative_graph.title_review import TITLE_REVIEW_AGENT, expand_title_review
 from backend.app.services.creative_agents.copy_generation import COPY_AGENT
-from backend.app.services.creative_agents.copy_review import COPY_REVIEW_AGENT
+from backend.app.services.creative_graph.copy_review import COPY_REVIEW_AGENT
 from backend.app.services.creative_agents.image_planning import IMAGE_AGENT
 from backend.app.services.creative_agents.final_review import FINAL_REVIEW_AGENT
 from backend.app.services.creative_analysis import CreativeError
@@ -141,7 +141,7 @@ def build_agents(model: CompatibleChatModel) -> dict[str, StructuredAgent]:
         "title": StructuredAgent(model, TITLE_AGENT, response_format=responses.TitleResponse, output_model=legacy.TitleCandidates, state_fields=("topic_revision", "input_fingerprint")),
         "title_review": StructuredAgent(model, TITLE_REVIEW_AGENT, response_format=responses.TitleReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), output_adapter=expand_title_review, include_prompt_schema=False),
         "copy": StructuredAgent(model, COPY_AGENT, response_format=responses.CopyResponse, output_model=legacy.CopyVariants, state_fields=("input_fingerprint",)),
-        "copy_review": StructuredAgent(model, COPY_REVIEW_AGENT, response_format=responses.CopyReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint")),
+        "copy_review": StructuredAgent(model, COPY_REVIEW_AGENT, response_format=responses.CopyReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False),
         "image": StructuredAgent(model, IMAGE_AGENT, response_format=responses.ImageResponse, output_model=legacy.ImagePlans, state_fields=("input_fingerprint",)),
         "final_review": StructuredAgent(model, FINAL_REVIEW_AGENT, response_format=responses.FinalReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint")),
     }

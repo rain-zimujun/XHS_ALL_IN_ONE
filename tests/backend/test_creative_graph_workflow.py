@@ -77,7 +77,7 @@ def test_graph_executes_ten_roles_and_persists_serializable_global_state(count, 
     assert len(result["ideas"]) == count
     assert all(len(i["variants"]) == variants for i in result["ideas"])
     assert metadata["workflow"] == "langgraph"
-    assert len(model.calls) == metadata["request_count"] == 10 + count
+    assert len(model.calls) == metadata["request_count"] == 9 + 2 * count
     assert saved[-1]["result"] == result
     assert saved[-1]["pipeline"]["status"] == "completed"
     assert saved[-1]["revision_plan"] == {}
@@ -146,7 +146,7 @@ def test_conditional_review_edge_returns_to_producer_and_only_revises_failed_ite
     w = workflow(model, 3, 3)
     result, _ = w.run()
     assert len(result["ideas"]) == 3
-    assert len(model.calls) == (17 if stage == "title_review" else 15)
+    assert len(model.calls) == (17 if stage == "TopicReviewResponse" else 19)
     producer = {"TopicReviewResponse": "topic", "title_review": "title", "copy_review": "copy"}[stage]
     item = w.state["pipeline"]["stages"][producer]
     assert item["quality_revisions"] == 1

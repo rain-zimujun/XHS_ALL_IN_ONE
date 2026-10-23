@@ -29,7 +29,7 @@ def test_langgraph_api_saves_global_state_and_compatible_reports_with_ownership(
     assert payload["graph_state"]["pipeline"] == payload["pipeline"]
     assert payload["graph_state"]["final_review"]["status"] == "passed"
     assert len(payload["result"]["ideas"]) == count
-    assert len(model.wire_calls) == payload["pipeline"]["request_count"] == 10 + count
+    assert len(model.wire_calls) == payload["pipeline"]["request_count"] == 9 + 2 * count
     assert all(c["timeout"] == (10, 180) for c in model.wire_calls)
     assert "fixture-key-private" not in json.dumps(result)
     assert "test=fixture" not in json.dumps(result)
@@ -46,7 +46,7 @@ def test_langgraph_api_saves_global_state_and_compatible_reports_with_ownership(
         else:
             assert "终审评分：8.00 分 · 通过" in response.text
     assert env.client.post(f"/api/xhs/creative/runs/{result['id']}/export", headers=env.headers).status_code == 200
-    assert len(model.calls) == 10 + count
+    assert len(model.calls) == 9 + 2 * count
 
 
 def test_saved_collection_can_switch_to_graph_without_recrawling_or_changing_old_task(env):

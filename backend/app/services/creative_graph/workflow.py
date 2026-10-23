@@ -29,6 +29,9 @@ from backend.app.services.creative_agents.revision import (
 from backend.app.services.creative_graph.agents import GraphOutputError, build_agents
 from backend.app.services.creative_graph.model import CompatibleChatModel
 from backend.app.services.creative_graph.audience import run_audience_steps
+from backend.app.services.creative_graph.copy_review import (
+    COPY_REVIEW_VERSION, prepare_copy_review_batches, merge_copy_review_results,
+)
 from backend.app.services.creative_graph.state import (
     AudienceUpdate, CopyReviewUpdate, CopyUpdate, CreativeGraphState, FinalReviewUpdate,
     ImageUpdate, ResultUpdate, RevisionPlanUpdate, SampleUpdate, TitleReviewUpdate,
@@ -387,7 +390,55 @@ class LangGraphWorkflow:
         return self._producer(s, "copy", payload, lambda r: copy_generation.validate_copy_variants(r, payload))
 
     def copy_review_node(self, s: CreativeGraphState) -> CopyReviewUpdate:
-        return self._reviewer(s, "copy", copy_review.prepare_copy_review_input(**copy_inputs(s)))
+        payload = copy_review.prepare_copy_review_input(**copy_inputs(s))
+        batches = prepare_copy_review_batches(payload)
+
+        def invoke(agent, original_payload, validator, pipeline, revision):
+            metadata = pipeline["stages"]["copy"]["metadata"]
+            cache = metadata.get("copy_review_batches")
+            if (not isinstance(cache, dict) or cache.get("version") != COPY_REVIEW_VERSION
+                    or cache.get("input_fingerprint") != payload["input_fingerprint"]
+                    or not isinstance(cache.get("results"), dict)):
+                cache = {"version": COPY_REVIEW_VERSION, "input_fingerprint": payload["input_fingerprint"], "results": {}}
+            metadata["copy_review_batches"] = cache
+            # Revalidate every cached response against its current batch before
+            # counting it as complete or allowing a downstream handoff.
+            for batch in batches:
+                key = batch["input_fingerprint"]
+                if key in cache["results"]:
+                    try:
+                        decide_review(ItemReviewResponse.model_validate(cache["results"][key]), batch)
+                    except (ValidationError, AgentValidationError):
+                        cache["results"].pop(key)
+            known = {batch["input_fingerprint"] for batch in batches}
+            cache["results"] = {key: value for key, value in cache["results"].items() if key in known}
+            metadata.update(copy_review_batch_count=len(batches), copy_review_reused_batches=0,
+                            copy_review_completed_batches=len(cache["results"]))
+            results, traces = [], []
+            for index, batch in enumerate(batches, 1):
+                fingerprint = batch["input_fingerprint"]
+                metadata["copy_review_batch"] = {"index": index, "count": len(batches),
+                                                 "item_count": len(batch["items"])}
+                raw = cache["results"].get(fingerprint)
+                if raw is not None:
+                    results.append(ItemReviewResponse.model_validate(raw))
+                    metadata["copy_review_reused_batches"] += 1
+                    diagnostic_event("复用正文评审批次", stage="copy", agent=agent.spec.name,
+                                     batch_index=index, batch_count=len(batches), item_count=len(batch["items"]))
+                    continue
+                self._checkpoint(pipeline, f"文案评委 Agent · 评审批次 {index}/{len(batches)}")
+                run = agent.invoke(batch, validate_output=lambda raw, current=batch: decide_review(raw, current),
+                                   on_progress=lambda text: self._checkpoint(pipeline, f"{text} · 批次 {index}/{len(batches)}"))
+                results.append(run.output)
+                traces.extend(run.attempts)
+                cache["results"][fingerprint] = run.output.model_dump(mode="json")
+                metadata["copy_review_completed_batches"] = len(cache["results"])
+                self._checkpoint(pipeline, f"文案评委 Agent · 已完成 {index}/{len(batches)} 批")
+            merged = merge_copy_review_results(results, original_payload)
+            validator(merged)
+            return AgentRun(stage=agent.spec.stage, name=agent.spec.name, output=merged, attempts=tuple(traces))
+
+        return self._reviewer(s, "copy", payload, invoke=invoke)
 
     def image_node(self, s: CreativeGraphState) -> ImageUpdate:
         payload = image_planning.prepare_image_input(**copy_inputs(s), copy_review=s["copy_review"])
