@@ -12,7 +12,7 @@ from urllib3.exceptions import ReadTimeoutError
 
 from backend.app.core.security import decrypt_text
 from backend.app.models import ModelConfig
-from backend.app.schemas.creative import CreativeAnalysisOptions, CreativeAnalysisResult
+from backend.app.schemas.creative import CreativeAnalysisOptions, CreativeAnalysisResult, MAX_COPY_BODY_CHARS
 from backend.app.services.ai_service import OpenAICompatibleTextClient
 from backend.app.services.creative_copy import has_editorial_leak, normalize_result_copy
 from backend.app.services.structured_output import json_schema_response_format
@@ -134,6 +134,7 @@ def analyze_sources(db, user_id: int, search: dict, sources: list[dict], options
         "每版的 label 是简短的写法名称，同一标题下不可重复。"
         "body 是用户可直接复制发布的小红书正文成稿，包含自然开头、具体内容和合适结尾，"
         "不是写作大纲、设计任务书或给用户的操作指令；篇幅和分段参考样本，优先精炼。"
+        "每版正文通常 200～400 字，内容简单可以更短，不凑字数；最多 500 个 Unicode 字符，含空白、标点和换行，标题和独立标签另算。精简但保留必要信息，不直接截断。"
         "正文的说话对象是刷到笔记的读者，不是正在操作本工具的发布者。默认写自然的作品展示或灵感分享，"
         "围绕这组概念服装的颜色、轮廓、细节与氛围展开；不得因关键词含 AI 或受众是从业者，就把每篇写成 AI 操作教程。"
         "只有用户明确要求教程、步骤或教学时，才写面向读者的实操正文。其他情况下不要写‘你可以先…’‘试试让 AI…’"
@@ -151,7 +152,7 @@ def analyze_sources(db, user_id: int, search: dict, sources: list[dict], options
         "封面文字由用户排版叠加，不要求生图模型直接渲染汉字。"
         "严格输出符合所给 schema 的 JSON 对象，不输出 Markdown 或额外说明。"
     )
-    response_format = json_schema_response_format(CreativeAnalysisResult)
+    response_format = json_schema_response_format(CreativeAnalysisResult, max_body_chars=MAX_COPY_BODY_CHARS)
     user_prompt = json.dumps({
         "keyword": search["keyword"], "audience": config.audience,
         "requirements": config.instruction, "required_idea_count": config.idea_count,
@@ -180,6 +181,9 @@ def analyze_sources(db, user_id: int, search: dict, sources: list[dict], options
             if len(result.ideas) != config.idea_count:
                 raise ValueError("Wrong idea count")
             for idea in result.ideas:
+                if any(len(variant.body) > MAX_COPY_BODY_CHARS for variant in idea.variants):
+                    repair_hint = "body 超过 500 字，请精简至 500 字以内（含空白、标点和换行；标题、独立标签另算），保留标题承诺和完整语句，不要直接截断；返回完整 JSON。"
+                    raise ValueError("Body exceeds generation length limit")
                 if any(has_editorial_leak(variant.body) for variant in idea.variants):
                     repair_hint = "body 中混入了编辑说明、配图/提示词字段或待填占位符。请重写为给读者看的纯正文成稿，相关说明放入独立字段；不要仅删除标签后留下说明内容。返回完整 JSON。"
                     raise ValueError("Editorial material in body")

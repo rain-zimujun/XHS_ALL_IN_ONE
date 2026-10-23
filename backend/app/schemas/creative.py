@@ -3,6 +3,9 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 
+MAX_COPY_BODY_CHARS = 500
+
+
 class CreativeSearchRequest(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 

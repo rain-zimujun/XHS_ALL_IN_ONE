@@ -6,7 +6,7 @@ from typing import Any
 from pydantic import BaseModel
 
 
-def json_schema_response_format(output_model: type[BaseModel]) -> dict[str, Any]:
+def json_schema_response_format(output_model: type[BaseModel], *, max_body_chars: int | None = None) -> dict[str, Any]:
     schema = output_model.model_json_schema()
 
     def make_strict(node: dict[str, Any]) -> None:
@@ -17,6 +17,9 @@ def json_schema_response_format(output_model: type[BaseModel]) -> dict[str, Any]
         if node.get("type") == "object":
             node["additionalProperties"] = False
             node["required"] = list(node.get("properties", {}))
+            body = node.get("properties", {}).get("body")
+            if max_body_chars is not None and isinstance(body, dict) and body.get("type") == "string":
+                body["maxLength"] = min(body.get("maxLength", max_body_chars), max_body_chars)
         for key in ("$defs", "properties"):
             for child in node.get(key, {}).values():
                 make_strict(child)

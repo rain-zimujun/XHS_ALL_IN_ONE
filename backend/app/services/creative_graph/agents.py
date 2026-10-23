@@ -113,6 +113,9 @@ class StructuredAgent:
                 return AgentRun(self.spec.stage, self.spec.name, result, tuple(traces))
             except (ValidationError, AgentValidationError) as exc:
                 message = validation_summary(exc, parameter["json_schema"]["schema"]) if isinstance(exc, ValidationError) else str(exc)[:500]
+                if (self.spec.stage == "copy" and isinstance(exc, ValidationError)
+                        and any(e["type"] == "string_too_long" and e["loc"][-1:] == ("body",) for e in exc.errors())):
+                    message += "；正文最多 500 字（含空白、标点和换行，标题与标签另算），请精简并保留完整语句，不要直接截断。"
                 quote_detail = failed_quote_diagnostic(exc, value, raw_quotes)
                 traces.append(AgentAttemptTrace(attempt, round((monotonic() - started) * 1000), kind, message, quote_detail))
                 if quote_detail:

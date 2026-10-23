@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 
 from pydantic import ConfigDict, Field, with_config
 from typing_extensions import TypedDict
+from backend.app.schemas.creative import MAX_COPY_BODY_CHARS
 
 
 strict_response = with_config(ConfigDict(extra="forbid", str_strip_whitespace=True))
@@ -295,7 +296,7 @@ class TitleReviewResponse(TypedDict):
 class CopyVariant(TypedDict):
     variant_id: CopyId
     label: Annotated[str, Field(min_length=1, max_length=40)]
-    body: Annotated[str, Field(min_length=1, max_length=3000)]
+    body: Annotated[str, Field(min_length=1, max_length=MAX_COPY_BODY_CHARS)]
     tags: Annotated[list[Annotated[str, Field(min_length=1, max_length=40)]], Field(min_length=1, max_length=10)]
     covered_points: Annotated[list[Text], Field(min_length=1, max_length=8)]
     source_note_ids: Annotated[list[NoteId], Field(min_length=2, max_length=8)]
