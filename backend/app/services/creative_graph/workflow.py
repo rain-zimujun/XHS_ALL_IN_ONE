@@ -321,7 +321,56 @@ class LangGraphWorkflow:
 
     def sample_node(self, s: CreativeGraphState) -> SampleUpdate:
         payload = sample_analysis.prepare_sample_input(s["search"], s["sources"], s["options"])
-        return self._producer(s, "sample_analysis", payload, lambda r: sample_analysis.validate_sample_evidence(r, payload))
+        batches = sample_analysis.prepare_sample_batches(s["search"], s["sources"], s["options"])
+        if len(batches) == 1:
+            return self._producer(s, "sample_analysis", payload, lambda r: sample_analysis.validate_sample_evidence(r, payload))
+
+        def invoke(agent, _original, _validator, pipeline, _revision):
+            stage_metadata = pipeline["stages"]["sample_analysis"]["metadata"]
+            cache = stage_metadata.get("sample_analysis_batches")
+            if (not isinstance(cache, dict) or cache.get("version") != "sample-analysis-by-batch-v1"
+                    or cache.get("input_fingerprints") != [batch["input_fingerprint"] for batch in batches]
+                    or not isinstance(cache.get("results"), dict)):
+                cache = {"version": "sample-analysis-by-batch-v1",
+                         "input_fingerprints": [batch["input_fingerprint"] for batch in batches], "results": {}}
+            valid_cache = {}
+            for batch in batches:
+                key = batch["input_fingerprint"]
+                if key not in cache["results"]:
+                    continue
+                try:
+                    cached = sample_analysis.SampleAnalysis.model_validate(cache["results"][key])
+                    sample_analysis.validate_sample_evidence(cached, batch)
+                    valid_cache[key] = cached
+                except (ValidationError, AgentValidationError):
+                    continue
+            cache["results"] = {key: result.model_dump(mode="json") for key, result in valid_cache.items()}
+            stage_metadata["sample_analysis_batches"] = cache
+            stage_metadata.update({"sample_batch_count": len(batches), "sample_batch_size": sample_analysis.MAX_SAMPLE_BATCH_NOTES,
+                                   "sample_completed_batches": len(cache["results"]), "sample_reused_batches": 0})
+            runs, outputs = [], []
+            for index, batch in enumerate(batches, 1):
+                self._checkpoint(pipeline, f"样本分析 Agent · 批次 {index}/{len(batches)}（{len(batch['sources'])} 篇）")
+                key = batch["input_fingerprint"]
+                if key in valid_cache:
+                    outputs.append(valid_cache[key])
+                    stage_metadata["sample_reused_batches"] += 1
+                    self._checkpoint(pipeline, f"样本分析 Agent · 复用已完成批次 {index}/{len(batches)}")
+                    continue
+                run = agent.invoke(batch, validate_output=lambda result, current=batch: sample_analysis.validate_sample_evidence(result, current),
+                                   on_progress=lambda text: self._checkpoint(pipeline, f"{text} · 批次 {index}/{len(batches)}"))
+                runs.append(run)
+                outputs.append(run.output)
+                cache["results"][key] = run.output.model_dump(mode="json")
+                stage_metadata["sample_completed_batches"] = len(cache["results"])
+                self._checkpoint(pipeline, f"样本分析 Agent · 已保存批次 {index}/{len(batches)}")
+            merged = sample_analysis.merge_sample_batches(outputs)
+            stage_metadata["sample_completed_batches"] = len(batches)
+            return AgentRun(stage="sample_analysis", name=agent.spec.name, output=merged,
+                            attempts=tuple(trace for run in runs for trace in run.attempts))
+
+        return self._producer(s, "sample_analysis", payload,
+                              lambda r: sample_analysis.validate_sample_evidence(r, payload), invoke=invoke)
 
     def audience_node(self, s: CreativeGraphState) -> AudienceUpdate:
         payload = reader_needs.prepare_audience_input(s["search"]["keyword"], s["options"]["audience"] or "内容创作者",

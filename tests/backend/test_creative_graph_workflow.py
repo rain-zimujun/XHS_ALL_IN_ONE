@@ -200,6 +200,45 @@ def test_budget_and_timeout_stop_without_further_requests_and_preserve_global_ou
     assert "secret-transport-details" not in json.dumps(w.state)
 
 
+def test_sample_analysis_batches_sequentially_and_resume_reuses_completed_sample_batches():
+    notes = sources(7)
+    def fail_second_batch(**kwargs):
+        prompt = json.loads(kwargs["user_prompt"])
+        if (kwargs["response_format"]["json_schema"]["name"] == "SampleAnalysisResponse"
+                and prompt["input"]["batch"]["index"] == 2):
+            raise CreativeError("模型服务返回错误（HTTP 401）", "ai_http_error", http_status=401)
+        return model(**kwargs)
+
+    model = GraphCompletion()
+    original = LangGraphWorkflow(search=SEARCH, sources=notes,
+                                 options={"model_id": 1, "workflow": "langgraph", "idea_count": 1, "variant_count": 2},
+                                 complete=fail_second_batch)
+    with pytest.raises(CreativeError):
+        original.run()
+    saved = copy.deepcopy(original.state)
+    metadata = saved["pipeline"]["stages"]["sample_analysis"]["metadata"]
+    assert metadata["sample_batch_count"] == 2
+    assert metadata["sample_completed_batches"] == 1
+    assert len(metadata["sample_analysis_batches"]["results"]) == 1
+    task = SimpleNamespace(status="failed", error_type="ai_http_error", payload={
+        "analysis": saved["options"], "search": saved["search"], "sources": saved["sources"], "graph_state": saved,
+    })
+    restored, role = prepare_resume(task)
+    resumed_model = GraphCompletion()
+    resumed = LangGraphWorkflow(search=restored["search"], sources=restored["sources"], options=restored["options"],
+                                complete=resumed_model, resume_state=restored, resume_role=role)
+    result, pipeline_metadata = resumed.run()
+    assert len(result["ideas"]) == 1
+    sample = resumed.state["pipeline"]["stages"]["sample_analysis"]["metadata"]
+    assert sample["sample_completed_batches"] == 2
+    assert sample["sample_reused_batches"] == 1
+    sample_calls = [call for call in resumed_model.wire_calls
+                    if call["response_format"]["json_schema"]["name"] == "SampleAnalysisResponse"]
+    assert len(sample_calls) == 1
+    assert json.loads(sample_calls[0]["user_prompt"])["input"]["batch"]["index"] == 2
+    assert pipeline_metadata["request_count"] == 15
+
+
 @pytest.mark.parametrize("race", [False, True])
 def test_cancellation_at_request_boundary_keeps_results_uncommitted(race):
     model, states = GraphCompletion(timeout_stage="TopicBrief" if race else None), []

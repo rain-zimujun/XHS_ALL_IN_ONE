@@ -18,12 +18,14 @@ from backend.app.schemas.creative_agents import SampleAnalysis
 from backend.app.services.creative_analysis import CreativeError, owned_text_model, request_analysis
 from backend.app.services.creative_orchestrator import AgentRun, AgentSpec, AgentValidationError, run_agent
 from backend.app.services.creative_diagnostics import quote_mismatch_details
+from backend.app.services.creative_agents.title_generation import content_fingerprint
 
 
 SAMPLE_PROMPT_VERSION = "sample-analysis-v1"
 SAMPLE_SCHEMA_VERSION = 1
 BODY_CHAR_BUDGET = 24000
 MAX_BODY_CHARS_PER_NOTE = 1800
+MAX_SAMPLE_BATCH_NOTES = 6
 
 SAMPLE_SYSTEM_PROMPT = """你是样本分析 Agent，只负责分析本批已采集的小红书文字资料，不写发布成稿或配图提示词。
 严格返回符合 output_schema 的 JSON 对象，不返回 Markdown、其他字段或额外说明。
@@ -110,6 +112,75 @@ def prepare_sample_input(search: dict, sources: list[dict], options: dict) -> di
         "sample_count": len(prepared), "excerpt_chars_per_note": per_note,
         "excerpt_strategy": "head_and_tail", "sources": prepared,
     }
+
+
+def prepare_sample_batches(search: dict, sources: list[dict], options: dict) -> list[dict[str, Any]]:
+    """Split large collections before the model call; each batch remains self-validating."""
+    if len(sources) <= MAX_SAMPLE_BATCH_NOTES:
+        return [prepare_sample_input(search, sources, options)]
+    batch_count = (len(sources) + MAX_SAMPLE_BATCH_NOTES - 1) // MAX_SAMPLE_BATCH_NOTES
+    base_size, larger_batch_count = divmod(len(sources), batch_count)
+    batches, offset = [], 0
+    for index in range(batch_count):
+        size = base_size + (1 if index < larger_batch_count else 0)
+        batch = prepare_sample_input(search, sources[offset:offset + size], options)
+        batch["batch"] = {"index": index + 1, "count": batch_count}
+        batch["input_fingerprint"] = content_fingerprint(batch)
+        batches.append(batch)
+        offset += size
+    return batches
+
+
+def merge_sample_batches(runs: list[SampleAnalysis]) -> SampleAnalysis:
+    """Merge batch-local evidence without asking a second large synthesis request."""
+    if not runs:
+        raise AgentValidationError("样本分析没有可合并的批次")
+
+    def merge_findings(name: str, limit: int):
+        merged = []
+        positions = {}
+        for result in runs:
+            for finding in getattr(result, name):
+                key = finding.finding.strip()
+                if key not in positions:
+                    positions[key] = len(merged)
+                    merged.append(finding.model_copy(deep=True))
+                else:
+                    current = merged[positions[key]]
+                    evidence = {(e.note_id, e.field, e.quote): e for e in current.evidence}
+                    for item in finding.evidence:
+                        evidence[(item.note_id, item.field, item.quote)] = item
+                    current.evidence = list(evidence.values())[:8]
+        return merged[:limit]
+
+    style = []
+    dimensions = {}
+    for result in runs:
+        for finding in result.style_patterns:
+            if finding.dimension not in dimensions:
+                dimensions[finding.dimension] = len(style)
+                style.append(finding.model_copy(deep=True))
+                continue
+            current = style[dimensions[finding.dimension]]
+            if finding.finding not in current.finding:
+                current.finding = f"{current.finding}；{finding.finding}"[:600]
+            evidence = {(e.note_id, e.field, e.quote): e for e in current.evidence}
+            for item in finding.evidence:
+                evidence[(item.note_id, item.field, item.quote)] = item
+            current.evidence = list(evidence.values())[:8]
+    limitations = list(dict.fromkeys(item for result in runs for item in result.limitations))[:8]
+    if not limitations:
+        limitations = ["样本按批分析后合并，结论仍仅代表本次搜索文字样本。"]
+    return SampleAnalysis(
+        summary="；".join(result.summary for result in runs)[:1500],
+        observations=[item for result in runs for item in result.observations],
+        topic_patterns=merge_findings("topic_patterns", 8),
+        style_summary="；".join(result.style_summary for result in runs)[:1500],
+        style_patterns=style[:7],
+        value_patterns=merge_findings("value_patterns", 6),
+        avoid_patterns=merge_findings("avoid_patterns", 6),
+        limitations=limitations,
+    )
 
 
 def validate_sample_evidence(result: SampleAnalysis, payload: dict[str, Any]) -> None:

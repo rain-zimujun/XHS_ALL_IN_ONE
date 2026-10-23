@@ -13,7 +13,7 @@ from backend.app.models import ModelConfig, User
 from backend.app.schemas.creative_agents import SampleAnalysis
 from backend.app.services.creative_agents.sample_analysis import (
     BODY_CHAR_BUDGET, SAMPLE_PROMPT_VERSION, analyze_sample_sources,
-    prepare_sample_input, run_sample_analysis,
+    MAX_SAMPLE_BATCH_NOTES, merge_sample_batches, prepare_sample_batches, prepare_sample_input, run_sample_analysis,
 )
 from backend.app.services.creative_analysis import CreativeError
 from backend.app.services.creative_orchestrator import AgentRunError, AgentSpec, run_agent
@@ -84,6 +84,25 @@ def test_input_covers_all_notes_and_keeps_bounded_head_and_tail(count):
         assert note["title_truncated"] is True
         assert len(note["title"]) == 160
     assert notes == before
+
+
+@pytest.mark.parametrize("count,batch_count", [(3, 1), (6, 1), (7, 2), (22, 4), (50, 9)])
+def test_large_sample_collections_are_split_into_small_model_batches(count, batch_count):
+    batches = prepare_sample_batches(SEARCH, sources(count), OPTIONS)
+    assert len(batches) == batch_count
+    assert all(3 <= len(batch["sources"]) <= MAX_SAMPLE_BATCH_NOTES for batch in batches)
+    assert [note["note_id"] for batch in batches for note in batch["sources"]] == [f"sample-{i}" for i in range(count)]
+
+
+def test_sample_batch_merge_preserves_all_observations_and_bounds_findings():
+    batches = prepare_sample_batches(SEARCH, sources(7), OPTIONS)
+    results = [SampleAnalysis.model_validate(valid_output(batch)) for batch in batches]
+    merged = merge_sample_batches(results)
+    assert len(merged.observations) == 7
+    assert {item.note_id for item in merged.observations} == {f"sample-{i}" for i in range(7)}
+    assert len(merged.topic_patterns) <= 8
+    assert len(merged.style_patterns) <= 7
+    assert len({item.dimension for item in merged.style_patterns}) == len(merged.style_patterns)
 
 
 def test_allowlist_excludes_account_config_raw_and_media_fields():
