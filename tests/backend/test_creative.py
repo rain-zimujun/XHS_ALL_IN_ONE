@@ -148,6 +148,25 @@ def test_insufficient_search_results_are_reported(monkeypatch):
     assert "实际获得 1 篇" in warnings[0]
 
 
+def test_history_is_paginated_and_reports_total(env):
+    with env.factory() as db:
+        db.add_all([
+            Task(user_id=env.user_id, platform="xhs", task_type="creative_search", status="completed",
+                 payload={"search": {"keyword": f"历史 {index}"}})
+            for index in range(45)
+        ])
+        db.commit()
+    first = env.client.get("/api/xhs/creative/runs?page=1&page_size=20", headers=env.headers)
+    second = env.client.get("/api/xhs/creative/runs?page=3&page_size=20", headers=env.headers)
+    assert first.status_code == second.status_code == 200
+    assert len(first.json()["items"]) == 20
+    assert len(second.json()["items"]) == 5
+    assert first.json()["total"] == second.json()["total"] == 45
+    assert first.json()["has_more"] is True
+    assert second.json()["has_more"] is False
+    assert first.json()["items"][0]["id"] > second.json()["items"][-1]["id"]
+
+
 def test_search_rejects_foreign_account_and_invalid_input(env):
     body = {"account_id": env.account_id, "keyword": "AI", "limit": 20}
     assert env.client.post("/api/xhs/creative/search", headers=env.other_headers, json=body).status_code == 404

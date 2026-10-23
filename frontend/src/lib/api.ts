@@ -2,7 +2,7 @@ import axios from "axios";
 import { message } from "antd";
 
 import { fallbackPlatforms } from "./platforms";
-import type { CreativeSearch, CreativeRun, CreativeHistoryItem, CreativeAnalysisOptions } from "../types/creative";
+import type { CreativeSearch, CreativeRun, CreativeHistoryItem, CreativeHistoryPage, CreativeAnalysisOptions } from "../types/creative";
 import type {
   AuthPayload,
   AutoTask,
@@ -94,8 +94,10 @@ export async function fetchCreativeRun(id: number): Promise<CreativeRun> {
   return (await http.get<CreativeRun>(`/xhs/creative/runs/${id}`)).data;
 }
 
-export async function fetchCreativeHistory(): Promise<CreativeHistoryItem[]> {
-  return (await http.get<{ items: CreativeHistoryItem[] }>("/xhs/creative/runs")).data.items;
+export async function fetchCreativeHistory(page = 1, pageSize = 20): Promise<CreativeHistoryPage> {
+  return (await http.get<CreativeHistoryPage>("/xhs/creative/runs", {
+    params: { page, page_size: pageSize },
+  })).data;
 }
 
 export async function collectCreativeNotes(searchTaskId: number, noteIds: string[], analysis?: CreativeAnalysisOptions): Promise<CreativeRun> {

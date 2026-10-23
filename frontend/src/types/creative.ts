@@ -132,3 +132,11 @@ export type CreativeHistoryItem = {
   created_at: string;
   keyword: string;
 };
+
+export type CreativeHistoryPage = {
+  items: CreativeHistoryItem[];
+  page: number;
+  page_size: number;
+  total: number;
+  has_more: boolean;
+};

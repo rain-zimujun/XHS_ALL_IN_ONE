@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
-from sqlalchemy import select, update
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session, sessionmaker
 
 from backend.app.api.platforms.xhs.pc import _get_owned_pc_account_cookies, get_xhs_pc_api_adapter_factory
@@ -97,15 +97,21 @@ def search(
 
 
 @router.get("/runs")
-def history(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    tasks = db.scalars(select(Task).where(
+def history(
+    page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100),
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    filters = (
         Task.user_id == current_user.id, Task.task_type.in_(("creative_search", "creative_collect", "creative_analysis")),
-    ).order_by(Task.id.desc()).limit(30)).all()
+    )
+    total = db.scalar(select(func.count()).select_from(Task).where(*filters)) or 0
+    tasks = db.scalars(select(Task).where(*filters).order_by(Task.id.desc()).offset((page - 1) * page_size).limit(page_size)).all()
     return {"items": [{
         "id": task.id, "task_type": task.task_type, "status": task.status,
         "created_at": task.created_at.isoformat(),
         "keyword": (task.payload or {}).get("search", {}).get("keyword", ""),
-    } for task in tasks]}
+    } for task in tasks], "page": page, "page_size": page_size, "total": total,
+            "has_more": page * page_size < total}
 
 
 @router.get("/runs/{task_id}")

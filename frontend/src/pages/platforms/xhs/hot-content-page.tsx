@@ -1,5 +1,5 @@
 import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, Col, Collapse, Empty, Form, Input, Progress, Row, Select, Space, Table, Tag, Typography } from "antd";
+import { Alert, Button, Card, Col, Collapse, Empty, Form, Input, Pagination, Progress, Row, Select, Space, Table, Tag, Typography } from "antd";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
@@ -38,6 +38,9 @@ export function HotContentPage() {
   const [collection, setCollection] = useState<CreativeRun | null>(null);
   const [starting, setStarting] = useState(false);
   const [history, setHistory] = useState<CreativeHistoryItem[]>([]);
+  const [historyPage, setHistoryPage] = useState(1);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const historyPageSize = 20;
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [modelId, setModelId] = useState<number>();
   const [ideaCount, setIdeaCount] = useState<1 | 3 | 5>(3);
@@ -67,8 +70,11 @@ export function HotContentPage() {
   }
   useEffect(() => { void loadModels(); }, []);
 
-  async function loadHistory() {
-    try { setHistory(await fetchCreativeHistory()); } catch { /* explicit refresh remains available */ }
+  async function loadHistory(page = 1) {
+    try {
+      const result = await fetchCreativeHistory(page, historyPageSize);
+      setHistory(result.items); setHistoryPage(result.page); setHistoryTotal(result.total);
+    } catch { /* explicit refresh remains available */ }
   }
   useEffect(() => { void loadHistory(); }, []);
 
@@ -244,9 +250,10 @@ export function HotContentPage() {
       </Card>}
       {collection?.payload.result && <CreativeResults key={`results-${collection.id}`} run={collection} onUpdate={setCollection} />}
       {collection?.payload.pipeline && <CreativeReviewAudit key={`audit-${collection.id}`} pipeline={collection.payload.pipeline} />}
-      <Card title="历史任务" extra={<Button onClick={() => void loadHistory()} icon={<ReloadOutlined />}>刷新</Button>}>
+      <Card title={`历史任务${historyTotal ? `（共 ${historyTotal} 条）` : ""}`} extra={<Button onClick={() => void loadHistory(historyPage)} icon={<ReloadOutlined />}>刷新</Button>}>
         <Space wrap>{history.map(item => <Button key={item.id} disabled={collecting || starting || searching} onClick={() => void openHistory(item.id)}>#{item.id} {item.keyword} · {item.task_type === "creative_search" ? "搜索" : item.task_type === "creative_analysis" ? "分析" : "采集/创作"} · {statusNames[item.status] || item.status}</Button>)}</Space>
         {!history.length && <Text type="secondary">完成搜索或采集后，会保留历史记录。</Text>}
+        {historyTotal > historyPageSize && <Pagination current={historyPage} pageSize={historyPageSize} total={historyTotal} showSizeChanger={false} showQuickJumper onChange={page => void loadHistory(page)} style={{ marginTop: 16 }} />}
       </Card>
     </Space>
   );
