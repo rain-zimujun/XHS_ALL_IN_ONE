@@ -12,9 +12,9 @@ from urllib3.exceptions import ReadTimeoutError
 
 from backend.app.core.security import decrypt_text
 from backend.app.models import ModelConfig
-from backend.app.schemas.creative import CreativeAnalysisOptions, CreativeAnalysisResult, MAX_COPY_BODY_CHARS
+from backend.app.schemas.creative import CreativeAnalysisOptions, CreativeAnalysisResult, MAX_COPY_BODY_CHARS, COPY_TAG_COUNT
 from backend.app.services.ai_service import OpenAICompatibleTextClient
-from backend.app.services.creative_copy import has_editorial_leak, normalize_result_copy
+from backend.app.services.creative_copy import has_editorial_leak, normalize_result_copy, validate_generated_tags
 from backend.app.services.structured_output import json_schema_response_format
 
 AI_CONNECT_TIMEOUT_SECONDS = 10
@@ -145,6 +145,8 @@ def analyze_sources(db, user_id: int, search: dict, sources: list[dict], options
         "这只是语气示例，不要照搬题材、句子或给所有版本套同一模板。"
         "body 只放正文，不重复标题或 #话题，不放‘正文文案：’‘以下是为你生成的文案’、"
         "推荐理由、来源编号、配图说明、正负向提示词、注意事项、免责声明、括号内的编辑备注或待填写占位符。"
+        "每版 tags 恰好 6 个不同话题，只选择与本版最终正文最相关的，按相关性从高到低排列，不带 #。"
+        "先写正文再选标签，优先正文实际出现的主题、服装品类、风格、技术或应用场景，不照抄样本标签、关键词或目标受众清单；不添加正文未涉及的热词、行业或引流标签。"
         "话题只放 tags；分析依据只放 reason/style_summary；发布核查提醒放在正文之外。"
         "少用抽象行话和生硬总结，不强行凑编号，不为每版机械加‘你会选哪一种？’。表情和互动句按样本风格自然使用。"
         "每个版本独立提供标签、封面文字和与本版正文一一对应的 image_plan，不共用一套泛化配图。"
@@ -152,7 +154,7 @@ def analyze_sources(db, user_id: int, search: dict, sources: list[dict], options
         "封面文字由用户排版叠加，不要求生图模型直接渲染汉字。"
         "严格输出符合所给 schema 的 JSON 对象，不输出 Markdown 或额外说明。"
     )
-    response_format = json_schema_response_format(CreativeAnalysisResult, max_body_chars=MAX_COPY_BODY_CHARS)
+    response_format = json_schema_response_format(CreativeAnalysisResult, max_body_chars=MAX_COPY_BODY_CHARS, tag_count=COPY_TAG_COUNT)
     user_prompt = json.dumps({
         "keyword": search["keyword"], "audience": config.audience,
         "requirements": config.instruction, "required_idea_count": config.idea_count,
@@ -181,6 +183,12 @@ def analyze_sources(db, user_id: int, search: dict, sources: list[dict], options
             if len(result.ideas) != config.idea_count:
                 raise ValueError("Wrong idea count")
             for idea in result.ideas:
+                for variant in idea.variants:
+                    try:
+                        validate_generated_tags(variant.tags)
+                    except ValueError as exc:
+                        repair_hint = str(exc) + "返回完整 JSON。"
+                        raise
                 if any(len(variant.body) > MAX_COPY_BODY_CHARS for variant in idea.variants):
                     repair_hint = "body 超过 500 字，请精简至 500 字以内（含空白、标点和换行；标题、独立标签另算），保留标题承诺和完整语句，不要直接截断；返回完整 JSON。"
                     raise ValueError("Body exceeds generation length limit")

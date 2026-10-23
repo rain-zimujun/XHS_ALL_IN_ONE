@@ -86,8 +86,10 @@ def run_agent(
 ) -> AgentRun:
     if spec.max_attempts < 1:
         raise ValueError("max_attempts must be positive")
-    from backend.app.schemas.creative import MAX_COPY_BODY_CHARS
-    response_format = json_schema_response_format(output_model, max_body_chars=MAX_COPY_BODY_CHARS if spec.stage == "copy" else None)
+    from backend.app.schemas.creative import MAX_COPY_BODY_CHARS, COPY_TAG_COUNT
+    from backend.app.services.creative_copy import validate_generated_tags
+    response_format = json_schema_response_format(output_model, max_body_chars=MAX_COPY_BODY_CHARS if spec.stage == "copy" else None,
+                                                  tag_count=COPY_TAG_COUNT if spec.stage == "copy" else None)
     schema = response_format["json_schema"]["schema"]
     user_prompt = json.dumps({"input": input_payload, "output_schema": schema}, ensure_ascii=False)
     repair = ""
@@ -112,6 +114,12 @@ def run_agent(
             if spec.stage == "copy" and hasattr(result, "ideas"):
                 if any(len(v.body) > MAX_COPY_BODY_CHARS for idea in result.ideas for v in idea.variants):
                     raise AgentValidationError("新生成的正文不能超过 500 字（含空白、标点与换行；标题、独立标签另算），请精简后返回完整结构，不得直接截断。")
+                try:
+                    for idea in result.ideas:
+                        for variant in idea.variants:
+                            validate_generated_tags(variant.tags)
+                except ValueError as exc:
+                    raise AgentValidationError(str(exc)) from exc
             if validate_output:
                 # The stage supplies deterministic checks, not another model call.
                 # Raise AgentValidationError for an invalid reference/coverage;

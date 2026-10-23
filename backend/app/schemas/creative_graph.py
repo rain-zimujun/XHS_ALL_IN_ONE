@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 
 from pydantic import ConfigDict, Field, with_config
 from typing_extensions import TypedDict
-from backend.app.schemas.creative import MAX_COPY_BODY_CHARS
+from backend.app.schemas.creative import MAX_COPY_BODY_CHARS, COPY_TAG_COUNT
 
 
 strict_response = with_config(ConfigDict(extra="forbid", str_strip_whitespace=True))
@@ -297,7 +297,7 @@ class CopyVariant(TypedDict):
     variant_id: CopyId
     label: Annotated[str, Field(min_length=1, max_length=40)]
     body: Annotated[str, Field(min_length=1, max_length=MAX_COPY_BODY_CHARS)]
-    tags: Annotated[list[Annotated[str, Field(min_length=1, max_length=40)]], Field(min_length=1, max_length=10)]
+    tags: Annotated[list[Annotated[str, Field(min_length=1, max_length=40)]], Field(min_length=COPY_TAG_COUNT, max_length=COPY_TAG_COUNT, description="与本版最终正文最相关的 6 个不同话题，按相关性降序，不带 #")]
     covered_points: Annotated[list[Text], Field(min_length=1, max_length=8)]
     source_note_ids: Annotated[list[NoteId], Field(min_length=2, max_length=8)]
 

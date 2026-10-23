@@ -32,7 +32,7 @@ def valid_analysis(count=1, ids=None, variant_count=3):
             "variants": [{
                 "label": ["问题拆解", "步骤清单", "对比讨论"][v % 3],
                 "body": f"第 {i + 1} 组概念服装，用{['雾白和深蓝', '砂灰和赭棕', '灰蓝和银色'][v % 3]}留住风景里的颜色。弧形衣摆和轻盈的线条，有一种安静的呼吸感。",
-                "tags": ["AI服装", "服装设计"], "cover_text": f"封面 {i + 1}-{v + 1}",
+                "tags": ["概念服装", "服装设计", "服装配色", "弧形衣摆", "设计灵感", "服装线条"], "cover_text": f"封面 {i + 1}-{v + 1}",
                 "image_plan": [{
                     "purpose": "封面对比", "composition": f"版本 {i + 1}-{v + 1}：左侧草图，右侧服装，3:4 竖图，顶部留白。",
                     "prompt": f"Concept {i + 1}, version {v + 1}, fashion sketch and garment side by side, neutral background, vertical 3:4, no text",
@@ -486,14 +486,14 @@ def test_generated_copy_has_topics_once_in_saved_result_and_reports(env, monkeyp
     generated = valid_analysis()
     original_body = generated["ideas"][0]["variants"][0]["body"]
     generated["ideas"][0]["variants"][0]["body"] += "\n\n#AI服装 #服装设计 #新话题"
-    generated["ideas"][0]["variants"][0]["tags"] = ["#AI服装", "AI服装", "服装设计"]
+    generated["ideas"][0]["variants"][0]["tags"] = ["#AI服装", "AI服装", "服装设计", "概念服装", "服装配色", "设计灵感"]
     monkeypatch.setattr(FakeTextClient, "_complete", lambda *_a, **_kw: json.dumps(generated))
     run = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": 1})
     assert run["status"] == "completed"
     with env.factory() as db:
         variant = db.get(Task, run["id"]).payload["result"]["ideas"][0]["variants"][0]
         assert variant["body"] == original_body
-        assert variant["tags"] == ["AI服装", "服装设计", "新话题"]
+        assert variant["tags"] == ["AI服装", "服装设计", "概念服装", "服装配色", "设计灵感", "新话题"]
     for file in run["payload"]["report_files"]:
         response = env.client.get(file["download_url"], headers=env.headers)
         if file["file_name"].endswith(".json"):

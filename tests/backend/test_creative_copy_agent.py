@@ -24,7 +24,7 @@ def valid_copies(payload):
             "variants": [{
                 "variant_id": f"copy_{i}_{j}", "label": f"观察角度{j}",
                 "body": f"米色搭浅蓝，颜色轻一些，轮廓就更清晰。\n配色观察{i}·{j}。",
-                "tags": ["服装灵感", "AI设计"], "covered_points": topics[title["idea_id"]]["must_cover"],
+                "tags": ["服装配色", "米色穿搭", "浅蓝色穿搭", "服装廓形", "配色灵感", "服装设计"], "covered_points": topics[title["idea_id"]]["must_cover"],
                 "source_note_ids": topics[title["idea_id"]]["source_note_ids"],
             } for j in range(payload["variant_count"])],
         } for i, title in enumerate(payload["locked_titles"])],

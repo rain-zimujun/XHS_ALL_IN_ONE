@@ -116,6 +116,9 @@ class StructuredAgent:
                 if (self.spec.stage == "copy" and isinstance(exc, ValidationError)
                         and any(e["type"] == "string_too_long" and e["loc"][-1:] == ("body",) for e in exc.errors())):
                     message += "；正文最多 500 字（含空白、标点和换行，标题与标签另算），请精简并保留完整语句，不要直接截断。"
+                if (self.spec.stage == "copy" and isinstance(exc, ValidationError)
+                        and any(e["loc"][-1:] == ("tags",) for e in exc.errors())):
+                    message += "；每版 tags 必须恰好 6 个不同话题，根据本版最终正文选择并按相关性降序排列，不要截取或凑无关热词。"
                 quote_detail = failed_quote_diagnostic(exc, value, raw_quotes)
                 traces.append(AgentAttemptTrace(attempt, round((monotonic() - started) * 1000), kind, message, quote_detail))
                 if quote_detail:
