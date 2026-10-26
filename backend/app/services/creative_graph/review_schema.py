@@ -1,0 +1,117 @@
+"""Dynamic TypedDict contracts for item-level review requests.
+
+The review rubric and item fields are request data, so a static response type
+cannot express which criterion or field is valid for the current batch. These
+contracts keep the explicit TypedDict/JSON-Schema path while narrowing those
+references per request.
+"""
+from __future__ import annotations
+
+from typing import Annotated, Literal
+
+from pydantic import ConfigDict, Field, with_config
+from typing_extensions import TypedDict
+
+from backend.app.schemas.creative_graph import (
+    NoteId, Summary, Text, TitleId,
+)
+from backend.app.services.creative_graph.model import response_parameter
+
+
+def _strict(name: str, annotations: dict) -> type:
+    response = TypedDict(name, annotations, total=True)
+    return with_config(ConfigDict(extra="forbid", str_strip_whitespace=True))(response)
+
+
+def _literal(values: list[str], label: str):
+    unique = tuple(dict.fromkeys(values))
+    if not unique:
+        raise ValueError(f"动态评审 Schema 缺少合法的 {label}")
+    return Literal[unique]
+
+
+def _batch_values(payload: dict) -> tuple[list[str], list[str], list[str]]:
+    criteria = [item["key"] for item in payload["rubric"]]
+    item_ids = [item["item_id"] for item in payload["items"]]
+    fields = [field for item in payload["items"] for field in item["fields"]]
+    if len(item_ids) != len(set(item_ids)):
+        raise ValueError("动态评审 Schema 的 item_id 不得重复")
+    return criteria, item_ids, fields
+
+
+def item_review_response_type(payload: dict) -> type:
+    """Return a native JSON Schema with criterion/field/item enums for a batch."""
+    criteria, item_ids, fields = _batch_values(payload)
+    criterion = _literal(criteria, "评分项")
+    field = _literal(fields, "字段")
+    item_id = _literal(item_ids, "评审对象")
+    related_ids = _literal(item_ids, "关联对象")
+    score = _strict("DynamicItemScore", {
+        "criterion": criterion,
+        "score": Annotated[float, Field(ge=0, le=10, allow_inf_nan=False)],
+        "comment": Text,
+        "fields": Annotated[list[field], Field(min_length=1, max_length=8)],
+        "note_ids": Annotated[list[NoteId], Field(max_length=8)],
+    })
+    issue = _strict("DynamicItemIssue", {
+        "criterion": criterion,
+        "severity": Literal["blocking", "suggestion"],
+        "field": field,
+        "quote": Annotated[str, Field(min_length=1, max_length=180)],
+        "problem": Text,
+        "revision_instruction": Text,
+        "note_ids": Annotated[list[NoteId], Field(max_length=8)],
+        "related_item_ids": Annotated[list[related_ids], Field(max_length=8)],
+        "responsible_stage": Literal["topic", "title", "copy", "image", None],
+    })
+    judgement = _strict("DynamicItemJudgement", {
+        "item_id": item_id,
+        "scores": Annotated[list[score], Field(min_length=1, max_length=12)],
+        "issues": Annotated[list[issue], Field(max_length=8)],
+        "preserve": Annotated[list[Text], Field(min_length=1, max_length=5)],
+        "comparison": Text,
+    })
+    response_name = {"copy": "CopyReviewResponse", "final": "FinalReviewResponse"}.get(payload.get("kind"), "ItemReviewResponse")
+    response = _strict(response_name, {
+        # LangGraph binds revision and fingerprint from state after parsing;
+        # they are deliberately not model-owned response fields.
+        "summary": Summary,
+        "reviews": Annotated[list[judgement], Field(min_length=len(item_ids), max_length=len(item_ids))],
+        "limitations": Annotated[list[Text], Field(min_length=1, max_length=8)],
+    })
+    return response
+
+
+def title_review_response_type(payload: dict) -> type:
+    """Return the compact title-review contract with batch-specific references."""
+    criteria, item_ids, fields = _batch_values(payload)
+    criterion = _literal(criteria, "评分项")
+    field = _literal(fields, "字段")
+    item_id = _literal(item_ids, "评审对象")
+    related_ids = _literal(item_ids, "关联对象")
+    scores = _strict("DynamicTitleScores", {
+        key: Annotated[float, Field(ge=0, le=10, allow_inf_nan=False)] for key in criteria
+    })
+    issue = _strict("DynamicTitleIssue", {
+        "criterion": criterion,
+        "severity": Literal["blocking", "suggestion"],
+        "field": field,
+        "quote": Annotated[str, Field(min_length=1, max_length=180)],
+        "problem": Annotated[str, Field(min_length=1, max_length=120)],
+        "revision_instruction": Annotated[str, Field(min_length=1, max_length=120)],
+        "related_item_ids": Annotated[list[related_ids], Field(max_length=4)],
+    })
+    judgement = _strict("DynamicTitleJudgement", {
+        "item_id": item_id,
+        "scores": scores,
+        "comment": Annotated[str, Field(min_length=1, max_length=120)],
+        "issues": Annotated[list[issue], Field(max_length=8)],
+        "preserve": Annotated[list[Annotated[str, Field(min_length=1, max_length=80)]], Field(min_length=1, max_length=2)],
+        "comparison": Annotated[str, Field(min_length=1, max_length=100)],
+    })
+    response = _strict("TitleReviewResponse", {
+        "summary": Annotated[str, Field(min_length=1, max_length=200)],
+        "reviews": Annotated[list[judgement], Field(min_length=len(item_ids), max_length=len(item_ids))],
+        "limitations": Annotated[list[Annotated[str, Field(min_length=1, max_length=120)]], Field(min_length=1, max_length=3)],
+    })
+    return response

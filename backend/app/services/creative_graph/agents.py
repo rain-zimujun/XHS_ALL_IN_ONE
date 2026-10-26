@@ -23,6 +23,7 @@ from backend.app.services.creative_analysis import CreativeError
 from backend.app.services.creative_orchestrator import AgentAttemptTrace, AgentRun, AgentSpec, AgentValidationError
 from backend.app.services.creative_graph.model import CompatibleChatModel, response_parameter
 from backend.app.services.creative_graph.context import production_context
+from backend.app.services.creative_graph.review_schema import item_review_response_type, title_review_response_type
 from backend.app.services.creative_diagnostics import capture_model_quotes, diagnostic_event, exception_details, failed_quote_diagnostic, validation_summary
 
 
@@ -56,6 +57,7 @@ class StructuredAgent:
     output_adapter: Callable[[dict], dict] | None = None
     include_prompt_schema: bool = True
     input_projection: Callable[[dict], dict] | None = None
+    response_format_factory: Callable[[dict], type] | None = None
     runnable: object = field(init=False, repr=False)
 
     def __post_init__(self):
@@ -65,7 +67,14 @@ class StructuredAgent:
         ))
 
     def invoke(self, payload, *, validate_output, on_progress=None, revision=None, repair_output=None):
-        parameter = response_parameter(self.response_format)
+        response_type = self.response_format_factory(payload) if self.response_format_factory else self.response_format
+        parameter = response_parameter(response_type)
+        runnable = self.runnable
+        if self.response_format_factory:
+            # The allowed criterion/field values are batch data, so the
+            # request must bind a fresh TypedDict contract for this payload.
+            runnable = self.model.with_structured_output(response_type, method="json_schema", strict=True,
+                                                         temperature=self.spec.temperature)
         envelope = {"input": self.input_projection(payload) if self.input_projection else payload}
         if self.include_prompt_schema:
             envelope["output_schema"] = parameter["json_schema"]["schema"]
@@ -95,7 +104,7 @@ class StructuredAgent:
                 # Output is constrained in the actual request, then validated
                 # against TypedDict at runtime before business checks see it.
                 with capture_model_quotes() as raw_quotes:
-                    value = self.runnable.invoke([
+                    value = runnable.invoke([
                         SystemMessage(content=graph_prompt(self.spec)),
                         HumanMessage(content=prompt + repair),
                     ])
@@ -150,11 +159,11 @@ def build_agents(model: CompatibleChatModel) -> dict[str, StructuredAgent]:
         "topic": StructuredAgent(model, production_spec(TOPIC_AGENT), response_format=responses.TopicResponse, output_model=legacy.TopicBrief, include_prompt_schema=False, input_projection=partial(production_context, "topic")),
         "topic_review": StructuredAgent(model, TOPIC_REVIEW_AGENT, response_format=responses.TopicReviewResponse, output_model=legacy.TopicReviewResponse, state_fields=("topic_revision", "input_fingerprint"), include_prompt_schema=False),
         "title": StructuredAgent(model, production_spec(TITLE_AGENT), response_format=responses.TitleResponse, output_model=legacy.TitleCandidates, state_fields=("topic_revision", "input_fingerprint"), include_prompt_schema=False, input_projection=partial(production_context, "title")),
-        "title_review": StructuredAgent(model, TITLE_REVIEW_AGENT, response_format=responses.TitleReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), output_adapter=expand_title_review, include_prompt_schema=False),
+        "title_review": StructuredAgent(model, TITLE_REVIEW_AGENT, response_format=responses.TitleReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), output_adapter=expand_title_review, include_prompt_schema=False, response_format_factory=title_review_response_type),
         "copy": StructuredAgent(model, production_spec(COPY_AGENT), response_format=responses.CopyResponse, output_model=legacy.CopyVariants, state_fields=("input_fingerprint",), include_prompt_schema=False, input_projection=partial(production_context, "copy")),
-        "copy_review": StructuredAgent(model, COPY_REVIEW_AGENT, response_format=responses.CopyReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False),
+        "copy_review": StructuredAgent(model, COPY_REVIEW_AGENT, response_format=responses.CopyReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False, response_format_factory=item_review_response_type),
         "image": StructuredAgent(model, IMAGE_AGENT, response_format=responses.ImageResponse, output_model=ImageBatchOutput, state_fields=("input_fingerprint",), include_prompt_schema=False),
-        "final_review": StructuredAgent(model, FINAL_REVIEW_AGENT, response_format=responses.FinalReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False),
+        "final_review": StructuredAgent(model, FINAL_REVIEW_AGENT, response_format=responses.FinalReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False, response_format_factory=item_review_response_type),
     }
 
 

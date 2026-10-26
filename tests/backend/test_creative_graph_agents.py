@@ -12,6 +12,7 @@ from backend.app.services.creative_agents.sample_analysis import prepare_sample_
 from backend.app.services.creative_analysis import request_analysis
 from backend.app.services.creative_graph.agents import GraphOutputError, build_agents
 from backend.app.services.creative_graph.model import CompatibleChatModel, response_parameter
+from backend.app.services.creative_graph.review_schema import item_review_response_type
 from test_creative_sample_agent import OPTIONS, SEARCH, sources, valid_output
 from test_structured_output import assert_strict_contract
 
@@ -99,3 +100,22 @@ def test_incomplete_json_is_not_accepted_by_structured_output_parser():
     with pytest.raises(GraphOutputError) as caught:
         agent.invoke({}, validate_output=lambda _: None)
     assert caught.value.code == "creative_schema_invalid"
+
+
+def test_item_review_schema_narrows_dynamic_references_to_current_batch():
+    payload = {
+        "kind": "copy",
+        "rubric": [{"key": "publishability"}, {"key": "fit"}],
+        "items": [
+            {"item_id": "copy_a", "fields": {"body": "正文", "tags": ["AI"]}},
+            {"item_id": "copy_b", "fields": {"body": "另一篇", "tags": ["服装"]}},
+        ],
+    }
+    schema = response_parameter(item_review_response_type(payload))["json_schema"]["schema"]
+    score = schema["$defs"]["DynamicItemScore"]["properties"]
+    issue = schema["$defs"]["DynamicItemIssue"]["properties"]
+    judgement = schema["$defs"]["DynamicItemJudgement"]["properties"]
+    assert score["criterion"]["enum"] == ["publishability", "fit"]
+    assert score["fields"]["items"]["enum"] == ["body", "tags"]
+    assert issue["field"]["enum"] == ["body", "tags"]
+    assert judgement["item_id"]["enum"] == ["copy_a", "copy_b"]
