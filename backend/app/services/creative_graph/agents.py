@@ -14,7 +14,7 @@ from backend.app.services.creative_agents.sample_analysis import SAMPLE_AGENT
 from backend.app.services.creative_agents.reader_needs import AUDIENCE_AGENT
 from backend.app.services.creative_agents.topic_selection import TOPIC_AGENT
 from backend.app.services.creative_agents.topic_review import TOPIC_REVIEW_AGENT
-from backend.app.services.creative_agents.title_generation import TITLE_AGENT
+from backend.app.services.creative_agents.title_generation import TITLE_AGENT, bind_title_ids, title_response_type
 from backend.app.services.creative_graph.title_review import TITLE_REVIEW_AGENT, expand_title_review
 from backend.app.services.creative_agents.copy_generation import COPY_AGENT
 from backend.app.services.creative_graph.copy_review import COPY_REVIEW_AGENT
@@ -58,6 +58,7 @@ class StructuredAgent:
     include_prompt_schema: bool = True
     input_projection: Callable[[dict], dict] | None = None
     response_format_factory: Callable[[dict], type] | None = None
+    payload_output_adapter: Callable[[dict, dict], dict] | None = None
     runnable: object = field(init=False, repr=False)
 
     def __post_init__(self):
@@ -110,7 +111,10 @@ class StructuredAgent:
                     ])
                 # Version/fingerprint are owned by this invocation's global
                 # state, never copied or chosen by the model.
-                adapted = self.output_adapter(value) if self.output_adapter else value
+                if self.payload_output_adapter:
+                    adapted = self.payload_output_adapter(value, payload)
+                else:
+                    adapted = self.output_adapter(value) if self.output_adapter else value
                 if self.spec.stage == "copy":
                     from backend.app.services.creative_copy import normalize_result_copy
                     adapted = normalize_result_copy(adapted)
@@ -119,7 +123,8 @@ class StructuredAgent:
                 validate_output(result)
                 if revision:
                     from backend.app.services.creative_agents.revision import ensure_targeted_revision
-                    ensure_targeted_revision(self.spec.stage, revision["previous_output"], value, revision["target_ids"])
+                    revision_value = result.model_dump(mode="json") if self.payload_output_adapter else value
+                    ensure_targeted_revision(self.spec.stage, revision["previous_output"], revision_value, revision["target_ids"])
                 traces.append(AgentAttemptTrace(attempt, round((monotonic() - started) * 1000), "completed"))
                 diagnostic_event("模型调用及校验完成", **context, duration_ms=traces[-1].duration_ms)
                 return AgentRun(self.spec.stage, self.spec.name, result, tuple(traces))
@@ -158,7 +163,7 @@ def build_agents(model: CompatibleChatModel) -> dict[str, StructuredAgent]:
         "audience": StructuredAgent(model, AUDIENCE_AGENT, response_format=responses.AudienceResponse, output_model=legacy.AudienceBrief),
         "topic": StructuredAgent(model, production_spec(TOPIC_AGENT), response_format=responses.TopicResponse, output_model=legacy.TopicBrief, include_prompt_schema=False, input_projection=partial(production_context, "topic")),
         "topic_review": StructuredAgent(model, TOPIC_REVIEW_AGENT, response_format=responses.TopicReviewResponse, output_model=legacy.TopicReviewResponse, state_fields=("topic_revision", "input_fingerprint"), include_prompt_schema=False),
-        "title": StructuredAgent(model, production_spec(TITLE_AGENT), response_format=responses.TitleResponse, output_model=legacy.TitleCandidates, state_fields=("topic_revision", "input_fingerprint"), include_prompt_schema=False, input_projection=partial(production_context, "title")),
+        "title": StructuredAgent(model, production_spec(langgraph_title_spec()), response_format=responses.TitleResponse, output_model=legacy.TitleCandidates, state_fields=("topic_revision", "input_fingerprint"), include_prompt_schema=False, input_projection=partial(production_context, "title"), response_format_factory=title_response_type, payload_output_adapter=bind_title_ids),
         "title_review": StructuredAgent(model, TITLE_REVIEW_AGENT, response_format=responses.TitleReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), output_adapter=expand_title_review, include_prompt_schema=False, response_format_factory=title_review_response_type),
         "copy": StructuredAgent(model, production_spec(COPY_AGENT), response_format=responses.CopyResponse, output_model=legacy.CopyVariants, state_fields=("input_fingerprint",), include_prompt_schema=False, input_projection=partial(production_context, "copy")),
         "copy_review": StructuredAgent(model, COPY_REVIEW_AGENT, response_format=responses.CopyReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False, response_format_factory=item_review_response_type),
@@ -174,3 +179,11 @@ sample_analysis 中 patterns 的 finding 是归纳结论、note_ids 是对应来
 只依据这些结论、当前选题和读者需求创作；不能声称读过完整原文或分析过原图。
 标题使用所给标题风格；正文使用所给口吻、开头、句段、表情和结尾习惯，保持原创。
 按原生 response_format 返回，不需要用户消息里的重复 Schema。""")
+
+
+def langgraph_title_spec():
+    prompt = TITLE_AGENT.system_prompt.replace(
+        "逐一覆盖 topic_brief.ideas，每个 idea_id 恰好一次，每项严格生成 candidate_count 个候选，全批 candidate_id 唯一。",
+        "按 response_format.ideas 中程序固定的选题 ID 键逐项填写，每个键返回严格 candidate_count 个候选；不要输出 idea_id 或 candidate_id 字段，候选 ID 由程序绑定。",
+    )
+    return replace(TITLE_AGENT, system_prompt=prompt)

@@ -49,6 +49,19 @@ class GraphCompletion(WorkflowCompletion):
         elif wire_name == "TopicResponse":
             for idea in output["ideas"]:
                 idea["primary_segment_id"] = prompt["input"]["audience_brief"]["segments"][0]["segment_id"]
+        elif wire_name == "TitleResponse":
+            output = {
+                "ideas": {
+                    idea["idea_id"]: {
+                        "candidates": [
+                            {key: value for key, value in candidate.items() if key != "candidate_id"}
+                            for candidate in idea["candidates"]
+                        ]
+                    }
+                    for idea in output["ideas"]
+                },
+                "limitations": output["limitations"],
+            }
         for key in ("input_fingerprint", "revision", "topic_revision"):
             output.pop(key, None)
         for review in output.get("reviews", []):

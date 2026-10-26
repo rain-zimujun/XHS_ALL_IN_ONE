@@ -13,6 +13,7 @@ from backend.app.services.creative_analysis import request_analysis
 from backend.app.services.creative_graph.agents import GraphOutputError, build_agents
 from backend.app.services.creative_graph.model import CompatibleChatModel, response_parameter
 from backend.app.services.creative_graph.review_schema import item_review_response_type
+from backend.app.services.creative_agents.title_generation import bind_title_ids, title_response_type
 from test_creative_sample_agent import OPTIONS, SEARCH, sources, valid_output
 from test_structured_output import assert_strict_contract
 
@@ -119,3 +120,31 @@ def test_item_review_schema_narrows_dynamic_references_to_current_batch():
     assert score["fields"]["items"]["enum"] == ["body", "tags"]
     assert issue["field"]["enum"] == ["body", "tags"]
     assert judgement["item_id"]["enum"] == ["copy_a", "copy_b"]
+
+
+def test_title_schema_uses_program_owned_idea_keys_and_adapter_binds_candidate_ids():
+    payload = {
+        "title_max_length": 20,
+        "candidate_count": 2,
+        "topic_brief": {"ideas": [
+            {"idea_id": "idea_1"}, {"idea_id": "idea_2"},
+        ]},
+    }
+    response_type = title_response_type(payload)
+    schema = response_parameter(response_type)["json_schema"]["schema"]
+    ideas = schema["$defs"]["TitleIdeasByProgramId"]
+    assert ideas["required"] == ["idea_1", "idea_2"]
+    assert ideas["additionalProperties"] is False
+    candidate = schema["$defs"]["TitleCandidateContent"]["properties"]
+    assert "candidate_id" not in candidate
+    adapted = bind_title_ids({"ideas": {
+        "idea_1": {"candidates": [{"title": "标题\n一", "angle": "角度1", "reader_value": "价值", "promise": "承诺", "support_points": ["依据"], "rationale": "理由"},
+                                    {"title": "标题二", "angle": "角度2", "reader_value": "价值", "promise": "承诺", "support_points": ["依据"], "rationale": "理由"}]},
+        "idea_2": {"candidates": [{"title": "标题三", "angle": "角度1", "reader_value": "价值", "promise": "承诺", "support_points": ["依据"], "rationale": "理由"},
+                                    {"title": "标题四", "angle": "角度2", "reader_value": "价值", "promise": "承诺", "support_points": ["依据"], "rationale": "理由"}]},
+    }, "limitations": ["局限"]}, payload)
+    assert [idea["idea_id"] for idea in adapted["ideas"]] == ["idea_1", "idea_2"]
+    assert [candidate["candidate_id"] for idea in adapted["ideas"] for candidate in idea["candidates"]] == [
+        "title_0_0", "title_0_1", "title_1_0", "title_1_1",
+    ]
+    assert adapted["ideas"][0]["candidates"][0]["title"] == "标题 一"
