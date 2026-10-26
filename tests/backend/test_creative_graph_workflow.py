@@ -100,6 +100,33 @@ def test_graph_executes_ten_roles_and_persists_serializable_global_state(count, 
     assert "fixture-private" not in json.dumps(w.state)
 
 
+def test_graph_full_chain_normalizes_title_review_blocking_severity_without_retry():
+    class LowScoreSuggestion(GraphCompletion):
+        def __call__(self, **kwargs):
+            prompt, _ = json.JSONDecoder().raw_decode(kwargs["user_prompt"])
+            raw = super().__call__(**kwargs)
+            if kwargs["response_format"]["json_schema"]["name"] != "TitleReviewResponse":
+                return raw
+            output = json.loads(raw)
+            review = output["reviews"][0]
+            review["scores"]["reader_benefit"] = 5.0
+            review["issues"] = [{
+                "criterion": "reader_benefit", "severity": "suggestion", "field": "title",
+                "quote": prompt["input"]["items"][0]["fields"]["title"],
+                "problem": "读者收益不够具体。", "revision_instruction": "补出明确的观察收益。",
+                "related_item_ids": [],
+            }]
+            return json.dumps(output, ensure_ascii=False)
+
+    model = LowScoreSuggestion()
+    w = workflow(model, count=1, variants=2)
+    result, metadata = w.run()
+    assert len(result["ideas"]) == 1
+    assert all(len(idea["variants"]) == 2 for idea in result["ideas"])
+    assert model.counts["title_review"] == 1
+    assert metadata["request_count"] == 13
+
+
 @pytest.mark.parametrize("cache_fault", [None, "version", "fingerprint", "review"])
 def test_title_review_resume_reuses_only_valid_batches_and_keeps_context_compact(cache_fault):
     model = GraphCompletion()

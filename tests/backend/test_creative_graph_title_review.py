@@ -6,7 +6,9 @@ from backend.app.schemas.creative_agents import ItemReviewResponse
 from backend.app.services.creative_agents.title_generation import run_title_generation
 from backend.app.services.creative_agents.title_review import prepare_title_review_input, select_titles
 from backend.app.services.creative_agents.reviewing import decide_review
-from backend.app.services.creative_graph.title_review import prepare_title_review_batches, merge_title_review_results
+from backend.app.services.creative_graph.title_review import (
+    expand_title_review, prepare_title_review_batches, merge_title_review_results,
+)
 from test_creative_title_review import valid_review
 from test_creative_titles import inputs, TitleCompletion
 
@@ -31,3 +33,27 @@ def test_batches_bound_work_keep_topic_peers_and_merge_in_original_order(count, 
     assert selected.status == "passed"
     assert len(selected.selected_candidate_ids) == 3
     assert payload == before
+
+
+def test_compact_title_review_promotes_existing_low_score_issue_to_blocking():
+    args = inputs(count=1, candidate_count=5)
+    run, _ = run_title_generation(**args, complete=TitleCompletion())
+    payload = prepare_title_review_input(**args, title_candidates=run.output, title_revision=1)
+    batch = prepare_title_review_batches(payload)[0]
+    compact = valid_review(batch)
+    review = compact["reviews"][0]
+    for current in compact["reviews"]:
+        current["comment"] = "标题切入明确，但读者收益需要更具体。"
+        current["scores"] = {score["criterion"]: score["score"] for score in current["scores"]}
+    review["scores"]["reader_benefit"] = 5.0
+    review["issues"] = [{
+        "criterion": "reader_benefit", "severity": "suggestion", "field": "title",
+        "quote": batch["items"][0]["fields"]["title"], "problem": "读者收益不够具体。",
+        "revision_instruction": "补出明确的观察收益。", "related_item_ids": [],
+    }]
+    normalized = expand_title_review(compact)
+    assert normalized["reviews"][0]["issues"][0]["severity"] == "blocking"
+    from backend.app.schemas.creative_agents import ItemReviewResponse
+    checked = ItemReviewResponse.model_validate(normalized)
+    decision = decide_review(checked, batch)
+    assert decision.status == "revision_required"

@@ -5,6 +5,7 @@ from backend.app.schemas.creative_agents import ItemReviewResponse
 from backend.app.services.creative_agents.reviewing import decide_review
 from backend.app.services.creative_agents.title_generation import content_fingerprint
 from backend.app.services.creative_analysis import CreativeError
+from backend.app.services.creative_quality import rubric_for
 from backend.app.services.creative_orchestrator import AgentSpec
 
 
@@ -71,6 +72,7 @@ def expand_title_review(value: dict) -> dict:
     are explicit: the compact request contains style summaries, not source text.
     Detailed low-score reasons still live in field/quote-bound issues.
     """
+    criteria = {criterion.key: criterion for criterion in rubric_for("title")}
     reviews = []
     for review in value["reviews"]:
         expanded = {key: val for key, val in review.items() if key != "comment"}
@@ -78,7 +80,19 @@ def expand_title_review(value: dict) -> dict:
             {"criterion": key, "score": score, "comment": review["comment"], "fields": ["title"], "note_ids": []}
             for key, score in review["scores"].items()
         ]
-        expanded["issues"] = [{**issue, "note_ids": [], "responsible_stage": None} for issue in review["issues"]]
+        # The model sometimes supplies the required low-score issue but marks
+        # it as a suggestion. The rubric owns this semantic boundary, so
+        # promote only that already-present issue instead of spending a retry;
+        # missing issues and all other invalid references remain errors.
+        expanded["issues"] = []
+        for issue in review["issues"]:
+            normalized = {**issue, "note_ids": [], "responsible_stage": None}
+            criterion = criteria.get(issue.get("criterion"))
+            score = review["scores"].get(issue.get("criterion"))
+            if (criterion and criterion.blocking and isinstance(score, (int, float))
+                    and score < criterion.minimum and normalized["severity"] == "suggestion"):
+                normalized["severity"] = "blocking"
+            expanded["issues"].append(normalized)
         reviews.append(expanded)
     return {**value, "reviews": reviews}
 
