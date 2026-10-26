@@ -355,10 +355,10 @@ class LangGraphWorkflow:
         def invoke(agent, _original, _validator, pipeline, _revision):
             stage_metadata = pipeline["stages"]["sample_analysis"]["metadata"]
             cache = stage_metadata.get("sample_analysis_batches")
-            if (not isinstance(cache, dict) or cache.get("version") != "sample-analysis-by-batch-v2"
+            if (not isinstance(cache, dict) or cache.get("version") != sample_analysis.SAMPLE_BATCH_CACHE_VERSION
                     or cache.get("input_fingerprints") != [batch["input_fingerprint"] for batch in batches]
                     or not isinstance(cache.get("results"), dict)):
-                cache = {"version": "sample-analysis-by-batch-v2",
+                cache = {"version": sample_analysis.SAMPLE_BATCH_CACHE_VERSION,
                          "input_fingerprints": [batch["input_fingerprint"] for batch in batches], "results": {}}
             valid_cache = {}
             for batch in batches:

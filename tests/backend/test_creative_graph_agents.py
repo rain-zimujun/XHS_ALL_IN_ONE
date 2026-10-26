@@ -27,7 +27,7 @@ def test_all_ten_agents_bind_distinct_handwritten_typeddict_responses():
         assert schema["properties"]
         assert_strict_contract(schema, schema)
     schema = response_parameter(SampleAnalysisResponse)["json_schema"]["schema"]
-    assert schema["properties"]["observations"]["minItems"] == 3
+    assert schema["properties"]["observations"]["minItems"] == 2
 
 
 def test_native_schema_reaches_actual_http_body_and_returns_one_validated_response(monkeypatch):

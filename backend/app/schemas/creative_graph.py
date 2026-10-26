@@ -57,7 +57,9 @@ class SampleAnalysisResponse(TypedDict):
     """Analyze only the supplied text samples and retain verifiable evidence."""
 
     summary: Summary
-    observations: Annotated[list[Observation], Field(min_length=3, max_length=50)]
+    # A 2-note tail batch is valid internally; the public sample input still
+    # requires at least 3 collected notes before batching starts.
+    observations: Annotated[list[Observation], Field(min_length=2, max_length=50)]
     topic_patterns: Annotated[list[Finding], Field(min_length=1, max_length=8)]
     style_summary: Summary
     style_patterns: Annotated[list[StyleFinding], Field(min_length=1, max_length=7)]

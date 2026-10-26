@@ -230,7 +230,7 @@ def test_sample_analysis_batches_sequentially_and_resume_reuses_completed_sample
         original.run()
     saved = copy.deepcopy(original.state)
     metadata = saved["pipeline"]["stages"]["sample_analysis"]["metadata"]
-    assert metadata["sample_batch_count"] == 2
+    assert metadata["sample_batch_count"] == 3
     assert metadata["sample_completed_batches"] == 1
     assert len(metadata["sample_analysis_batches"]["results"]) == 1
     task = SimpleNamespace(status="failed", error_type="ai_http_error", payload={
@@ -243,13 +243,13 @@ def test_sample_analysis_batches_sequentially_and_resume_reuses_completed_sample
     result, pipeline_metadata = resumed.run()
     assert len(result["ideas"]) == 1
     sample = resumed.state["pipeline"]["stages"]["sample_analysis"]["metadata"]
-    assert sample["sample_completed_batches"] == 2
+    assert sample["sample_completed_batches"] == 3
     assert sample["sample_reused_batches"] == 1
     sample_calls = [call for call in resumed_model.wire_calls
                     if call["response_format"]["json_schema"]["name"] == "SampleAnalysisResponse"]
-    assert len(sample_calls) == 1
-    assert json.loads(sample_calls[0]["user_prompt"])["input"]["batch"]["index"] == 2
-    assert pipeline_metadata["request_count"] == 15
+    assert len(sample_calls) == 2
+    assert [json.loads(call["user_prompt"])["input"]["batch"]["index"] for call in sample_calls] == [2, 3]
+    assert pipeline_metadata["request_count"] == 16
 
 
 def test_sample_relevance_filter_preserves_raw_sources_and_batches_only_selected_notes():
@@ -281,7 +281,7 @@ def test_sample_relevance_filter_preserves_raw_sources_and_batches_only_selected
     assert relevance["excluded_note_ids"] == ["unrelated-note"]
     assert relevance["weak_note_ids"] == ["weak-note"]
     assert relevance["version"] == "sample-relevance-v1"
-    assert len(sent) == 2
+    assert len(sent) == 3
 
 
 def test_sample_relevance_filter_rejects_too_few_effective_samples():

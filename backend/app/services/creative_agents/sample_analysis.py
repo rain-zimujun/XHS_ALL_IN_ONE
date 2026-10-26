@@ -23,9 +23,12 @@ from backend.app.services.creative_agents.title_generation import content_finger
 
 SAMPLE_PROMPT_VERSION = "sample-analysis-v2"
 SAMPLE_SCHEMA_VERSION = 1
+SAMPLE_BATCH_CACHE_VERSION = "sample-analysis-by-batch-v3"
 BODY_CHAR_BUDGET = 24000
 MAX_BODY_CHARS_PER_NOTE = 1800
-MAX_SAMPLE_BATCH_NOTES = 6
+# Keep each request small enough for the configured relay's response window.
+# The model still sees complete bounded excerpts for every note in the batch.
+MAX_SAMPLE_BATCH_NOTES = 3
 
 SAMPLE_SYSTEM_PROMPT = """你是样本分析 Agent，只负责分析本批已采集的小红书文字资料，不写发布成稿或配图提示词。
 严格返回符合 output_schema 的 JSON 对象，不返回 Markdown、其他字段或额外说明。
@@ -66,14 +69,16 @@ def _known_count(value: Any) -> int | None:
     return value if type(value) is int and value >= 0 else None
 
 
-def prepare_sample_input(search: dict, sources: list[dict], options: dict) -> dict[str, Any]:
-    """Accept 3–50 distinct, nonempty collected samples, never silently drop one."""
+def prepare_sample_input(
+    search: dict, sources: list[dict], options: dict, *, minimum_sources: int = 3,
+) -> dict[str, Any]:
+    """Prepare distinct, nonempty samples; internal batches may contain two notes."""
     try:
         brief = SampleBrief.model_validate(search)
         config = CreativeAnalysisOptions.model_validate(options)
     except ValidationError as exc:
         raise CreativeError("样本分析参数无效，请检查关键词与创作设置。", "sample_input_invalid") from exc
-    if not 3 <= len(sources) <= 50:
+    if minimum_sources not in (2, 3) or not minimum_sources <= len(sources) <= 50:
         raise CreativeError("样本分析需要 3～50 篇有效正文。", "sample_input_invalid")
     per_note = min(MAX_BODY_CHARS_PER_NOTE, BODY_CHAR_BUDGET // len(sources))
     prepared, seen = [], set()
@@ -132,7 +137,7 @@ def prepare_sample_batches(search: dict, sources: list[dict], options: dict) -> 
     batches, offset = [], 0
     for index in range(batch_count):
         size = base_size + (1 if index < larger_batch_count else 0)
-        batch = prepare_sample_input(search, sources[offset:offset + size], options)
+        batch = prepare_sample_input(search, sources[offset:offset + size], options, minimum_sources=2)
         batch["batch"] = {"index": index + 1, "count": batch_count}
         batch["input_fingerprint"] = content_fingerprint(batch)
         batches.append(batch)

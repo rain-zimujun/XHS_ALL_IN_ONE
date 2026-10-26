@@ -86,11 +86,11 @@ def test_input_covers_all_notes_and_keeps_bounded_head_and_tail(count):
     assert notes == before
 
 
-@pytest.mark.parametrize("count,batch_count", [(3, 1), (6, 1), (7, 2), (22, 4), (50, 9)])
+@pytest.mark.parametrize("count,batch_count", [(3, 1), (6, 2), (7, 3), (22, 8), (50, 17)])
 def test_large_sample_collections_are_split_into_small_model_batches(count, batch_count):
     batches = prepare_sample_batches(SEARCH, sources(count), OPTIONS)
     assert len(batches) == batch_count
-    assert all(3 <= len(batch["sources"]) <= MAX_SAMPLE_BATCH_NOTES for batch in batches)
+    assert all(2 <= len(batch["sources"]) <= MAX_SAMPLE_BATCH_NOTES for batch in batches)
     assert [note["note_id"] for batch in batches for note in batch["sources"]] == [f"sample-{i}" for i in range(count)]
 
 

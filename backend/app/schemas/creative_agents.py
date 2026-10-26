@@ -41,7 +41,7 @@ class SampleStyleFinding(SampleFinding):
 class SampleAnalysis(AgentOutputModel):
     summary: str = Field(min_length=1, max_length=1500)
     observations: list[SampleObservation] = Field(
-        min_length=3, max_length=50, description="逐篇记录，每个输入 note_id 恰好出现一次，不能遗漏样本",
+        min_length=2, max_length=50, description="逐篇记录，每个输入 note_id 恰好出现一次，不能遗漏样本；完整分析入口仍要求至少 3 篇",
     )
     topic_patterns: list[SampleFinding] = Field(min_length=1, max_length=8)
     style_summary: str = Field(min_length=1, max_length=1500)
