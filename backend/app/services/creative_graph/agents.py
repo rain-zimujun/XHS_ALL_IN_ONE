@@ -24,6 +24,9 @@ from backend.app.services.creative_orchestrator import AgentAttemptTrace, AgentR
 from backend.app.services.creative_graph.model import CompatibleChatModel, response_parameter
 from backend.app.services.creative_graph.context import production_context
 from backend.app.services.creative_graph.review_schema import item_review_response_type, title_review_response_type
+from backend.app.services.creative_graph.review_schema import topic_review_response_type
+from backend.app.services.creative_graph.sample_schema import sample_response_type
+from backend.app.services.creative_graph.source_schema import copy_response_type, topic_response_type
 from backend.app.services.creative_diagnostics import capture_model_quotes, diagnostic_event, exception_details, failed_quote_diagnostic, validation_summary
 
 
@@ -159,13 +162,13 @@ def build_agents(model: CompatibleChatModel) -> dict[str, StructuredAgent]:
     # Each role binds its own handwritten TypedDict at construction. Pydantic
     # models below are adapters for the existing deterministic business checks.
     return {
-        "sample_analysis": StructuredAgent(model, SAMPLE_AGENT, response_format=responses.SampleAnalysisResponse, output_model=legacy.SampleAnalysis),
+        "sample_analysis": StructuredAgent(model, SAMPLE_AGENT, response_format=responses.SampleAnalysisResponse, output_model=legacy.SampleAnalysis, response_format_factory=sample_response_type),
         "audience": StructuredAgent(model, AUDIENCE_AGENT, response_format=responses.AudienceResponse, output_model=legacy.AudienceBrief),
-        "topic": StructuredAgent(model, production_spec(TOPIC_AGENT), response_format=responses.TopicResponse, output_model=legacy.TopicBrief, include_prompt_schema=False, input_projection=partial(production_context, "topic")),
-        "topic_review": StructuredAgent(model, TOPIC_REVIEW_AGENT, response_format=responses.TopicReviewResponse, output_model=legacy.TopicReviewResponse, state_fields=("topic_revision", "input_fingerprint"), include_prompt_schema=False),
+        "topic": StructuredAgent(model, production_spec(TOPIC_AGENT), response_format=responses.TopicResponse, output_model=legacy.TopicBrief, include_prompt_schema=False, input_projection=partial(production_context, "topic"), response_format_factory=topic_response_type),
+        "topic_review": StructuredAgent(model, TOPIC_REVIEW_AGENT, response_format=responses.TopicReviewResponse, output_model=legacy.TopicReviewResponse, state_fields=("topic_revision", "input_fingerprint"), include_prompt_schema=False, response_format_factory=topic_review_response_type),
         "title": StructuredAgent(model, production_spec(langgraph_title_spec()), response_format=responses.TitleResponse, output_model=legacy.TitleCandidates, state_fields=("topic_revision", "input_fingerprint"), include_prompt_schema=False, input_projection=partial(production_context, "title"), response_format_factory=title_response_type, payload_output_adapter=bind_title_ids),
         "title_review": StructuredAgent(model, TITLE_REVIEW_AGENT, response_format=responses.TitleReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), output_adapter=expand_title_review, include_prompt_schema=False, response_format_factory=title_review_response_type),
-        "copy": StructuredAgent(model, production_spec(COPY_AGENT), response_format=responses.CopyResponse, output_model=legacy.CopyVariants, state_fields=("input_fingerprint",), include_prompt_schema=False, input_projection=partial(production_context, "copy")),
+        "copy": StructuredAgent(model, production_spec(COPY_AGENT), response_format=responses.CopyResponse, output_model=legacy.CopyVariants, state_fields=("input_fingerprint",), include_prompt_schema=False, input_projection=partial(production_context, "copy"), response_format_factory=copy_response_type),
         "copy_review": StructuredAgent(model, COPY_REVIEW_AGENT, response_format=responses.CopyReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False, response_format_factory=item_review_response_type),
         "image": StructuredAgent(model, IMAGE_AGENT, response_format=responses.ImageResponse, output_model=ImageBatchOutput, state_fields=("input_fingerprint",), include_prompt_schema=False),
         "final_review": StructuredAgent(model, FINAL_REVIEW_AGENT, response_format=responses.FinalReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False, response_format_factory=item_review_response_type),

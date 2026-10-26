@@ -9,6 +9,10 @@ from backend.app.services.creative_pipeline import validate_pipeline_state
 
 MODEL_ERROR_CODES = {"ai_connect_timeout", "ai_read_timeout", "ai_network_error", "ai_http_error", "ai_response_invalid"}
 TIME_BUDGET_CODES = {"creative_time_exhausted", "creative_budget_exhausted"}
+LEGACY_TAG_SCHEMA_MARKERS = (
+    "tags 必须是与本版最终正文最相关的 6 个不同话题",
+    "tags 必须是与本版最终正文最相关的6个不同话题",
+)
 SINGLE_ROLES = {"sample_analysis", "audience", "image", "final_review"}
 ALL_ROLES = SINGLE_ROLES | {"topic", "topic_review", "title", "title_review", "copy", "copy_review"}
 
@@ -17,7 +21,7 @@ def prepare_resume(task):
     """Never accepts client-supplied artifacts, sources, role or options."""
     try:
         payload = task.payload or {}
-        if task.status != "failed" or task.error_type not in MODEL_ERROR_CODES | TIME_BUDGET_CODES:
+        if task.status != "failed":
             raise ValueError("not a resumable failure")
         if payload.get("analysis", {}).get("workflow") != "langgraph":
             raise ValueError("not LangGraph")
@@ -34,6 +38,14 @@ def prepare_resume(task):
         if state["options"] != options:
             raise ValueError("changed options")
         item = pipeline["stages"][stage]
+        if task.error_type not in MODEL_ERROR_CODES | TIME_BUDGET_CODES:
+            attempts = item.get("metadata", {}).get("failed_attempts", [])
+            legacy_tag_failure = any(
+                any(marker in str(attempt.get("error", "")) for marker in LEGACY_TAG_SCHEMA_MARKERS)
+                for attempt in attempts
+            )
+            if task.error_type != "creative_handoff_invalid" or not legacy_tag_failure:
+                raise ValueError("not a compatible model failure")
         role = item["metadata"].get("failed_role")
         if role is None:
             # Older snapshots grouped producers and reviewers into one stage.

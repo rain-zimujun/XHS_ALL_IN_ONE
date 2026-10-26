@@ -86,6 +86,26 @@ def test_resume_api_preserves_original_and_is_idempotent_with_ownership(env):
     assert "fixture-key-private" not in json.dumps(child)
 
 
+def test_unknown_copy_source_is_rejected_by_bound_schema(env):
+    invalid_model = GraphCompletion()
+
+    def invalid_copy(**kwargs):
+        raw = invalid_model(**kwargs)
+        if kwargs["response_format"]["json_schema"]["name"] == "CopyResponse":
+            value = json.loads(raw)
+            value["ideas"][0]["variants"][0]["source_note_ids"] = ["sample-0", "unknown-note"]
+            return json.dumps(value, ensure_ascii=False)
+        return raw
+
+    install_client(invalid_copy)
+    original = collect_for_analysis(env, {"model_id": env.model_id, "workflow": "langgraph", "idea_count": 1, "variant_count": 2})
+    assert original["status"] == "failed"
+    assert original["error_type"] == "creative_schema_invalid"
+    # Source IDs are now enums in the actual provider request, so an unknown
+    # ID is rejected before business handoff validation and is not resumable.
+    assert original["resume_available"] is False
+
+
 def test_transient_failure_recovers_in_place_without_repeating_upstream(env):
     model, failures = GraphCompletion(), []
     def complete(**kwargs):
@@ -151,13 +171,15 @@ def test_old_snapshot_without_role_still_resumes_title_judge():
     assert role == "title_review"
 
 
-@pytest.mark.parametrize("failure", ["schema", "quality", "legacy", "incomplete"])
+@pytest.mark.parametrize("failure", ["schema", "handoff", "quality", "legacy", "incomplete"])
 def test_resume_rejects_business_failures_and_missing_checkpoints(env, failure):
     model = GraphCompletion(fail_stage="final_review" if failure == "quality" else None, always=True)
     def complete(**kwargs):
         value = json.loads(model(**kwargs))
         if failure == "schema":
             value["observations"][0]["note_id"] = 123
+        elif failure == "handoff" and kwargs["response_format"]["json_schema"]["name"] == "CopyResponse":
+            value["ideas"][0]["variants"][0]["source_note_ids"] = ["sample-0", "unknown-note"]
         return json.dumps(value)
     install_client(complete)
     original = collect_for_analysis(env, {"model_id": env.model_id, "workflow": "langgraph", "idea_count": 1, "variant_count": 2})

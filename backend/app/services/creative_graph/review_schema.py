@@ -12,10 +12,9 @@ from typing import Annotated, Literal
 from pydantic import ConfigDict, Field, with_config
 from typing_extensions import TypedDict
 
-from backend.app.schemas.creative_graph import (
-    NoteId, Summary, Text, TitleId,
-)
+from backend.app.schemas.creative_graph import Summary, Text, TitleId
 from backend.app.services.creative_graph.model import response_parameter
+from backend.app.services.creative_graph.source_schema import literal_values, source_note_ids_type
 
 
 def _strict(name: str, annotations: dict) -> type:
@@ -39,6 +38,10 @@ def _batch_values(payload: dict) -> tuple[list[str], list[str], list[str]]:
     return criteria, item_ids, fields
 
 
+def _note_ids(payload: dict):
+    return source_note_ids_type(payload.get("sample_note_ids", []), max_length=8)
+
+
 def item_review_response_type(payload: dict) -> type:
     """Return a native JSON Schema with criterion/field/item enums for a batch."""
     criteria, item_ids, fields = _batch_values(payload)
@@ -51,7 +54,7 @@ def item_review_response_type(payload: dict) -> type:
         "score": Annotated[float, Field(ge=0, le=10, allow_inf_nan=False)],
         "comment": Text,
         "fields": Annotated[list[field], Field(min_length=1, max_length=8)],
-        "note_ids": Annotated[list[NoteId], Field(max_length=8)],
+        "note_ids": _note_ids(payload),
     })
     issue = _strict("DynamicItemIssue", {
         "criterion": criterion,
@@ -60,7 +63,7 @@ def item_review_response_type(payload: dict) -> type:
         "quote": Annotated[str, Field(min_length=1, max_length=180)],
         "problem": Text,
         "revision_instruction": Text,
-        "note_ids": Annotated[list[NoteId], Field(max_length=8)],
+        "note_ids": _note_ids(payload),
         "related_item_ids": Annotated[list[related_ids], Field(max_length=8)],
         "responsible_stage": Literal["topic", "title", "copy", "image", None],
     })
@@ -115,3 +118,45 @@ def title_review_response_type(payload: dict) -> type:
         "limitations": Annotated[list[Annotated[str, Field(min_length=1, max_length=120)]], Field(min_length=1, max_length=3)],
     })
     return response
+
+
+def topic_review_response_type(payload: dict) -> type:
+    """Bind topic-review criteria, fields, ideas and sample IDs to the batch."""
+    criteria = [item["key"] for item in payload["rubric"]]
+    item_ids = [idea["idea_id"] for idea in payload["topic_brief"]["ideas"]]
+    fields = [
+        "topic", "primary_segment_id", "content_type", "reader_promise", "core_angle",
+        "must_cover", "source_note_ids", "evidence", "boundaries", "differentiator",
+    ]
+    criterion = literal_values(criteria, "评分项")
+    field = literal_values(fields, "字段")
+    idea_id = literal_values(item_ids, "选题")
+    related_ids = literal_values(item_ids, "关联选题")
+    score = _strict("DynamicTopicScore", {
+        "criterion": criterion,
+        "score": Annotated[float, Field(ge=0, le=10, allow_inf_nan=False)],
+        "comment": Text,
+        "fields": Annotated[list[field], Field(min_length=1, max_length=5)],
+        "note_ids": _note_ids(payload),
+    })
+    issue = _strict("DynamicTopicIssue", {
+        "criterion": criterion,
+        "severity": Literal["blocking", "suggestion"],
+        "field": field,
+        "quote": Annotated[str, Field(min_length=1, max_length=180)],
+        "problem": Text,
+        "revision_instruction": Text,
+        "note_ids": _note_ids(payload),
+        "related_idea_ids": Annotated[list[related_ids], Field(max_length=4)],
+    })
+    judgement = _strict("DynamicTopicJudgement", {
+        "idea_id": idea_id,
+        "scores": Annotated[list[score], Field(min_length=len(criteria), max_length=len(criteria))],
+        "issues": Annotated[list[issue], Field(max_length=8)],
+        "preserve": Annotated[list[Text], Field(min_length=1, max_length=5)],
+    })
+    return _strict("TopicReviewResponse", {
+        "summary": Summary,
+        "reviews": Annotated[list[judgement], Field(min_length=len(item_ids), max_length=len(item_ids))],
+        "limitations": Annotated[list[Text], Field(min_length=1, max_length=8)],
+    })

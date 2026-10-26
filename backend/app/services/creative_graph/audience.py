@@ -20,9 +20,11 @@ from backend.app.services.creative_graph.agents import StructuredAgent
 from backend.app.services.creative_orchestrator import AgentRun, AgentValidationError
 from backend.app.services.creative_diagnostics import diagnostic_event, validation_summary
 from backend.app.services.creative_graph.model import response_parameter
+from backend.app.services.creative_graph.source_schema import source_note_ids_type, literal_values
 
 
 AUDIENCE_STEPS_VERSION = 1
+MAX_REPAIR_ITEMS = 3
 GROUP_PROMPT = """你是读者需求 Agent 的受众分组角色，只输出 response_format 中的 segments。
 受众词只能从 audience_terms 原样选择，不得添加、改写或在同组重复；不要输出或编造 segment_id。
 每个分组最多包含四个用户受众词，全部分组合计须覆盖每一个用户受众词。
@@ -55,15 +57,48 @@ def _unique(values):
     return values
 
 
-def needs_response(segment_ids):
+def _strict(name: str, annotations: dict) -> type:
+    return responses.strict_response(TypedDict(name, annotations, total=True))
+
+
+def audience_grouping_response_type(note_ids):
+    """Bind sample evidence IDs while leaving program-owned segment IDs out."""
+    evidence = _strict("BoundAudienceEvidence", {
+        "basis": Literal["sample_evidence", "user_requirement", "hypothesis"],
+        "note_ids": source_note_ids_type(note_ids, max_length=8),
+        "statement": responses.Text,
+    })
+    group = _strict("BoundAudienceGroup", {
+        "audience_terms": Annotated[list[responses.AudienceTerm], Field(min_length=1, max_length=4)],
+        "role_context": responses.Text,
+        "primary_scenario": responses.Text,
+        "attention_points": Annotated[list[responses.Text], Field(min_length=1, max_length=6)],
+        "value_opportunities": Annotated[list[responses.Text], Field(min_length=1, max_length=5)],
+        "suitable_formats": Annotated[list[responses.ContentType], Field(min_length=1, max_length=4)],
+        "evidence": Annotated[list[evidence], Field(min_length=1, max_length=5)],
+        "uncertainties": Annotated[list[responses.Text], Field(max_length=5)],
+    })
+    return _strict("AudienceGroupingResponse", {
+        "segments": Annotated[list[group], Field(max_length=8)],
+    })
+
+
+def needs_response(segment_ids, note_ids=()):
     """Keep handwritten TypedDict roles; specialize refs for this invocation."""
     ref = Literal[tuple(segment_ids)]
     refs = Annotated[list[ref], Field(min_length=1, max_length=len(segment_ids),
                                     json_schema_extra={"uniqueItems": True}), AfterValidator(_unique)]
 
+    evidence_type = _strict("BoundAudienceEvidence", {
+        "basis": Literal["sample_evidence", "user_requirement", "hypothesis"],
+        "note_ids": source_note_ids_type(note_ids, max_length=8),
+        "statement": responses.Text,
+    })
+
     @responses.strict_response
     class BoundAudienceNeed(responses.AudienceNeed):
         applies_to_segment_ids: refs
+        evidence: Annotated[list[evidence_type], Field(min_length=1, max_length=5)]
 
     @responses.strict_response
     class BoundAudienceFormat(responses.AudienceFormat):
@@ -168,10 +203,11 @@ def run_audience_steps(agent, payload, metadata, checkpoint, validator):
             raise AgentValidationError(f"segments 分组校验失败；缺少受众词={missing}；错误={errors}；最多8组")
 
     if _missing(groups, payload) or group_errors or not groups:
+        grouping_type = audience_grouping_response_type(payload["sample_note_ids"])
         grouping = StructuredAgent(
             agent.model, replace(agent.spec, name="读者需求 Agent · 受众分组", system_prompt=GROUP_PROMPT),
-            response_format=responses.AudienceGroupingResponse,
-            output_model=RootModel[responses.AudienceGroupingResponse],
+            response_format=grouping_type,
+            output_model=RootModel[grouping_type],
             output_adapter=lambda value: {"segments": groups + [g for g in value["segments"] if g not in groups]},
         )
         request = payload if not groups else group_repair(None, "补齐未覆盖受众词")
@@ -182,7 +218,7 @@ def run_audience_steps(agent, payload, metadata, checkpoint, validator):
     segments = [{**group, "segment_id": f"segment_{i}"} for i, group in enumerate(groups, 1)]
     ids = [segment["segment_id"] for segment in segments]
     checkpoint("读者需求 · 分组完成，程序已分配编号")
-    response, need_type, format_type = needs_response(ids)
+    response, need_type, format_type = needs_response(ids, payload["sample_note_ids"])
     fields = {"shared_needs": need_type, "format_recommendations": format_type}
     accepted, rejected = {}, []
     groups_fingerprint = hashlib.sha256(json.dumps(segments, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
@@ -191,14 +227,17 @@ def run_audience_steps(agent, payload, metadata, checkpoint, validator):
     cache["analysis_groups_fingerprint"] = groups_fingerprint
     stored = cache.get("analysis", {})
     stored = stored if isinstance(stored, dict) else {}
+    # There is no user-facing requested count for these derived lists. Keep a
+    # minimum of one valid item; never turn an accidental model overproduction
+    # into a new hard requirement during repair.
     target_counts = {field: 1 for field in fields}
     saved_counts = cache.get("analysis_target_counts", {})
     for field in fields:
         count = saved_counts.get(field) if isinstance(saved_counts, dict) else None
-        if type(count) is int and 1 <= count <= 8:
+        if type(count) is int and 1 <= count <= MAX_REPAIR_ITEMS:
             target_counts[field] = count
         if isinstance(stored.get(field), list):
-            target_counts[field] = min(8, max(target_counts[field], len(stored[field])))
+            target_counts[field] = min(MAX_REPAIR_ITEMS, max(target_counts[field], len(stored[field])))
     for field, item_type in fields.items():
         accepted[field], errors = _need_items(stored.get(field, []), item_type, payload, ids, field)
         rejected.extend(errors)
@@ -226,12 +265,17 @@ def run_audience_steps(agent, payload, metadata, checkpoint, validator):
             for field, item_type in fields.items():
                 raw_items = raw.get(field, [])
                 if isinstance(raw_items, list):
-                    target_counts[field] = min(8, max(target_counts[field], len(accepted[field]) + len([v for v in raw_items if v not in accepted[field]])))
-                fresh, errors = _need_items(raw.get(field, []), item_type, payload, ids, field)
-                for item in fresh:
-                    if item not in accepted[field] and len(accepted[field]) < 8:
-                        accepted[field].append(item)
-                rejected.extend(errors)
+                    fresh, errors = _need_items(raw.get(field, []), item_type, payload, ids, field)
+                    for item in fresh:
+                        if item not in accepted[field] and len(accepted[field]) < 8:
+                            accepted[field].append(item)
+                    # A repair may preserve at most a small useful set. Invalid
+                    # verbose output must not turn all of its items into a hard
+                    # requirement, while an originally short list still cannot
+                    # silently lose its pending replacement.
+                    observed = len(raw_items) if errors else len(accepted[field])
+                    target_counts[field] = min(MAX_REPAIR_ITEMS, max(target_counts[field], observed))
+                    rejected.extend(errors)
             for field in ("summary", "avoid_assumptions", "limitations"):
                 if field not in fixed and field in raw:
                     try:

@@ -13,6 +13,7 @@ from backend.app.services.creative_analysis import request_analysis
 from backend.app.services.creative_graph.agents import GraphOutputError, build_agents
 from backend.app.services.creative_graph.model import CompatibleChatModel, response_parameter
 from backend.app.services.creative_graph.review_schema import item_review_response_type
+from backend.app.services.creative_graph.sample_schema import sample_response_type
 from backend.app.services.creative_agents.title_generation import bind_title_ids, title_response_type
 from test_creative_sample_agent import OPTIONS, SEARCH, sources, valid_output
 from test_structured_output import assert_strict_contract
@@ -38,7 +39,7 @@ def test_native_schema_reaches_actual_http_body_and_returns_one_validated_respon
         assert url == "https://example.invalid/v1/chat/completions"
         body = kwargs["json"]
         assert kwargs["timeout"] == (10, 180)
-        assert body["response_format"] == response_parameter(SampleAnalysisResponse)
+        assert body["response_format"] == response_parameter(sample_response_type(payload))
         response = requests.Response()
         response.status_code = 200
         response._content = json.dumps({"choices": [{"message": {"content": json.dumps(valid_output(payload))}}]}).encode()
