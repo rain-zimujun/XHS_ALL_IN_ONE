@@ -29,6 +29,7 @@ MAX_BODY_CHARS_PER_NOTE = 1800
 # Keep each request small enough for the configured relay's response window.
 # The model still sees complete bounded excerpts for every note in the batch.
 MAX_SAMPLE_BATCH_NOTES = 3
+MIN_RECOVERED_QUOTE_CHARS = 8
 
 SAMPLE_SYSTEM_PROMPT = """你是样本分析 Agent，只负责分析本批已采集的小红书文字资料，不写发布成稿或配图提示词。
 严格返回符合 output_schema 的 JSON 对象，不返回 Markdown、其他字段或额外说明。
@@ -38,7 +39,7 @@ SAMPLE_SYSTEM_PROMPT = """你是样本分析 Agent，只负责分析本批已采
 sources.relevance_tier=weak 表示弱相关辅助样本，只能提供有限方向参考，不可单独支撑核心共性结论或与高相关样本等权计数；其正文可能已截短，严格只引用提供的片段。
 随后跨样本提炼题材分组、读者价值、风格：标题、开头、口吻、段落长度、表情、话题和结尾。
 风格结论按 dimension 分组，同一维度只出现一次；样本间有差异时在 finding 中如实说明。
-每条 finding 都要有 evidence，引用真实 note_id，并标明 title 或 body。quote 必须来自单个标题或单个正文片段，不能改写、拼接或引用未提供的中段；空格、换行和制表符差异会由程序忽略，但文字和标点仍需逐字对应。
+每条 finding 都要有 evidence，引用真实 note_id，并标明 title 或 body。quote 应尽量逐字来自单个标题或单个正文片段，不要主动改写或拼接；程序会优先完整匹配，并在模型误把标题和正文片段拼在一起时，从同一字段恢复真实连续片段。完全找不到原文的引用仍会被拒绝，不能引用未提供的中段；空格、换行和制表符差异会由程序忽略。
 body_segments 是真实连续原文片段：两个片段表示中段已省略，不允许跨片段拼接引文。
 只有一篇依据时明确是个别样本；多篇共同结论需有多个不同 note_id 的证据，不编造覆盖比例。
 只归纳有依据的风格，不为凑齐维度虚构表情、话题或互动结尾。avoid_patterns 没有依据时返回空数组。
@@ -220,13 +221,42 @@ def _canonical_source_quote(quote: str, text: str) -> str | None:
     return text[positions[start]:positions[end] + 1]
 
 
+def _recover_source_quote(quote: str, text: str) -> str | None:
+    """Recover a real contiguous source fragment from a model quote candidate.
+
+    Exact matches remain preferred. Fallback recovery only returns an actual
+    substring from one source field and never accepts fuzzy similarity.
+    """
+    exact = _canonical_source_quote(quote, text)
+    if exact is not None:
+        return exact
+    compact_quote = _compact_quote(quote)
+    if len(compact_quote) < MIN_RECOVERED_QUOTE_CHARS:
+        return None
+    compact_text, positions = [], []
+    for index, char in enumerate(text):
+        if not char.isspace():
+            compact_text.append(char)
+            positions.append(index)
+    compact_text = "".join(compact_text)
+    for length in range(len(compact_quote), MIN_RECOVERED_QUOTE_CHARS - 1, -1):
+        for start in range(len(compact_quote) - length + 1):
+            candidate = compact_quote[start:start + length]
+            source_start = compact_text.find(candidate)
+            if source_start < 0:
+                continue
+            source_end = source_start + length - 1
+            return text[positions[source_start]:positions[source_end] + 1]
+    return None
+
+
 def _matching_evidence_fields(quote: str, source: dict[str, Any]) -> dict[str, str]:
     matches = {}
-    title_quote = _canonical_source_quote(quote, source["title"])
+    title_quote = _recover_source_quote(quote, source["title"])
     if title_quote is not None:
         matches["title"] = title_quote
     body_quote = next((matched for segment in source["body_segments"]
-                       if (matched := _canonical_source_quote(quote, segment)) is not None), None)
+                       if (matched := _recover_source_quote(quote, segment)) is not None), None)
     if body_quote is not None:
         matches["body"] = body_quote
     return matches
@@ -242,7 +272,7 @@ def validate_sample_evidence(result: SampleAnalysis, payload: dict[str, Any]) ->
     for index, item in enumerate(result.observations):
         source = sources[item.note_id]
         canonical_quote = next((matched for text in [source["title"], *source["body_segments"]]
-                                if (matched := _canonical_source_quote(item.quote, text)) is not None), None)
+                                if (matched := _recover_source_quote(item.quote, text)) is not None), None)
         if canonical_quote is None:
             raise AgentValidationError(
                 f"observations[{index}].quote：observations.quote 必须来自对应样本标题或已提供正文片段（仅忽略空白差异）"
@@ -275,7 +305,7 @@ def validate_sample_evidence(result: SampleAnalysis, payload: dict[str, Any]) ->
             if len(matching_fields) == 0:
                 raise AgentValidationError(
                     f"{name}[{index}].evidence[{evidence_index}].quote：evidence.quote 必须来自对应标题或正文片段，"
-                    f"仅忽略空白差异，不能引用省略正文、改写或跨片段拼接（输入样本序号 {source_positions[evidence.note_id]}，"
+                    f"仅允许完整匹配或恢复同一字段内至少 {MIN_RECOVERED_QUOTE_CHARS} 字的连续原文，不能引用省略正文、改写或跨片段拼接（输入样本序号 {source_positions[evidence.note_id]}，"
                     f"字段 {evidence.field}，摘录 {len(evidence.quote)} 字，逐字匹配失败）",
                     quote_diagnostic=quote_mismatch_details(
                         path=(name, index, "evidence", evidence_index, "quote"), quote=evidence.quote,

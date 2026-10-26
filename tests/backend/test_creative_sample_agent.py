@@ -14,6 +14,7 @@ from backend.app.schemas.creative_agents import SampleAnalysis
 from backend.app.services.creative_agents.sample_analysis import (
     BODY_CHAR_BUDGET, SAMPLE_PROMPT_VERSION, analyze_sample_sources,
     MAX_SAMPLE_BATCH_NOTES, merge_sample_batches, prepare_sample_batches, prepare_sample_input, run_sample_analysis,
+    validate_sample_evidence,
 )
 from backend.app.services.creative_analysis import CreativeError
 from backend.app.services.creative_orchestrator import AgentRunError, AgentSpec, run_agent
@@ -103,6 +104,22 @@ def test_sample_batch_merge_preserves_all_observations_and_bounds_findings():
     assert len(merged.topic_patterns) <= 8
     assert len(merged.style_patterns) <= 7
     assert len({item.dimension for item in merged.style_patterns}) == len(merged.style_patterns)
+
+
+def test_composite_quote_is_recovered_to_a_real_single_field_fragment():
+    notes = sources()
+    notes[0]["title"] = "ai还可以这样玩？"
+    notes[0]["content"] = "突发：gpt也可以像专业摄影师一样编辑照片\n更多内容。"
+    payload = prepare_sample_input(SEARCH, notes, OPTIONS)
+    output = valid_output(payload)
+    output["style_patterns"][0]["evidence"][0].update(
+        note_id=notes[0]["note_id"], field="body", quote="ai还可以像专业摄影师一样编辑照片",
+    )
+    result = SampleAnalysis.model_validate(output)
+
+    validate_sample_evidence(result, payload)
+
+    assert result.style_patterns[0].evidence[0].quote == "可以像专业摄影师一样编辑照片"
 
 
 def test_allowlist_excludes_account_config_raw_and_media_fields():
