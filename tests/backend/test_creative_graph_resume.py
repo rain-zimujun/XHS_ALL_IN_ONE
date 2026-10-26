@@ -171,6 +171,39 @@ def test_old_snapshot_without_role_still_resumes_title_judge():
     assert role == "title_review"
 
 
+def test_title_revision_scope_failure_is_resumable_but_other_handoff_failures_are_not():
+    model = GraphCompletion()
+    w = workflow(model, count=1, variants=2)
+    result, _ = w.run()
+    assert result["ideas"]
+    saved = copy.deepcopy(w.state)
+    saved["result"] = None
+    saved["metadata"] = {}
+    saved["options"]["workflow"] = "langgraph"
+    pipeline = saved["pipeline"]
+    pipeline.update(status="failed", current_stage="title", error_code="creative_handoff_invalid")
+    title_stage = pipeline["stages"]["title"]
+    title_stage.update(status="failed", error="未列入返工范围的已通过内容必须原样保留")
+    title_stage["metadata"].update(
+        failed_role="title",
+        failed_attempts=[{"attempt": 1, "status": "creative_handoff_invalid", "error": "未列入返工范围的已通过内容必须原样保留"}],
+    )
+    saved["revision_plan"] = {
+        "title": {"target_ids": [saved["title"]["ideas"][0]["candidates"][0]["candidate_id"]], "direct": True, "feedback": {}}
+    }
+    task = SimpleNamespace(status="failed", error_type="creative_handoff_invalid", payload={
+        "analysis": saved["options"], "search": saved["search"], "sources": saved["sources"], "graph_state": saved,
+    })
+    restored, role = prepare_resume(task)
+    assert role == "title"
+    assert restored["pipeline"]["status"] == "pending"
+
+    rejected = copy.deepcopy(task)
+    rejected.payload["graph_state"]["pipeline"]["stages"]["title"]["metadata"]["failed_attempts"][0]["error"] = "任意其他交接错误"
+    with pytest.raises(CreativeError, match="没有可继续"):
+        prepare_resume(rejected)
+
+
 @pytest.mark.parametrize("failure", ["schema", "handoff", "quality", "legacy", "incomplete"])
 def test_resume_rejects_business_failures_and_missing_checkpoints(env, failure):
     model = GraphCompletion(fail_stage="final_review" if failure == "quality" else None, always=True)

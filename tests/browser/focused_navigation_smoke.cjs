@@ -9,7 +9,7 @@ async function main() {
     const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
     const errors = [];
     page.on("pageerror", error => errors.push(error.message));
-    const baseUrl = process.env.XHS_TEST_ORIGIN || "http://127.0.0.1:5173";
+    const baseUrl = process.env.XHS_TEST_ORIGIN || "http://127.0.0.1:5178";
     await page.addInitScript(() => localStorage.setItem("spider_xhs_refresh_token", "mock-refresh"));
     let qrCalls = 0;
     await page.route("**/api/**", async route => {

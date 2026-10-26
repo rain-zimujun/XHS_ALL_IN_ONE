@@ -102,7 +102,7 @@ class Settings(BaseSettings):
     server_port: int = 8000
 
     # CORS
-    backend_cors_origins: str = "http://127.0.0.1:5173,http://localhost:5173"
+    backend_cors_origins: str = "http://127.0.0.1:5178,http://localhost:5178"
 
     # Scheduler
     scheduler_enabled: bool = False

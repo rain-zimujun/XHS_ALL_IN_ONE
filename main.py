@@ -17,7 +17,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--port", type=int, default=8000, help="Backend port.")
     parser.add_argument("--reload", action="store_true", help="Enable Uvicorn reload.")
     parser.add_argument("--with-frontend", action="store_true", help="Also start the frontend Vite dev server.")
-    parser.add_argument("--frontend-port", type=int, default=5173, help="Frontend dev server port.")
+    parser.add_argument("--frontend-port", type=int, default=5178, help="Frontend dev server port.")
     return parser.parse_args(argv)
 
 

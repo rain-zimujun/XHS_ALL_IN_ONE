@@ -14,7 +14,9 @@ from backend.app.services.creative_agents.sample_analysis import SAMPLE_AGENT
 from backend.app.services.creative_agents.reader_needs import AUDIENCE_AGENT
 from backend.app.services.creative_agents.topic_selection import TOPIC_AGENT
 from backend.app.services.creative_agents.topic_review import TOPIC_REVIEW_AGENT
-from backend.app.services.creative_agents.title_generation import TITLE_AGENT, bind_title_ids, title_response_type
+from backend.app.services.creative_agents.title_generation import (
+    TITLE_AGENT, bind_title_ids, preserve_unselected_title_candidates, title_response_type,
+)
 from backend.app.services.creative_graph.title_review import TITLE_REVIEW_AGENT, expand_title_review
 from backend.app.services.creative_agents.copy_generation import COPY_AGENT
 from backend.app.services.creative_graph.copy_review import COPY_REVIEW_AGENT
@@ -118,6 +120,10 @@ class StructuredAgent:
                     adapted = self.payload_output_adapter(value, payload)
                 else:
                     adapted = self.output_adapter(value) if self.output_adapter else value
+                if revision and self.spec.stage == "title":
+                    adapted = preserve_unselected_title_candidates(
+                        adapted, revision["previous_output"], revision["target_ids"],
+                    )
                 if self.spec.stage == "copy":
                     from backend.app.services.creative_copy import normalize_result_copy
                     adapted = normalize_result_copy(adapted)

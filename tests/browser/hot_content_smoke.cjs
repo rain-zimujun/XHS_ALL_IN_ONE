@@ -136,7 +136,7 @@ async function main() {
       if (path === "/api/files/exports/xhs-report-u1-test.html") return route.fulfill({ contentType: "text/html", body: "<!doctype html><h1>模拟报告</h1>" });
       throw new Error(`未模拟的接口：${request.method()} ${path}`);
     });
-    await page.goto(process.env.XHS_TEST_BASE_URL || "http://127.0.0.1:5173/platforms/xhs/hot-content");
+    await page.goto(process.env.XHS_TEST_BASE_URL || "http://127.0.0.1:5178/platforms/xhs/hot-content");
     await page.getByRole("heading", { name: "热点创作", exact: true }).waitFor();
     assert.equal(await page.getByLabel("目标受众").inputValue(), "电商、服装行业、AI、时尚行业、营销行业、美工、后期从业者");
     assert.equal(await page.getByLabel("创作要求").inputValue(), "符合小红书爆款文案的调性，文案尽可能精简、抓眼球");

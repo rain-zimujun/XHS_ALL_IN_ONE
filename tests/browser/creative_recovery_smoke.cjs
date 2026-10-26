@@ -46,7 +46,7 @@ async function main() {
       unexpected.push(path);
       return route.fulfill({ status: 404, json: { detail: "unexpected mock request" } });
     });
-    await page.goto(process.env.XHS_TEST_BASE_URL || "http://127.0.0.1:5173/platforms/xhs/hot-content");
+    await page.goto(process.env.XHS_TEST_BASE_URL || "http://127.0.0.1:5178/platforms/xhs/hot-content");
     await page.getByRole("button", { name: /#701 恢复测试/ }).click();
     await page.getByText("标题与评审 · 失败详情", { exact: true }).click();
     await page.getByText("网络请求第 4/4 次", { exact: false }).waitFor();

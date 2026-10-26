@@ -13,6 +13,9 @@ LEGACY_TAG_SCHEMA_MARKERS = (
     "tags 必须是与本版最终正文最相关的 6 个不同话题",
     "tags 必须是与本版最终正文最相关的6个不同话题",
 )
+TARGETED_REVISION_MARKERS = (
+    "未列入返工范围的已通过内容必须原样保留",
+)
 SINGLE_ROLES = {"sample_analysis", "audience", "image", "final_review"}
 ALL_ROLES = SINGLE_ROLES | {"topic", "topic_review", "title", "title_review", "copy", "copy_review"}
 
@@ -44,7 +47,12 @@ def prepare_resume(task):
                 any(marker in str(attempt.get("error", "")) for marker in LEGACY_TAG_SCHEMA_MARKERS)
                 for attempt in attempts
             )
-            if task.error_type != "creative_handoff_invalid" or not legacy_tag_failure:
+            targeted_revision_failure = any(
+                any(marker in str(attempt.get("error", "")) for marker in TARGETED_REVISION_MARKERS)
+                for attempt in attempts
+            )
+            compatible_handoff = legacy_tag_failure or targeted_revision_failure
+            if task.error_type != "creative_handoff_invalid" or not compatible_handoff:
                 raise ValueError("not a compatible model failure")
         role = item["metadata"].get("failed_role")
         if role is None:

@@ -82,6 +82,27 @@ def bind_title_ids(value: dict[str, Any], payload: dict[str, Any]) -> dict[str, 
     return {"ideas": ideas, "limitations": value["limitations"]}
 
 
+def preserve_unselected_title_candidates(proposed: dict[str, Any], previous: dict[str, Any], target_ids: list[str]) -> dict[str, Any]:
+    """Keep server-owned title candidates outside a quality-revision scope unchanged."""
+    targets = set(target_ids)
+    previous_by_id = {
+        candidate["candidate_id"]: candidate
+        for idea in previous.get("ideas", [])
+        for candidate in idea.get("candidates", [])
+    }
+    result = {**proposed, "ideas": []}
+    for idea in proposed.get("ideas", []):
+        group = {**idea, "candidates": []}
+        for candidate in idea.get("candidates", []):
+            candidate_id = candidate.get("candidate_id")
+            if candidate_id not in targets and candidate_id in previous_by_id:
+                group["candidates"].append(dict(previous_by_id[candidate_id]))
+            else:
+                group["candidates"].append(candidate)
+        result["ideas"].append(group)
+    return result
+
+
 def content_fingerprint(payload: dict[str, Any]) -> str:
     canonical = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

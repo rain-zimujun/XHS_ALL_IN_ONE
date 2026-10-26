@@ -26,7 +26,7 @@
 server:
   host: "0.0.0.0"
   port: 8000
-  cors_origins: "http://localhost:5173,http://localhost:3000,http://127.0.0.1:5173"
+  cors_origins: "http://localhost:5178,http://localhost:3000,http://127.0.0.1:5178"
 
 database:
   # "sqlite" for local development, "mysql" for production

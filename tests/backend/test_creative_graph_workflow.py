@@ -127,6 +127,47 @@ def test_graph_full_chain_normalizes_title_review_blocking_severity_without_retr
     assert metadata["request_count"] == 13
 
 
+def test_graph_title_revision_restores_approved_candidates_changed_by_model():
+    class LooseTitleRevision(GraphCompletion):
+        def __init__(self):
+            super().__init__()
+            self.failed_idea_once = False
+            self.corrupted_revision_once = False
+
+        def __call__(self, **kwargs):
+            prompt, _ = json.JSONDecoder().raw_decode(kwargs["user_prompt"])
+            wire_name = kwargs["response_format"]["json_schema"]["name"]
+            raw = super().__call__(**kwargs)
+            if wire_name == "TitleReviewResponse":
+                output = json.loads(raw)
+                idea_ids = {item["idea_id"] for item in prompt["input"]["items"]}
+                if "idea_2" in idea_ids and not self.failed_idea_once:
+                    self.failed_idea_once = True
+                    for review, item in zip(output["reviews"], prompt["input"]["items"]):
+                        review["scores"]["hook"] = 4.0
+                        review["issues"] = [{
+                            "criterion": "hook", "severity": "blocking", "field": "title",
+                            "quote": item["fields"]["title"], "problem": "标题钩子不够明确。",
+                            "revision_instruction": "补出具体问题或收益。", "related_item_ids": [],
+                        }]
+                return json.dumps(output, ensure_ascii=False)
+            if wire_name == "TitleResponse" and "quality_revision" in prompt and not self.corrupted_revision_once:
+                self.corrupted_revision_once = True
+                output = json.loads(raw)
+                output["ideas"]["idea_1"]["candidates"][0]["title"] = "模型错误改动的已通过标题"
+                return json.dumps(output, ensure_ascii=False)
+            return raw
+
+    model = LooseTitleRevision()
+    w = workflow(model, count=3, variants=2)
+    result, _ = w.run()
+    assert len(result["ideas"]) == 3
+    assert all(len(idea["variants"]) == 2 for idea in result["ideas"])
+    assert model.counts["TitleCandidates"] == 2
+    assert model.counts["title_review"] == 6
+    assert w.state["pipeline"]["status"] == "completed"
+
+
 @pytest.mark.parametrize("cache_fault", [None, "version", "fingerprint", "review"])
 def test_title_review_resume_reuses_only_valid_batches_and_keeps_context_compact(cache_fault):
     model = GraphCompletion()
