@@ -43,6 +43,7 @@ export function HotContentPage() {
   const historyPageSize = 20;
   const [models, setModels] = useState<ModelConfig[]>([]);
   const [modelId, setModelId] = useState<number>();
+  const [preprocessModelId, setPreprocessModelId] = useState<number>();
   const [ideaCount, setIdeaCount] = useState<1 | 3 | 5>(3);
   const [variantCount, setVariantCount] = useState<2 | 3>(3);
   const [workflow, setWorkflow] = useState<NonNullable<CreativeAnalysisOptions["workflow"]>>("multi_agent");
@@ -66,6 +67,7 @@ export function HotContentPage() {
       const items = (await fetchModelConfigs("text")).items;
       setModels(items);
       setModelId(id => items.some(m => m.id === id) ? id : items.find(m => m.is_default)?.id || items[0]?.id);
+      setPreprocessModelId(id => items.some(m => m.id === id) ? id : items.find(m => m.is_default)?.id || items[0]?.id);
     } catch { setError("模型配置加载失败，请重试。"); }
   }
   useEffect(() => { void loadModels(); }, []);
@@ -96,12 +98,17 @@ export function HotContentPage() {
   }, [collection?.id, collecting]);
 
   function analysisOptions(): CreativeAnalysisOptions | undefined {
-    return modelId ? { model_id: modelId, idea_count: ideaCount, variant_count: variantCount, audience, instruction, workflow } : undefined;
+    if (!modelId || (workflow === "langgraph" && !preprocessModelId)) return undefined;
+    return {
+      model_id: modelId,
+      ...(workflow === "langgraph" && preprocessModelId ? { preprocess_model_id: preprocessModelId } : {}),
+      idea_count: ideaCount, variant_count: variantCount, audience, instruction, workflow,
+    };
   }
 
   async function startCollection(withAnalysis = false) {
     if (!run || selected.length < 3) return;
-    if (withAnalysis && !modelId) return;
+    if (withAnalysis && !analysisOptions()) return;
     setStarting(true); setError("");
     try { setCollection(await collectCreativeNotes(run.id, selected, withAnalysis ? analysisOptions() : undefined)); void loadHistory(); }
     catch { setError("无法开始采集，请检查选取的笔记与账号状态。"); }
@@ -139,6 +146,7 @@ export function HotContentPage() {
       setSort(savedSearch.sort_type_choice); setNoteTime(savedSearch.note_time); setNoteType(savedSearch.note_type);
       if (item.payload.analysis) {
         setModelId(item.payload.analysis.model_id); setIdeaCount(item.payload.analysis.idea_count);
+        setPreprocessModelId(item.payload.analysis.preprocess_model_id || item.payload.analysis.model_id);
         setVariantCount(item.payload.analysis.variant_count || 3);
         setWorkflow(item.payload.analysis.workflow || "multi_agent");
         setAudience(item.payload.analysis.audience); setInstruction(item.payload.analysis.instruction);
@@ -216,6 +224,7 @@ export function HotContentPage() {
         <Form layout="vertical" disabled={starting || collecting || searching}>
           <Row gutter={16}>
             <Col xs={24} md={12}><Form.Item label="文字模型"><Select aria-label="文字模型" value={modelId} onChange={setModelId} placeholder="选择文字模型" options={models.map(m => ({ value: m.id, label: `${m.name} · ${m.model_name}`, disabled: !m.has_api_key || !m.base_url }))} /></Form.Item></Col>
+            {workflow === "langgraph" && <Col xs={24} md={12}><Form.Item label="轻量预处理模型" extra="只处理分批样本摘要与证据；后续创作和评审仍使用上方文字模型。"><Select aria-label="轻量预处理模型" value={preprocessModelId} onChange={setPreprocessModelId} placeholder="选择预处理模型" options={models.map(m => ({ value: m.id, label: `${m.name} · ${m.model_name}`, disabled: !m.has_api_key || !m.base_url }))} /></Form.Item></Col>}
             <Col xs={12} md={6}><Form.Item label="标题数量"><Select aria-label="标题数量" value={ideaCount} onChange={setIdeaCount} options={[1, 3, 5].map(value => ({ value, label: `${value} 个标题` }))} /></Form.Item></Col>
             <Col xs={12} md={6}><Form.Item label="每个标题的文案数"><Select aria-label="每个标题的文案数" value={variantCount} onChange={setVariantCount} options={[2, 3].map(value => ({ value, label: `${value} 个版本` }))} /></Form.Item></Col>
             <Col span={24}><Form.Item label="目标受众"><Input aria-label="目标受众" maxLength={300} value={audience} onChange={e => setAudience(e.target.value)} /></Form.Item></Col>
@@ -228,8 +237,8 @@ export function HotContentPage() {
             ]} />
           </Form.Item> }]} />
           <Space wrap>
-            <Button type="primary" onClick={() => void startCollection(true)} loading={starting} disabled={!modelId || !run || selected.length < 3 || collecting || searching}>采集并生成 {ideaCount} 个标题 × {variantCount} 版文案</Button>
-            {collection && (collection.payload.sources?.length || 0) >= 3 && <Button onClick={() => void analyzeAgain()} disabled={!modelId || collecting || searching} loading={starting}>使用已采集正文重新生成</Button>}
+            <Button type="primary" onClick={() => void startCollection(true)} loading={starting} disabled={!analysisOptions() || !run || selected.length < 3 || collecting || searching}>采集并生成 {ideaCount} 个标题 × {variantCount} 版文案</Button>
+            {collection && (collection.payload.sources?.length || 0) >= 3 && <Button onClick={() => void analyzeAgain()} disabled={!analysisOptions() || collecting || searching} loading={starting}>使用已采集正文重新生成</Button>}
           </Space>
         </Form>
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>正文参考本批有效样本的共同语气、开头、分段与互动方式，保持原创。每个标题对应 {variantCount} 版不同文案，每版都有独立配图建议与提示词；共生成 {ideaCount * variantCount} 版，数量越多通常耗时和费用越高。</Paragraph>

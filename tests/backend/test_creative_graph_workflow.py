@@ -110,6 +110,20 @@ def test_graph_executes_ten_roles_and_persists_serializable_global_state(count, 
     assert "fixture-private" not in json.dumps(w.state)
 
 
+def test_graph_routes_sample_preprocessing_to_its_dedicated_model_only():
+    creative_model, preprocess_model = GraphCompletion(), GraphCompletion()
+    w = workflow(creative_model, count=1, variants=2, preprocess_complete=preprocess_model)
+
+    w.run()
+
+    assert preprocess_model.wire_calls
+    assert all(call["response_format"]["json_schema"]["name"] == "SampleAnalysisResponse"
+               for call in preprocess_model.wire_calls)
+    assert all(call["response_format"]["json_schema"]["name"] != "SampleAnalysisResponse"
+               for call in creative_model.wire_calls)
+    assert len(preprocess_model.calls) + len(creative_model.calls) == w.budget.request_count
+
+
 def test_graph_full_chain_normalizes_title_review_blocking_severity_without_retry():
     class LowScoreSuggestion(GraphCompletion):
         def __call__(self, **kwargs):

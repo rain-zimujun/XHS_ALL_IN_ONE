@@ -25,6 +25,7 @@ class CreativeAnalysisOptions(BaseModel):
     model_config = ConfigDict(str_strip_whitespace=True)
 
     model_id: int = Field(gt=0)
+    preprocess_model_id: int | None = Field(default=None, gt=0)
     workflow: Literal["legacy", "multi_agent", "langgraph"] = "legacy"
     idea_count: Literal[1, 3, 5] = 3
     variant_count: Literal[2, 3] = 3

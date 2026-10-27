@@ -38,8 +38,9 @@ def prepare_resume(task):
             raise ValueError("not failed at a model stage")
         if state["result"] is not None or state["search"] != payload["search"] or state["sources"] != payload["sources"]:
             raise ValueError("mismatched snapshot")
-        options = CreativeAnalysisOptions.model_validate(payload["analysis"]).model_dump()
-        if state["options"] != options:
+        options = CreativeAnalysisOptions.model_validate(payload["analysis"]).model_dump(exclude_none=True)
+        saved_options = CreativeAnalysisOptions.model_validate(state["options"]).model_dump(exclude_none=True)
+        if saved_options != options:
             raise ValueError("changed options")
         item = pipeline["stages"][stage]
         if task.error_type == INTERRUPTED_CODE:

@@ -136,19 +136,20 @@ def add_dependents(s, plan, stage, ids, feedback):
 
 class LangGraphWorkflow:
     def __init__(self, *, search, sources, options, complete, on_state=None, on_graph_state=None, max_requests=None,
-                 resume_state=None, resume_role=None):
+                 resume_state=None, resume_role=None, preprocess_complete=None):
         config = CreativeAnalysisOptions.model_validate(options)
         if max_requests is None:
             max_requests = estimate_graph_request_budget(len(sources), config.model_dump())
         pipeline = new_pipeline_state()
         pipeline["max_requests"] = max_requests
         self.state: CreativeGraphState = {
-            "search": deepcopy(search), "sources": deepcopy(sources), "options": config.model_dump(),
+            "search": deepcopy(search), "sources": deepcopy(sources), "options": config.model_dump(exclude_none=True),
             **{k: None for k in ("sample_analysis", "audience", "topic", "topic_review", "title", "title_review", "copy", "copy_review", "image", "final_review", "result")},
             "pipeline": pipeline, "revision_plan": {}, "metadata": {},
         }
         self.on_state, self.on_graph_state = on_state, on_graph_state
-        self.transport, self.current, self.current_role = complete, "sample_analysis", "sample_analysis"
+        self.transports = {"default": complete, "sample_analysis": preprocess_complete or complete}
+        self.current, self.current_role = "sample_analysis", "sample_analysis"
         self.active_pipeline = pipeline
         self.budget = RequestBudget(self._recorded_transport, max_requests=max_requests, max_seconds=MAX_GRAPH_SECONDS)
         self.agents = build_agents(CompatibleChatModel(self._complete))
@@ -179,7 +180,8 @@ class LangGraphWorkflow:
 
     def _recorded_transport(self, **kwargs):
         self._checkpoint(self.active_pipeline)
-        return self.transport(**kwargs)
+        transport = self.transports.get(self.current_role, self.transports["default"])
+        return transport(**kwargs)
 
     def _complete(self, **kwargs):
         self._checkpoint(self.active_pipeline)
@@ -688,6 +690,10 @@ def analyze_langgraph(db, user_id, search, sources, options, client_factory, on_
     config = CreativeAnalysisOptions.model_validate(options)
     model = owned_text_model(db, user_id, config.model_id)
     complete = partial(request_analysis, client_factory(), model_config=model, api_key=decrypt_text(model.encrypted_api_key))
+    preprocess_model = owned_text_model(db, user_id, config.preprocess_model_id) if config.preprocess_model_id else model
+    preprocess_complete = partial(request_analysis, client_factory(), model_config=preprocess_model,
+                                  api_key=decrypt_text(preprocess_model.encrypted_api_key))
     result, metadata = LangGraphWorkflow(search=search, sources=sources, options=options, complete=complete, on_graph_state=on_graph_state,
-                                        resume_state=resume_state, resume_role=resume_role).run()
-    return result, {**metadata, "model_name": model.model_name}
+                                        resume_state=resume_state, resume_role=resume_role,
+                                        preprocess_complete=preprocess_complete).run()
+    return result, {**metadata, "model_name": model.model_name, "preprocess_model_name": preprocess_model.model_name}

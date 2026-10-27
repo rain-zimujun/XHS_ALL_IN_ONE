@@ -137,13 +137,15 @@ def collect(
     if payload.analysis:
         try:
             owned_text_model(db, current_user.id, payload.analysis.model_id)
+            if payload.analysis.preprocess_model_id is not None:
+                owned_text_model(db, current_user.id, payload.analysis.preprocess_model_id)
         except CreativeError as exc:
             raise HTTPException(400, str(exc)) from exc
     task = Task(
         user_id=current_user.id, platform="xhs", task_type="creative_collect", status="pending",
         progress=0, parent_task_id=search_task.id,
         payload={"search": search_task.payload["search"], "selected_notes": [notes[n] for n in ids], "stage": "等待采集",
-                 "analysis": payload.analysis.model_dump() if payload.analysis else None},
+                 "analysis": payload.analysis.model_dump(exclude_none=True) if payload.analysis else None},
     )
     db.add(task); db.commit(); db.refresh(task)
     background.add_task(collect_samples, task.id, sessionmaker(bind=db.get_bind()), adapter_factory, client_factory)
@@ -162,6 +164,8 @@ def analyze(
         raise HTTPException(400, "请等待采集结束，并确保至少有 3 篇有效正文。")
     try:
         owned_text_model(db, current_user.id, payload.model_id)
+        if payload.preprocess_model_id is not None:
+            owned_text_model(db, current_user.id, payload.preprocess_model_id)
     except CreativeError as exc:
         raise HTTPException(400, str(exc)) from exc
     task = Task(
@@ -169,7 +173,7 @@ def analyze(
         parent_task_id=collection.id,
         payload={"search": collection.payload["search"], "sources": sources, "stage": "等待 AI 分析",
                  "failures": collection.payload.get("failures", []),
-                 "analysis": payload.model_dump(exclude={"collection_task_id"})},
+                 "analysis": payload.model_dump(exclude={"collection_task_id"}, exclude_none=True)},
     )
     db.add(task); db.commit(); db.refresh(task)
     background.add_task(analyze_collection, task.id, sessionmaker(bind=db.get_bind()), client_factory)
@@ -203,6 +207,9 @@ def resume(
     try:
         state, role = prepare_resume(original)
         owned_text_model(db, current_user.id, state["options"]["model_id"])
+        preprocess_model_id = state["options"].get("preprocess_model_id")
+        if preprocess_model_id is not None:
+            owned_text_model(db, current_user.id, preprocess_model_id)
     except CreativeError as exc:
         raise HTTPException(400, str(exc)) from exc
     child = Task(

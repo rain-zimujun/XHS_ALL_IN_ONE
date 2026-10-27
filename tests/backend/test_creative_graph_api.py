@@ -66,6 +66,17 @@ def test_saved_collection_can_switch_to_graph_without_recrawling_or_changing_old
     assert env.client.get(f"/api/xhs/creative/runs/{original['id']}", headers=env.headers).json()["payload"] == original["payload"]
 
 
+def test_analysis_rejects_unowned_or_missing_preprocess_model(env):
+    collection = collect_for_analysis(env)
+    response = env.client.post("/api/xhs/creative/analyze", headers=env.headers, json={
+        "collection_task_id": collection["id"], "model_id": env.model_id,
+        "preprocess_model_id": env.model_id + 999, "workflow": "langgraph",
+    })
+
+    assert response.status_code == 400
+    assert "文字模型配置" in response.json()["detail"]
+
+
 @pytest.mark.parametrize("failure,code", [("timeout", "ai_read_timeout"), ("quality", "creative_quality_exhausted"), ("schema", "creative_schema_invalid"), ("handoff", "creative_handoff_invalid")])
 def test_failed_api_task_keeps_global_drafts_and_specific_error_code(env, failure, code):
     model = GraphCompletion(timeout_stage="CopyVariants" if failure == "timeout" else None,
