@@ -27,6 +27,14 @@ class Completion:
         name = kwargs["response_format"]["json_schema"]["name"]
         self.calls.append((name, copy.deepcopy(p), copy.deepcopy(kwargs)))
         output = valid_output(p)
+        claims = p.get("approved_claims", [])
+        claim_for_note = {note_id: claim["claim_id"] for claim in claims for note_id in claim["note_ids"]}
+        for section in ("segments", "shared_needs"):
+            for item in output.get(section, []):
+                for evidence in item.get("evidence", []):
+                    evidence["claim_ids"] = list(dict.fromkeys(
+                        claim_for_note[note_id] for note_id in evidence["note_ids"] if note_id in claim_for_note
+                    )) if evidence["basis"] == "sample_evidence" else []
         if name == "AudienceGroupingResponse":
             output = {"segments": [{k: v for k, v in s.items() if k != "segment_id"} for s in output["segments"]]}
         else:
@@ -64,6 +72,59 @@ def test_two_calls_assign_ids_and_pass_enum_unique_items_in_actual_request():
         assert refs["items"]["enum"] == ["segment_1", "segment_2"]
         assert refs["uniqueItems"] is True
     assert metadata["audience_steps"]["groups"]
+
+
+def test_audience_evidence_binds_claim_ids_and_note_ids_in_both_actual_schemas():
+    p = payload()
+    p["approved_claims"] = [
+        {"claim_id": "claim_001_001", "section": "observations", "text": "配色灵感", "note_ids": ["sample-0"]},
+        {"claim_id": "claim_001_002", "section": "observations", "text": "轮廓灵感", "note_ids": ["sample-1"]},
+    ]
+    p["approved_claim_ids"] = [claim["claim_id"] for claim in p["approved_claims"]]
+    model = Completion()
+
+    result = run(model, p=p).output
+
+    for name, _input, kwargs in model.calls:
+        schema = kwargs["response_format"]["json_schema"]["schema"]
+        serialized = json.dumps(schema)
+        assert "claim_001_001" in serialized and "claim_001_002" in serialized
+    evidence = result.segments[0].evidence[0]
+    assert evidence.claim_ids == ["claim_001_001", "claim_001_002"]
+
+
+def test_audience_validation_rejects_claims_that_do_not_cover_the_cited_note():
+    from backend.app.schemas.creative_agents import AudienceBrief
+    from backend.app.services.creative_orchestrator import AgentValidationError
+
+    p = payload()
+    p["approved_claims"] = [
+        {"claim_id": "claim_001_001", "section": "observations", "text": "配色灵感", "note_ids": ["sample-0"]},
+    ]
+    output = valid_output(p)
+    output["segments"][0]["evidence"][0]["claim_ids"] = ["claim_001_001"]
+    output["segments"][0]["evidence"][0]["note_ids"] = ["sample-1"]
+
+    with pytest.raises(AgentValidationError, match="属于本条 evidence 引用"):
+        validate_audience_brief(AudienceBrief.model_validate(output), p)
+
+
+def test_hypothesis_cannot_reference_a_claim_without_its_source_note():
+    from backend.app.schemas.creative_agents import AudienceBrief
+    from backend.app.services.creative_orchestrator import AgentValidationError
+
+    p = payload()
+    p["approved_claims"] = [
+        {"claim_id": "claim_001_001", "section": "observations", "text": "配色灵感", "note_ids": ["sample-0"]},
+    ]
+    output = valid_output(p)
+    output["segments"][0]["evidence"][0].update(note_ids=["sample-0"], claim_ids=["claim_001_001"])
+    output["shared_needs"][0]["evidence"][0].update(note_ids=["sample-0"], claim_ids=["claim_001_001"])
+    evidence = output["shared_needs"][1]["evidence"][0]
+    evidence.update(note_ids=[], claim_ids=["claim_001_001"])
+
+    with pytest.raises(AgentValidationError, match="必须同时提供 note_id"):
+        validate_audience_brief(AudienceBrief.model_validate(output), p)
 
 
 @pytest.mark.parametrize("refs", [["invented_id"], ["segment_1", "segment_1"]])

@@ -63,6 +63,20 @@ class GraphCompletion(WorkflowCompletion):
                 item["for_segment_ids"] = [mapping[ref] for ref in item["for_segment_ids"]]
             for key in ("segments", "requested_audience_terms"):
                 output.pop(key)
+        if wire_name in {"AudienceGroupingResponse", "AudienceNeedsResponse"}:
+            claims = prompt["input"].get("approved_claims", [])
+            claim_for_note = {note_id: claim["claim_id"] for claim in claims for note_id in claim["note_ids"]}
+            collections = [output.get("segments", []), output.get("shared_needs", [])]
+            for group in collections[0]:
+                for evidence in group.get("evidence", []):
+                    evidence["claim_ids"] = list(dict.fromkeys(
+                        claim_for_note[note_id] for note_id in evidence["note_ids"] if note_id in claim_for_note
+                    )) if evidence["basis"] == "sample_evidence" else []
+            for need in collections[1]:
+                for evidence in need.get("evidence", []):
+                    evidence["claim_ids"] = list(dict.fromkeys(
+                        claim_for_note[note_id] for note_id in evidence["note_ids"] if note_id in claim_for_note
+                    )) if evidence["basis"] == "sample_evidence" else []
         elif wire_name == "TopicResponse":
             for idea in output["ideas"]:
                 idea["primary_segment_id"] = prompt["input"]["audience_brief"]["segments"][0]["segment_id"]

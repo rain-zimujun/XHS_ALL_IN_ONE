@@ -54,7 +54,7 @@ def valid_output(payload):
         "attention_points": ["视觉细节", "表达是否具体"],
         "value_opportunities": ["提供可复用的审美参考"],
         "suitable_formats": ["灵感分享", "作品展示"],
-        "evidence": [{"basis": "sample_evidence", "note_ids": notes[:2], "statement": "样本反复出现配色和轮廓描述。"}],
+        "evidence": [{"basis": "sample_evidence", "note_ids": notes[:2], "claim_ids": [], "statement": "样本反复出现配色和轮廓描述。"}],
         "uncertainties": ["未做用户访谈，需求仍需人工验证。"],
     }, {
         "segment_id": "business_and_marketing", "audience_terms": terms[4:],
@@ -63,7 +63,7 @@ def valid_output(payload):
         "attention_points": ["内容能否帮助判断表达方向"],
         "value_opportunities": ["提供选题和视觉沟通参考"],
         "suitable_formats": ["行业观察", "案例拆解"],
-        "evidence": [{"basis": "user_requirement", "note_ids": [], "statement": "用户明确指定了电商和营销行业受众。"}],
+        "evidence": [{"basis": "user_requirement", "note_ids": [], "claim_ids": [], "statement": "用户明确指定了电商和营销行业受众。"}],
         "uncertainties": ["不能据此推断购买或转化意愿。"],
     }]
     segment_ids = [s["segment_id"] for s in segments]
@@ -73,10 +73,10 @@ def valid_output(payload):
         "segments": segments,
         "shared_needs": [{
             "need": "需要具体、可讨论的视觉内容参考。", "applies_to_segment_ids": segment_ids,
-            "confidence": "evidence", "evidence": [{"basis": "sample_evidence", "note_ids": notes[:2], "statement": "样本提供了配色和轮廓内容。"}],
+            "confidence": "evidence", "evidence": [{"basis": "sample_evidence", "note_ids": notes[:2], "claim_ids": [], "statement": "样本提供了配色和轮廓内容。"}],
         }, {
             "need": "可能希望把视觉观察转成可传播的内容角度。", "applies_to_segment_ids": [segment_ids[1]],
-            "confidence": "hypothesis", "evidence": [{"basis": "hypothesis", "note_ids": [], "statement": "这是待验证假设，不是用户调研结论。"}],
+            "confidence": "hypothesis", "evidence": [{"basis": "hypothesis", "note_ids": [], "claim_ids": [], "statement": "这是待验证假设，不是用户调研结论。"}],
         }],
         "format_recommendations": [{
             "format": "灵感分享", "for_segment_ids": [segment_ids[0]],

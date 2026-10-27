@@ -637,6 +637,12 @@ class LangGraphWorkflow:
             raise CreativeError("样本结论尚未通过证据评审，不能进入读者需求阶段。", "creative_sample_review_required")
         payload = reader_needs.prepare_audience_input(s["search"]["keyword"], s["options"]["audience"] or "内容创作者",
                                                      s["options"]["instruction"] or "围绕样本写自然精简的原创内容。", s["sample_analysis"])
+        approved_claims = [
+            {key: claim[key] for key in ("claim_id", "section", "text", "note_ids")}
+            for claim in s["sample_review"].get("approved_claims", [])
+        ]
+        payload["approved_claims"] = approved_claims
+        payload["approved_claim_ids"] = [claim["claim_id"] for claim in approved_claims]
         if s["audience"] is not None:
             return {"pipeline": self.active_pipeline}
         def invoke(agent, request, validator, pipeline, revision):

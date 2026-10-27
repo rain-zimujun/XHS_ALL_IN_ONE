@@ -87,6 +87,7 @@ class SampleReviewResponse(TypedDict):
 class AudienceEvidence(TypedDict):
     basis: Literal["sample_evidence", "user_requirement", "hypothesis"]
     note_ids: Annotated[list[NoteId], Field(max_length=8)]
+    claim_ids: Annotated[list[NoteId], Field(max_length=8)]
     statement: Text
 
 

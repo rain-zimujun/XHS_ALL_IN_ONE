@@ -72,6 +72,7 @@ AudienceTerm = Annotated[str, Field(min_length=1, max_length=60)]
 class AudienceEvidence(AgentOutputModel):
     basis: Literal["sample_evidence", "user_requirement", "hypothesis"]
     note_ids: list[NoteId] = Field(default_factory=list, max_length=8)
+    claim_ids: list[Annotated[str, Field(min_length=1, max_length=40)]] = Field(default_factory=list, max_length=8)
     statement: FindingText
 
 
