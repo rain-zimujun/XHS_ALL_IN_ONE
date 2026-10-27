@@ -40,18 +40,23 @@ def run_batches(*, agent, payload, batches, metadata, prefix, version, validate,
     pending = []
     for index, batch in enumerate(batches, 1):
         key = batch["input_fingerprint"]
-        metadata[f"{prefix}_batch"] = {"index": index, "count": len(batches), "item_count": 1}
         if key in cache["results"]:
             results_by_key[key] = agent.output_model.model_validate(cache["results"][key])
             metadata[f"{prefix}_reused_batches"] += 1
             diagnostic_event("复用已完成批次", stage=agent.spec.stage, agent=agent.spec.name,
                              batch_index=index, batch_count=len(batches), item_count=1)
-            checkpoint(f"{agent.spec.name} · 复用第 {index}/{len(batches)} 篇")
+            guard = state_lock if state_lock is not None else nullcontext()
+            with guard:
+                metadata[f"{prefix}_batch"] = {"index": index, "count": len(batches), "item_count": 1}
+                checkpoint(f"{agent.spec.name} · 复用第 {index}/{len(batches)} 篇")
             continue
         pending.append((index, batch))
 
     def process(index, batch):
-        checkpoint(f"{agent.spec.name} · 正在处理第 {index}/{len(batches)} 篇")
+        guard = state_lock if state_lock is not None else nullcontext()
+        with guard:
+            metadata[f"{prefix}_batch"] = {"index": index, "count": len(batches), "item_count": 1}
+            checkpoint(f"{agent.spec.name} · 正在处理第 {index}/{len(batches)} 篇")
         run = agent.invoke(batch, validate_output=lambda r, current=batch: validate(r, current),
                            on_progress=lambda text: checkpoint(f"{text} · 第 {index}/{len(batches)} 篇"),
                            revision=prepare_revision(revision, batch) if revision else None)

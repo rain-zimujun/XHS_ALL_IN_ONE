@@ -1,6 +1,6 @@
 import copy
 import json
-from threading import Barrier, Lock
+from threading import Barrier, Lock, RLock
 from time import sleep
 from types import SimpleNamespace
 
@@ -169,6 +169,11 @@ def test_run_batches_executes_at_most_three_concurrently_and_merges_in_input_ord
     entered = Barrier(3)
     lock = Lock()
     active = peak = 0
+    metadata = {}
+    checkpoint_indices = []
+
+    def checkpoint(_text):
+        checkpoint_indices.append(metadata["image_batch"]["index"])
 
     class Agent:
         output_model = Output
@@ -189,12 +194,14 @@ def test_run_batches_executes_at_most_three_concurrently_and_merges_in_input_ord
     batches = [{"order": i, "input_fingerprint": str(i)} for i in range(6)]
     result = run_batches(
         agent=Agent(), payload={"input_fingerprint": "payload"}, batches=batches,
-        metadata={}, prefix="image", version="test", validate=lambda *_: None,
-        merge=lambda values: values, checkpoint=lambda *_: None, max_workers=3,
+        metadata=metadata, prefix="image", version="test", validate=lambda *_: None,
+        merge=lambda values: values, checkpoint=checkpoint, max_workers=3, state_lock=RLock(),
     )
 
     assert peak == 3
     assert [item.value for item in result.output] == list(range(6))
+    assert set(checkpoint_indices) == set(range(1, 7))
+    assert 1 <= metadata["image_batch"]["index"] <= 6
 
 
 def test_run_batches_resume_skips_every_successful_parallel_batch():
