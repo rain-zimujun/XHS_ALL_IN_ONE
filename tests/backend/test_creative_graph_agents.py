@@ -19,9 +19,9 @@ from test_creative_sample_agent import OPTIONS, SEARCH, sources, valid_output
 from test_structured_output import assert_strict_contract
 
 
-def test_all_ten_agents_bind_distinct_handwritten_typeddict_responses():
+def test_all_eleven_agents_bind_distinct_handwritten_typeddict_responses():
     agents = build_agents(CompatibleChatModel(lambda **_: pytest.fail("unexpected model request")))
-    assert len(agents) == len({a.response_format for a in agents.values()}) == 10
+    assert len(agents) == len({a.response_format for a in agents.values()}) == 11
     for agent in agents.values():
         assert is_typeddict(agent.response_format)
         schema = response_parameter(agent.response_format)["json_schema"]["schema"]

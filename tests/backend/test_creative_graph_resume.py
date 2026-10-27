@@ -15,7 +15,7 @@ from test_creative_graph_workflow import GraphCompletion, workflow
 from test_creative_workflow import install_client
 
 
-ROLES = ["SampleAnalysisResponse", "AudienceGroupingResponse", "AudienceNeedsResponse", "TopicResponse", "TopicReviewResponse", "TitleResponse",
+ROLES = ["SampleAnalysisResponse", "SampleReviewResponse", "AudienceGroupingResponse", "AudienceNeedsResponse", "TopicResponse", "TopicReviewResponse", "TitleResponse",
          "TitleReviewResponse", "CopyResponse", "CopyReviewResponse", "ImageResponse", "FinalReviewResponse"]
 EXECUTION_ROLES = ROLES[:-2] + ["ImageResponse"] * 2 + ["FinalReviewResponse"] * 2
 
@@ -46,8 +46,8 @@ def test_resume_starts_at_exact_agent_preserving_every_upstream_artifact(failed_
     assert result["ideas"]
     assert recovery.wire_calls[0]["response_format"]["json_schema"]["name"] == failed_role
     assert len(recovery.calls) == len(EXECUTION_ROLES) - EXECUTION_ROLES.index(failed_role)
-    assert metadata["request_count"] == 14  # one original failure + thirteen successes
-    for key in ("sample_analysis", "audience", "topic", "topic_review", "title", "title_review", "copy", "copy_review", "image", "final_review"):
+    assert metadata["request_count"] == 15  # one original failure + fourteen successes
+    for key in ("sample_analysis", "sample_review", "audience", "topic", "topic_review", "title", "title_review", "copy", "copy_review", "image", "final_review"):
         if saved[key] is not None:
             assert resumed.state[key] == saved[key]
     assert task.payload == before
@@ -75,7 +75,7 @@ def test_resume_api_preserves_original_and_is_idempotent_with_ownership(env):
     assert child["parent_task_id"] == original["id"]
     assert child["payload"]["resume"]["role"] == "title_review"
     assert child["payload"]["sources"] == original["payload"]["sources"]
-    assert child["payload"]["pipeline"]["request_count"] == 17
+    assert child["payload"]["pipeline"]["request_count"] == 18
     assert child["payload"]["graph_state"]["pipeline"] == child["payload"]["pipeline"]
     assert len(recovery.calls) == 7
     assert recovery.wire_calls[0]["response_format"]["json_schema"]["name"] == "TitleReviewResponse"
@@ -116,8 +116,8 @@ def test_transient_failure_recovers_in_place_without_repeating_upstream(env):
     install_client(complete)
     result = collect_for_analysis(env, {"model_id": env.model_id, "workflow": "langgraph", "idea_count": 1, "variant_count": 2})
     assert result["status"] == "completed"
-    assert result["payload"]["pipeline"]["request_count"] == 16
-    assert len(model.calls) == 13
+    assert result["payload"]["pipeline"]["request_count"] == 17
+    assert len(model.calls) == 14
     stage = result["payload"]["pipeline"]["stages"]["title"]
     assert len(stage["metadata"]["network_attempts"]) == 3
     assert stage["history"][-1]["metadata"]["request_count"] == 4
@@ -171,6 +171,37 @@ def test_old_snapshot_without_role_still_resumes_title_judge():
     assert role == "title_review"
 
 
+def test_legacy_snapshot_without_sample_review_is_migrated_and_reviewed_before_audience():
+    model = GraphCompletion()
+    completed = workflow(model, count=1, variants=2)
+    completed.run()
+    saved = copy.deepcopy(completed.state)
+    saved.pop("sample_review")
+    saved["pipeline"]["stages"]["sample_analysis"]["metadata"].pop("sample_review_batches", None)
+    saved["pipeline"]["stages"]["sample_analysis"]["metadata"]["quality_review_status"] = "not_reviewed"
+    saved["result"] = None
+    saved["metadata"] = {}
+    saved["options"]["workflow"] = "langgraph"
+    saved["pipeline"].update(status="failed", current_stage="audience", error_code="ai_http_error")
+    audience = saved["pipeline"]["stages"]["audience"]
+    audience.update(status="failed", error="旧任务失败")
+    audience["metadata"]["failed_role"] = "audience"
+    task = SimpleNamespace(status="failed", error_type="ai_http_error", payload={
+        "analysis": saved["options"], "search": saved["search"], "sources": saved["sources"], "graph_state": saved,
+    })
+
+    restored, role = prepare_resume(task)
+    recovery = GraphCompletion()
+    resumed = LangGraphWorkflow(search=restored["search"], sources=restored["sources"], options=restored["options"],
+                                complete=recovery, resume_state=restored, resume_role=role)
+    result, _ = resumed.run()
+
+    assert role == "sample_review"
+    assert result["ideas"]
+    assert recovery.counts["SampleAnalysis"] == 0
+    assert recovery.counts["sample_review"] == 1
+
+
 def test_restart_interrupted_snapshot_resumes_exact_incomplete_batch():
     model = GraphCompletion()
     w = workflow(model, count=3, variants=3)
@@ -196,7 +227,7 @@ def test_restart_interrupted_snapshot_resumes_exact_incomplete_batch():
     with pytest.raises(CreativeError, match="没有可继续"):
         prepare_resume(broken)
     broken = copy.deepcopy(task)
-    broken.payload["graph_state"]["pipeline"]["request_count"] = 124
+    broken.payload["graph_state"]["pipeline"]["request_count"] = 128
     broken.payload["pipeline"]["request_count"] = broken.payload["graph_state"]["pipeline"]["request_count"]
     with pytest.raises(CreativeError, match="没有可继续"):
         prepare_resume(broken)
@@ -293,7 +324,7 @@ def test_expired_window_resumes_at_fifth_final_batch_with_cumulative_request_lim
     assert metadata["final_review_batch"]["index"] == 5
     assert metadata["budget_exhaustion"] == {
         "reason": "time", "elapsed_seconds": 1801, "max_seconds": 1800,
-        "request_count": 26, "max_requests": expected_budget,
+        "request_count": 27, "max_requests": expected_budget,
     }
     if error_code == "creative_budget_exhausted":
         # Historical snapshots did not distinguish request and time limits.
@@ -321,7 +352,7 @@ def test_expired_window_resumes_at_fifth_final_batch_with_cumulative_request_lim
     result, meta = resumed.run()
     assert len(result["ideas"]) == 3
     assert resumed.budget.max_seconds == 90 * 60
-    assert meta["request_count"] == 31
+    assert meta["request_count"] == 32
     assert resumed.budget.max_requests == expected_budget
     assert len(recovery.wire_calls) == 5
     assert [json.loads(c["user_prompt"])["input"]["batch"]["index"] for c in recovery.wire_calls] == [5, 6, 7, 8, 9]
@@ -349,7 +380,7 @@ def test_time_exhausted_task_api_exposes_resume_and_reuses_saved_final_batch(env
     assert response.status_code == 202, response.text
     child = env.client.get(f"/api/xhs/creative/runs/{response.json()['id']}", headers=env.headers).json()
     assert child["status"] == "completed"
-    assert child["payload"]["pipeline"]["request_count"] == 13
+    assert child["payload"]["pipeline"]["request_count"] == 14
     assert len(recovery.wire_calls) == 1
     assert json.loads(recovery.wire_calls[0]["user_prompt"])["input"]["batch"]["index"] == 2
     assert child["payload"]["pipeline"]["stages"]["final_review"]["metadata"]["final_review_reused_batches"] == 1

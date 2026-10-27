@@ -17,7 +17,13 @@ LEGACY_TAG_SCHEMA_MARKERS = (
 TARGETED_REVISION_MARKERS = (
     "未列入返工范围的已通过内容必须原样保留",
 )
-SINGLE_ROLES = {"sample_analysis", "audience", "image", "final_review"}
+SAMPLE_REVIEW_MARKERS = (
+    "未获原文语义支持",
+    "样本评审必须逐条覆盖",
+    "评审来源必须来自该结论已绑定",
+    "判为有依据时必须至少给出一个有效来源",
+)
+SINGLE_ROLES = {"sample_analysis", "sample_review", "audience", "image", "final_review"}
 ALL_ROLES = SINGLE_ROLES | {"topic", "topic_review", "title", "title_review", "copy", "copy_review"}
 
 
@@ -30,7 +36,11 @@ def prepare_resume(task):
         if payload.get("analysis", {}).get("workflow") != "langgraph":
             raise ValueError("not LangGraph")
         state = deepcopy(payload["graph_state"])
-        if set(state) != set(CreativeGraphState.__annotations__):
+        expected_fields = set(CreativeGraphState.__annotations__)
+        legacy_fields = expected_fields - {"sample_review"}
+        if set(state) == legacy_fields:
+            state["sample_review"] = None
+        if set(state) != expected_fields:
             raise ValueError("incomplete state")
         pipeline = validate_pipeline_state(state["pipeline"]).model_dump(mode="json")
         stage = pipeline["current_stage"]
@@ -59,10 +69,16 @@ def prepare_resume(task):
                 any(marker in str(attempt.get("error", "")) for marker in TARGETED_REVISION_MARKERS)
                 for attempt in attempts
             )
-            compatible_handoff = legacy_tag_failure or targeted_revision_failure
+            sample_review_failure = item["metadata"].get("failed_role") == "sample_review" and any(
+                any(marker in str(attempt.get("error", "")) for marker in SAMPLE_REVIEW_MARKERS)
+                for attempt in attempts
+            )
+            compatible_handoff = legacy_tag_failure or targeted_revision_failure or sample_review_failure
             if task.error_type != "creative_handoff_invalid" or not compatible_handoff:
                 raise ValueError("not a compatible model failure")
         role = item["metadata"].get("failed_role")
+        if role is None and stage == "sample_analysis":
+            role = "sample_analysis" if state["sample_analysis"] is None else "sample_review"
         if role is None:
             # Older snapshots grouped producers and reviewers into one stage.
             # A committed draft with no pending revision is awaiting its judge.
@@ -70,8 +86,20 @@ def prepare_resume(task):
                 role = stage
             else:
                 role = f"{stage}_review" if state[stage] is not None and stage not in state["revision_plan"] else stage
-        if role not in ALL_ROLES or (role.removesuffix("_review") if role != "final_review" else role) != stage:
+        role_stage = "sample_analysis" if role in {"sample_analysis", "sample_review"} else (
+            role.removesuffix("_review") if role != "final_review" else role
+        )
+        if role not in ALL_ROLES or role_stage != stage:
             raise ValueError("invalid role")
+        if state["sample_review"] is None and state["sample_analysis"] is not None and stage != "sample_analysis":
+            sample_metadata = pipeline["stages"]["sample_analysis"]["metadata"]
+            relevance = sample_metadata.get("sample_relevance", {})
+            selected_count = relevance.get("selected_count", len(state["sources"]))
+            batch_cache = sample_metadata.get("sample_analysis_batches", {})
+            if selected_count > 3 and not batch_cache.get("results"):
+                role = "sample_analysis"
+            else:
+                role = "sample_review"
         if pipeline["request_count"] >= pipeline["max_requests"]:
             if task.error_type != INTERRUPTED_CODE:
                 raise ValueError("request budget exhausted")

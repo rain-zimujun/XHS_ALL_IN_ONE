@@ -20,7 +20,8 @@ from test_creative_workflow import WorkflowCompletion
 class GraphCompletion(WorkflowCompletion):
     """Use the existing independent synthetic outputs with the new wire schema."""
     NAMES = {
-        "SampleAnalysisResponse": "SampleAnalysis", "AudienceGroupingResponse": "AudienceBrief", "AudienceNeedsResponse": "AudienceBrief",
+        "SampleAnalysisResponse": "SampleAnalysis", "SampleReviewResponse": "SampleReviewResponse",
+        "AudienceGroupingResponse": "AudienceBrief", "AudienceNeedsResponse": "AudienceBrief",
         "TopicResponse": "TopicBrief", "TopicReviewResponse": "TopicReviewResponse",
         "TitleResponse": "TitleCandidates", "CopyResponse": "CopyVariants", "ImageResponse": "ImagePlans",
         "TitleReviewResponse": "ItemReviewResponse", "CopyReviewResponse": "ItemReviewResponse", "FinalReviewResponse": "ItemReviewResponse",
@@ -34,6 +35,20 @@ class GraphCompletion(WorkflowCompletion):
         self.wire_calls.append(copy.deepcopy(kwargs))
         prompt, end = json.JSONDecoder().raw_decode(kwargs["user_prompt"])
         wire_name = kwargs["response_format"]["json_schema"]["name"]
+        if wire_name == "SampleReviewResponse":
+            role = "sample_review"
+            self.calls.append((role, prompt, kwargs))
+            self.counts[role] += 1
+            if role == self.timeout_stage:
+                raise requests.ReadTimeout("secret-transport-details")
+            output = {"decisions": [
+                {"claim_id": claim["claim_id"], "supported": True,
+                 "note_ids": claim["candidate_note_ids"][:1], "reason": "来源内容支持该归纳。"}
+                for claim in prompt["input"]["claims"]
+            ]}
+            if self.fail_stage == role and (self.always or self.counts[role] == 1):
+                output["decisions"].pop()
+            return json.dumps(output, ensure_ascii=False)
         prompt.setdefault("output_schema", copy.deepcopy(kwargs["response_format"]["json_schema"]["schema"]))
         prompt["output_schema"]["title"] = self.NAMES[prompt["output_schema"]["title"]]
         raw = super().__call__(**{**kwargs, "user_prompt": json.dumps(prompt, ensure_ascii=False) + kwargs["user_prompt"][end:]})
@@ -102,7 +117,9 @@ def test_graph_executes_ten_roles_and_persists_serializable_global_state(count, 
     assert len(result["ideas"]) == count
     assert all(len(i["variants"]) == variants for i in result["ideas"])
     assert metadata["workflow"] == "langgraph"
-    assert len(model.calls) == metadata["request_count"] == 7 + 2 * count + 2 * count * variants
+    assert len(model.calls) == metadata["request_count"] == 8 + 2 * count + 2 * count * variants
+    assert w.state["sample_review"]["status"] == "passed"
+    assert w.state["pipeline"]["stages"]["sample_analysis"]["metadata"]["quality_review_status"] == "passed"
     assert saved[-1]["result"] == result
     assert saved[-1]["pipeline"]["status"] == "completed"
     assert saved[-1]["revision_plan"] == {}
@@ -121,6 +138,8 @@ def test_graph_routes_sample_preprocessing_to_its_dedicated_model_only():
     assert preprocess_model.wire_calls
     assert all(call["response_format"]["json_schema"]["name"] == "SampleAnalysisResponse"
                for call in preprocess_model.wire_calls)
+    assert any(call["response_format"]["json_schema"]["name"] == "SampleReviewResponse"
+               for call in creative_model.wire_calls)
     assert all(call["response_format"]["json_schema"]["name"] != "SampleAnalysisResponse"
                for call in creative_model.wire_calls)
     assert len(preprocess_model.calls) + len(creative_model.calls) == w.budget.request_count
@@ -164,6 +183,41 @@ def test_sample_preprocessing_runs_at_most_three_batches_concurrently_and_merges
     assert len(result["ideas"]) == 1
 
 
+def test_sample_evidence_reviews_run_at_most_three_batches_concurrently():
+    class ConcurrentReviewer(GraphCompletion):
+        def __init__(self):
+            super().__init__()
+            self.lock = Lock()
+            self.in_flight = 0
+            self.max_in_flight = 0
+
+        def __call__(self, **kwargs):
+            if kwargs["response_format"]["json_schema"]["name"] == "SampleReviewResponse":
+                with self.lock:
+                    self.in_flight += 1
+                    self.max_in_flight = max(self.max_in_flight, self.in_flight)
+                sleep(0.03)
+                try:
+                    return super().__call__(**kwargs)
+                finally:
+                    with self.lock:
+                        self.in_flight -= 1
+            return super().__call__(**kwargs)
+
+    model = ConcurrentReviewer()
+    w = LangGraphWorkflow(search=SEARCH, sources=sources(11),
+                          options={"model_id": 1, "idea_count": 1, "variant_count": 2}, complete=model)
+
+    result, _ = w.run()
+
+    review_calls = [call for call in model.wire_calls
+                    if call["response_format"]["json_schema"]["name"] == "SampleReviewResponse"]
+    assert len(review_calls) == 4
+    assert 1 < model.max_in_flight <= 3
+    assert w.state["sample_review"]["status"] == "passed"
+    assert len(result["ideas"]) == 1
+
+
 def test_graph_full_chain_normalizes_title_review_blocking_severity_without_retry():
     class LowScoreSuggestion(GraphCompletion):
         def __call__(self, **kwargs):
@@ -188,7 +242,7 @@ def test_graph_full_chain_normalizes_title_review_blocking_severity_without_retr
     assert len(result["ideas"]) == 1
     assert all(len(idea["variants"]) == 2 for idea in result["ideas"])
     assert model.counts["title_review"] == 1
-    assert metadata["request_count"] == 13
+    assert metadata["request_count"] == 14
 
 
 def test_graph_title_revision_restores_approved_candidates_changed_by_model():
@@ -291,7 +345,7 @@ def test_conditional_review_edge_returns_to_producer_and_only_revises_failed_ite
     w = workflow(model, 3, 3)
     result, _ = w.run()
     assert len(result["ideas"]) == 3
-    assert len(model.calls) == (33 if stage == "TopicReviewResponse" else 35)
+    assert len(model.calls) == (34 if stage == "TopicReviewResponse" else 36)
     producer = {"TopicReviewResponse": "topic", "title_review": "title", "copy_review": "copy"}[stage]
     item = w.state["pipeline"]["stages"][producer]
     assert item["quality_revisions"] == 1
@@ -329,11 +383,11 @@ def test_exhausted_review_cycle_stops_with_drafts_and_no_final_result(stage, own
 
 def test_budget_and_timeout_stop_without_further_requests_and_preserve_global_outputs():
     model = GraphCompletion()
-    w = workflow(model, max_requests=3)
+    w = workflow(model, max_requests=4)
     with pytest.raises(CreativeError) as caught:
         w.run()
     assert caught.value.code == "creative_budget_exhausted"
-    assert len(model.calls) == w.state["pipeline"]["request_count"] == 3
+    assert len(model.calls) == w.state["pipeline"]["request_count"] == 4
     assert w.state["audience"] and w.state["topic"] is None and w.state["result"] is None
     model = GraphCompletion(timeout_stage="CopyVariants")
     w = workflow(model)
@@ -389,7 +443,86 @@ def test_parallel_sample_analysis_persists_completed_batches_and_resume_retries_
     assert len(sample_calls) == 1
     assert [json.loads(call["user_prompt"])["input"]["batch"]["index"] for call in sample_calls] == [2]
     # The split sample run also uses one-object title/copy reviews downstream.
-    assert pipeline_metadata["request_count"] == 21
+    assert pipeline_metadata["request_count"] == 24
+
+
+def test_failed_sample_review_resumes_only_unreviewed_batch():
+    notes = sources(7)
+    peers_saved = Event()
+    model = GraphCompletion()
+
+    def fail_second_review_batch(**kwargs):
+        prompt = json.loads(kwargs["user_prompt"])
+        if kwargs["response_format"]["json_schema"]["name"] == "SampleReviewResponse":
+            index = prompt["input"]["batch"]["index"]
+            if index == 2:
+                assert peers_saved.wait(5)
+                raise CreativeError("模型服务返回错误（HTTP 401）", "ai_http_error", http_status=401)
+        return model(**kwargs)
+
+    def save_checkpoint(state):
+        cached = state["pipeline"]["stages"]["sample_analysis"]["metadata"].get("sample_review_batches", {}).get("results", {})
+        if len(cached) >= 2:
+            peers_saved.set()
+
+    original = LangGraphWorkflow(search=SEARCH, sources=notes,
+                                 options={"model_id": 1, "workflow": "langgraph", "idea_count": 1, "variant_count": 2},
+                                 complete=fail_second_review_batch, on_graph_state=save_checkpoint)
+    with pytest.raises(CreativeError):
+        original.run()
+    saved = copy.deepcopy(original.state)
+    metadata = saved["pipeline"]["stages"]["sample_analysis"]["metadata"]
+    assert saved["sample_analysis"] is not None and saved["sample_review"] is None
+    assert saved["pipeline"]["stages"]["sample_analysis"]["metadata"]["failed_role"] == "sample_review"
+    assert len(metadata["sample_review_batches"]["results"]) == 2
+    task = SimpleNamespace(status="failed", error_type="ai_http_error", payload={
+        "analysis": saved["options"], "search": saved["search"], "sources": saved["sources"], "graph_state": saved,
+    })
+    restored, role = prepare_resume(task)
+    recovery_model = GraphCompletion()
+    resumed = LangGraphWorkflow(search=restored["search"], sources=restored["sources"], options=restored["options"],
+                                complete=recovery_model, resume_state=restored, resume_role=role)
+
+    result, _ = resumed.run()
+
+    review_calls = [call for call in recovery_model.wire_calls
+                    if call["response_format"]["json_schema"]["name"] == "SampleReviewResponse"]
+    sample_calls = [call for call in recovery_model.wire_calls
+                    if call["response_format"]["json_schema"]["name"] == "SampleAnalysisResponse"]
+    assert role == "sample_review"
+    assert len(review_calls) == 1
+    assert json.loads(review_calls[0]["user_prompt"])["input"]["batch"]["index"] == 2
+    assert sample_calls == []
+    assert resumed.state["sample_review"]["status"] == "passed"
+    assert result["ideas"]
+
+
+def test_semantically_rejected_sample_claim_can_resume_at_sample_review():
+    model = GraphCompletion()
+
+    def reject_claim(**kwargs):
+        raw = model(**kwargs)
+        if kwargs["response_format"]["json_schema"]["name"] == "SampleReviewResponse":
+            output = json.loads(raw)
+            output["decisions"][0].update(supported=False, note_ids=[], reason="来源材料不能支持这个概括。")
+            return json.dumps(output, ensure_ascii=False)
+        return raw
+
+    w = workflow(reject_claim)
+    with pytest.raises(CreativeError) as caught:
+        w.run()
+
+    assert caught.value.code == "creative_handoff_invalid"
+    assert w.state["sample_review"] is None and w.state["audience"] is None
+    assert w.state["pipeline"]["stages"]["sample_analysis"]["metadata"]["failed_role"] == "sample_review"
+    saved = copy.deepcopy(w.state)
+    saved["options"]["workflow"] = "langgraph"
+    task = SimpleNamespace(status="failed", error_type="creative_handoff_invalid", payload={
+        "analysis": saved["options"], "search": saved["search"], "sources": saved["sources"], "graph_state": saved,
+    })
+    restored, role = prepare_resume(task)
+    assert role == "sample_review"
+    assert restored["sample_analysis"] is not None
 
 
 def test_sample_relevance_filter_preserves_raw_sources_and_batches_only_selected_notes():

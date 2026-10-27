@@ -26,7 +26,7 @@ def test_review_input_contains_claims_and_only_current_batch_source_text():
                                   "body_segments": item["body_segments"], "relevance_tier": item["relevance_tier"]}
                                  for item in payload["sources"]]
     assert len(review["claims"]) > len(analysis.observations)
-    assert [claim["claim_id"] for claim in review["claims"]] == [f"claim_{i:03d}" for i in range(1, len(review["claims"]) + 1)]
+    assert [claim["claim_id"] for claim in review["claims"]] == [f"claim_001_{i:03d}" for i in range(1, len(review["claims"]) + 1)]
 
 
 def test_response_schema_binds_claim_ids_and_sources_as_literals():
@@ -34,7 +34,7 @@ def test_response_schema_binds_claim_ids_and_sources_as_literals():
     review_payload = prepare_sample_review_input(SampleAnalysis.model_validate(valid_output(payload)), payload)
     schema = response_parameter(sample_review_response_type(review_payload))["json_schema"]["schema"]
     serialized = str(schema)
-    assert "claim_001" in serialized
+    assert "claim_001_001" in serialized
     assert "sample-0" in serialized
     assert "unknown" not in serialized
 

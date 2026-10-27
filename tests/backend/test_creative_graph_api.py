@@ -29,7 +29,7 @@ def test_langgraph_api_saves_global_state_and_compatible_reports_with_ownership(
     assert payload["graph_state"]["pipeline"] == payload["pipeline"]
     assert payload["graph_state"]["final_review"]["status"] == "passed"
     assert len(payload["result"]["ideas"]) == count
-    assert len(model.wire_calls) == payload["pipeline"]["request_count"] == 7 + 2 * count + 2 * count * variants
+    assert len(model.wire_calls) == payload["pipeline"]["request_count"] == 8 + 2 * count + 2 * count * variants
     assert all(c["timeout"] == (10, 180) for c in model.wire_calls)
     assert "fixture-key-private" not in json.dumps(result)
     assert "test=fixture" not in json.dumps(result)
@@ -46,7 +46,7 @@ def test_langgraph_api_saves_global_state_and_compatible_reports_with_ownership(
         else:
             assert "终审评分：8.00 分 · 通过" in response.text
     assert env.client.post(f"/api/xhs/creative/runs/{result['id']}/export", headers=env.headers).status_code == 200
-    assert len(model.calls) == 7 + 2 * count + 2 * count * variants
+    assert len(model.calls) == 8 + 2 * count + 2 * count * variants
 
 
 def test_saved_collection_can_switch_to_graph_without_recrawling_or_changing_old_task(env):
@@ -95,7 +95,7 @@ def test_failed_api_task_keeps_global_drafts_and_specific_error_code(env, failur
     assert "result" not in result["payload"]
     assert result["payload"]["graph_state"]["result"] is None
     assert result["payload"]["graph_state"]["pipeline"] == result["payload"]["pipeline"]
-    assert len(model.calls) == (21 if failure == "quality" else 11 if failure == "timeout" else 2)
+    assert len(model.calls) == (22 if failure == "quality" else 12 if failure == "timeout" else 2)
     if failure in ("quality", "timeout"):
         assert result["payload"]["graph_state"]["title_review"]["status"] == "passed"
     else:
@@ -173,7 +173,7 @@ def test_all_graph_roles_and_revision_send_native_schema_in_actual_http_body(mon
             base_url="https://example.invalid/v1", model_name="mock",
         ), api_key="fixture-private", **kwargs)
     _, metadata = workflow(complete).run()
-    assert len(seen) == metadata["request_count"] == 15
+    assert len(seen) == metadata["request_count"] == 16
     assert {c["response_format"]["json_schema"]["name"] for c in seen} == set(GraphCompletion.NAMES)
 
 

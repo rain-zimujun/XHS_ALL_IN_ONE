@@ -32,6 +32,7 @@ class CreativeGraphState(TypedDict):
     sources: list[dict[str, Any]]
     options: dict[str, Any]
     sample_analysis: SampleAnalysisResponse | None
+    sample_review: dict[str, Any] | None
     audience: AudienceResponse | None
     topic: TopicResponse | None
     topic_review: dict[str, Any] | None
@@ -54,6 +55,10 @@ class NodeUpdate(TypedDict, total=False):
 
 class SampleUpdate(NodeUpdate, total=False):
     sample_analysis: SampleAnalysisResponse
+
+
+class SampleReviewUpdate(NodeUpdate, total=False):
+    sample_review: dict[str, Any]
 
 
 class AudienceUpdate(NodeUpdate, total=False):

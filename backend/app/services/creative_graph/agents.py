@@ -11,6 +11,7 @@ from pydantic import BaseModel, ValidationError
 from backend.app.schemas import creative_agents as legacy
 from backend.app.schemas import creative_graph as responses
 from backend.app.services.creative_agents.sample_analysis import SAMPLE_AGENT
+from backend.app.services.creative_agents.sample_review import SAMPLE_REVIEW_AGENT
 from backend.app.services.creative_agents.reader_needs import AUDIENCE_AGENT
 from backend.app.services.creative_agents.topic_selection import TOPIC_AGENT
 from backend.app.services.creative_agents.topic_review import TOPIC_REVIEW_AGENT
@@ -28,6 +29,7 @@ from backend.app.services.creative_graph.context import production_context
 from backend.app.services.creative_graph.review_schema import item_review_response_type, title_review_response_type
 from backend.app.services.creative_graph.review_schema import topic_review_response_type
 from backend.app.services.creative_graph.sample_schema import sample_response_type
+from backend.app.services.creative_graph.sample_review_schema import sample_review_response_type
 from backend.app.services.creative_graph.source_schema import copy_response_type, topic_response_type
 from backend.app.services.creative_diagnostics import capture_model_quotes, diagnostic_event, exception_details, failed_quote_diagnostic, validation_summary
 
@@ -100,7 +102,7 @@ class StructuredAgent:
                 "item_count": len(payload.get("items", payload.get("locked_copies", []))), "rubric_count": len(payload.get("rubric", [])),
                 "score_count": len(payload.get("items", [])) * len(payload.get("rubric", [])),
             }
-            if "batch" in payload:
+            if isinstance(payload.get("batch"), dict):
                 context.update(batch_index=payload["batch"]["index"], batch_count=payload["batch"]["count"])
             diagnostic_event("模型调用开始", **context, **size_details)
             kind = "creative_schema_invalid"
@@ -169,6 +171,7 @@ def build_agents(model: CompatibleChatModel) -> dict[str, StructuredAgent]:
     # models below are adapters for the existing deterministic business checks.
     return {
         "sample_analysis": StructuredAgent(model, SAMPLE_AGENT, response_format=responses.SampleAnalysisResponse, output_model=legacy.SampleAnalysis, response_format_factory=sample_response_type),
+        "sample_review": StructuredAgent(model, SAMPLE_REVIEW_AGENT, response_format=responses.SampleReviewResponse, output_model=legacy.SampleReviewResponse, response_format_factory=sample_review_response_type),
         "audience": StructuredAgent(model, AUDIENCE_AGENT, response_format=responses.AudienceResponse, output_model=legacy.AudienceBrief),
         "topic": StructuredAgent(model, production_spec(TOPIC_AGENT), response_format=responses.TopicResponse, output_model=legacy.TopicBrief, include_prompt_schema=False, input_projection=partial(production_context, "topic"), response_format_factory=topic_response_type),
         "topic_review": StructuredAgent(model, TOPIC_REVIEW_AGENT, response_format=responses.TopicReviewResponse, output_model=legacy.TopicReviewResponse, state_fields=("topic_revision", "input_fingerprint"), include_prompt_schema=False, response_format_factory=topic_review_response_type),

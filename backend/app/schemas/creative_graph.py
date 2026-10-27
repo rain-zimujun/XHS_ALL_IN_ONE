@@ -69,6 +69,21 @@ class SampleAnalysisResponse(TypedDict):
 
 
 @strict_response
+class SampleClaimDecisionResponse(TypedDict):
+    claim_id: Annotated[str, Field(min_length=1, max_length=40)]
+    supported: bool
+    note_ids: Annotated[list[NoteId], Field(max_length=8)]
+    reason: Text
+
+
+@strict_response
+class SampleReviewResponse(TypedDict):
+    """Per-claim semantic evidence review; IDs are batch-bound at runtime."""
+
+    decisions: Annotated[list[SampleClaimDecisionResponse], Field(min_length=1, max_length=80)]
+
+
+@strict_response
 class AudienceEvidence(TypedDict):
     basis: Literal["sample_evidence", "user_requirement", "hypothesis"]
     note_ids: Annotated[list[NoteId], Field(max_length=8)]

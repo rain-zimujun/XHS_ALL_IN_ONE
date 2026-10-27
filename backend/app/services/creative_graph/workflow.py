@@ -22,6 +22,7 @@ from backend.app.services.creative_agents import (
     sample_analysis, reader_needs, topic_selection, topic_review, title_generation,
     title_review, copy_generation, copy_review, image_planning, final_review,
 )
+from backend.app.services.creative_agents import sample_review
 from backend.app.services.creative_agents.sample_relevance import (
     FILTER_VERSION, filter_sample_sources, require_minimum_samples,
 )
@@ -46,7 +47,7 @@ from backend.app.services.creative_graph.visual_batches import (
 )
 from backend.app.services.creative_graph.state import (
     AudienceUpdate, CopyReviewUpdate, CopyUpdate, CreativeGraphState, FinalReviewUpdate,
-    ImageUpdate, ResultUpdate, RevisionPlanUpdate, SampleUpdate, TitleReviewUpdate,
+    ImageUpdate, ResultUpdate, RevisionPlanUpdate, SampleReviewUpdate, SampleUpdate, TitleReviewUpdate,
     TitleUpdate, TopicReviewUpdate, TopicUpdate,
 )
 from backend.app.services.creative_pipeline import new_pipeline_state, utc_now, validate_pipeline_state
@@ -80,7 +81,7 @@ def estimate_graph_request_budget(source_count: int, options: dict) -> int:
     else:
         title_review_calls = idea_count * ceil(candidate_count / 5)
         copy_review_calls = idea_count
-    first_pass = (sample_batches + 2 + 2 + 1 + title_review_calls + 1
+    first_pass = (sample_batches * 2 + 2 + 2 + 1 + title_review_calls + 1
                   + copy_review_calls + idea_count * variant_count * 2)
     return min(MAX_GRAPH_REQUESTS, max(MIN_GRAPH_REQUESTS, first_pass * GRAPH_REQUEST_HEADROOM_MULTIPLIER))
 
@@ -147,7 +148,7 @@ class LangGraphWorkflow:
         pipeline["max_requests"] = max_requests
         self.state: CreativeGraphState = {
             "search": deepcopy(search), "sources": deepcopy(sources), "options": config.model_dump(exclude_none=True),
-            **{k: None for k in ("sample_analysis", "audience", "topic", "topic_review", "title", "title_review", "copy", "copy_review", "image", "final_review", "result")},
+            **{k: None for k in ("sample_analysis", "sample_review", "audience", "topic", "topic_review", "title", "title_review", "copy", "copy_review", "image", "final_review", "result")},
             "pipeline": pipeline, "revision_plan": {}, "metadata": {},
         }
         self.on_state, self.on_graph_state = on_state, on_graph_state
@@ -226,6 +227,7 @@ class LangGraphWorkflow:
         graph = StateGraph(CreativeGraphState)
         nodes = (
             ("sample_analysis", self.sample_node, SampleUpdate), ("audience", self.audience_node, AudienceUpdate),
+            ("sample_review", self.sample_review_node, SampleReviewUpdate),
             ("topic", self.topic_node, TopicUpdate), ("topic_review", self.topic_review_node, TopicReviewUpdate),
             ("title", self.title_node, TitleUpdate), ("title_review", self.title_review_node, TitleReviewUpdate),
             ("copy", self.copy_node, CopyUpdate), ("copy_review", self.copy_review_node, CopyReviewUpdate),
@@ -235,7 +237,8 @@ class LangGraphWorkflow:
         for name, fn, update in nodes:
             graph.add_node(name, self._node(name, fn, update))
         graph.add_conditional_edges(START, lambda _: self.entry_role, {name: name for name in self.agents})
-        graph.add_edge("sample_analysis", "audience")
+        graph.add_edge("sample_analysis", "sample_review")
+        graph.add_edge("sample_review", "audience")
         graph.add_edge("audience", "topic")
         for stage, following in (("topic", "title"), ("title", "copy"), ("copy", "image")):
             graph.add_edge(stage, f"{stage}_review")
@@ -425,6 +428,7 @@ class LangGraphWorkflow:
                 )
                 return batch["input_fingerprint"], run
 
+            runs = []
             if pending:
                 futures = {}
                 first_error = None
@@ -443,6 +447,7 @@ class LangGraphWorkflow:
                                     queued.cancel()
                             break
                         outputs_by_key[key] = run.output
+                        runs.append(run)
                         cache["results"][key] = run.output.model_dump(mode="json")
                         stage_metadata["sample_completed_batches"] = len(cache["results"])
                         self._checkpoint(pipeline, f"样本分析 Agent · 已保存批次 {len(outputs_by_key)}/{len(batches)}")
@@ -458,6 +463,7 @@ class LangGraphWorkflow:
                                 continue
                             if key not in outputs_by_key:
                                 outputs_by_key[key] = run.output
+                                runs.append(run)
                                 cache["results"][key] = run.output.model_dump(mode="json")
                                 stage_metadata["sample_completed_batches"] = len(cache["results"])
                                 self._checkpoint(pipeline, "样本分析 Agent · 已保存并行完成批次")
@@ -473,7 +479,154 @@ class LangGraphWorkflow:
         return self._producer(s, "sample_analysis", payload,
                               lambda r: sample_analysis.validate_sample_evidence(r, payload), invoke=invoke)
 
+    def sample_review_node(self, s: CreativeGraphState) -> SampleReviewUpdate:
+        if s["sample_review"] and s["sample_review"].get("status") == "passed":
+            return {"pipeline": self.active_pipeline}
+        filtered_sources, _ = filter_sample_sources(
+            s["sources"], keyword=s["search"]["keyword"], audience=s["options"].get("audience", ""),
+        )
+        batches = sample_analysis.prepare_sample_batches(s["search"], filtered_sources, s["options"])
+        for batch in batches:
+            if "input_fingerprint" in batch:
+                fingerprint_payload = {key: value for key, value in batch.items() if key != "input_fingerprint"}
+                fingerprint_payload["relevance_filter_version"] = FILTER_VERSION
+                batch["input_fingerprint"] = sample_analysis.content_fingerprint(fingerprint_payload)
+        stage = self.active_pipeline["stages"]["sample_analysis"]
+        metadata = stage["metadata"]
+        analysis_cache = metadata.get("sample_analysis_batches", {}).get("results", {})
+        analyses = []
+        for batch in batches:
+            fingerprint = batch.get("input_fingerprint")
+            raw = analysis_cache.get(fingerprint) if fingerprint else s["sample_analysis"]
+            if raw is None:
+                raise CreativeError("找不到待评审的样本分析批次，请从样本分析阶段重新开始。", "creative_sample_review_input_missing")
+            result = sample_analysis.SampleAnalysis.model_validate(raw)
+            sample_analysis.validate_sample_evidence(result, batch)
+            sample_review.validate_sample_claim_coverage(result, batch)
+            analyses.append((batch, result))
+
+        review_batches = [sample_review.prepare_sample_review_input(result, batch) for batch, result in analyses]
+        for batch, review_input in zip(batches, review_batches):
+            review_input["input_fingerprint"] = sample_analysis.content_fingerprint({
+                "version": sample_review.SAMPLE_REVIEW_PROMPT_VERSION,
+                "analysis_fingerprint": batch.get("input_fingerprint"),
+                "review_input": review_input,
+            })
+        cache = metadata.get("sample_review_batches")
+        if (not isinstance(cache, dict) or cache.get("version") != sample_review.SAMPLE_REVIEW_PROMPT_VERSION
+                or cache.get("input_fingerprints") != [item["input_fingerprint"] for item in review_batches]
+                or not isinstance(cache.get("results"), dict)):
+            cache = {"version": sample_review.SAMPLE_REVIEW_PROMPT_VERSION,
+                     "input_fingerprints": [item["input_fingerprint"] for item in review_batches],
+                     "results": {}, "traces": {}}
+        valid_cache = {}
+        for review_input in review_batches:
+            key = review_input["input_fingerprint"]
+            if key not in cache["results"]:
+                continue
+            try:
+                cached = sample_review.SampleReviewResponse.model_validate(cache["results"][key])
+                sample_review.validate_sample_review(cached, review_input)
+                valid_cache[key] = cached
+            except (ValidationError, AgentValidationError):
+                continue
+        cache["results"] = {key: value.model_dump(mode="json") for key, value in valid_cache.items()}
+        cached_traces = cache.get("traces") if isinstance(cache.get("traces"), dict) else {}
+        cache["traces"] = {key: value for key, value in cached_traces.items() if key in valid_cache}
+        metadata["sample_review_batches"] = cache
+        metadata.update(sample_review_batch_count=len(review_batches),
+                        sample_review_completed_batches=len(valid_cache),
+                        sample_review_reused_batches=0, quality_review_status="running")
+        stage.update(status="running", error=None)
+        stage["attempts"].append({"attempt": len(stage["attempts"]) + 1, "started_at": utc_now(),
+                                  "finished_at": None, "status": "running", "error": None})
+        agent = self.agents["sample_review"]
+        review_requests_before = self.budget.request_count
+        pending = [(index, item) for index, item in enumerate(review_batches, 1)
+                   if item["input_fingerprint"] not in valid_cache]
+
+        def process(index, review_input):
+            self.current_role = "sample_review"
+            self._checkpoint(self.active_pipeline, f"样本证据评委 Agent · 批次 {index}/{len(review_batches)}")
+            try:
+                run = agent.invoke(
+                    review_input,
+                    validate_output=lambda result, current=review_input: sample_review.validate_sample_review(result, current),
+                    on_progress=lambda text: self._checkpoint(self.active_pipeline, f"{text} · 批次 {index}/{len(review_batches)}"),
+                )
+            except GraphOutputError as exc:
+                with self._checkpoint_lock:
+                    metadata["failed_attempts"] = [asdict(attempt) for attempt in exc.attempts]
+                raise
+            return review_input["input_fingerprint"], run
+
+        results = dict(valid_cache)
+        metadata["sample_review_reused_batches"] = len(valid_cache)
+        if pending:
+            futures, first_error = {}, None
+            with ThreadPoolExecutor(max_workers=MAX_PARALLEL_BATCHES, thread_name_prefix="creative-sample-review") as executor:
+                for index, review_input in pending:
+                    context = copy_context()
+                    future = executor.submit(context.run, process, index, review_input)
+                    futures[future] = review_input
+                for future in as_completed(futures):
+                    try:
+                        key, run = future.result()
+                    except Exception as exc:
+                        first_error = first_error or exc
+                        for queued in futures:
+                            if queued is not future:
+                                queued.cancel()
+                        break
+                    results[key] = run.output
+                    cache["results"][key] = run.output.model_dump(mode="json")
+                    cache["traces"][key] = [asdict(attempt) for attempt in run.attempts]
+                    metadata["sample_review_completed_batches"] = len(results)
+                    self._checkpoint(self.active_pipeline, f"样本证据评委 Agent · 已保存 {len(results)}/{len(review_batches)} 批")
+                if first_error:
+                    for future, review_input in futures.items():
+                        if future.cancelled() or not future.done():
+                            continue
+                        try:
+                            key, run = future.result()
+                        except Exception:
+                            continue
+                        if key not in results:
+                            results[key] = run.output
+                            cache["results"][key] = run.output.model_dump(mode="json")
+                            cache["traces"][key] = [asdict(attempt) for attempt in run.attempts]
+                            metadata["sample_review_completed_batches"] = len(results)
+                            self._checkpoint(self.active_pipeline, "样本证据评委 Agent · 已保存并行完成批次")
+                    raise first_error
+
+        accepted = []
+        trace_history = []
+        for review_input in review_batches:
+            key = review_input["input_fingerprint"]
+            review = results[key]
+            sample_review.validate_sample_review(review, review_input)
+            accepted.extend(review.decisions)
+            trace_history.extend(cache["traces"].get(key, []))
+        summary = {"status": "passed", "batch_count": len(review_batches), "claim_count": len(accepted),
+                   "input_fingerprints": [item["input_fingerprint"] for item in review_batches]}
+        metadata.update(quality_review_status="passed", sample_review_completed_batches=len(review_batches),
+                        sample_review_request_count=self.budget.request_count - review_requests_before)
+        diagnostic_event("样本语义评审完成", stage="sample_analysis", agent=agent.spec.name,
+                         batch_count=len(review_batches), claim_count=len(accepted),
+                         reused_batches=metadata["sample_review_reused_batches"],
+                         request_count=metadata["sample_review_request_count"])
+        stage["status"] = "completed"
+        stage["attempts"][-1].update(status="completed", finished_at=utc_now())
+        stage["history"].append({"role": "reviewer", "revision": stage["revision"], "output": summary,
+                                  "metadata": {"batch_count": len(review_batches),
+                                               "request_count": metadata["sample_review_request_count"]},
+                                  "traces": trace_history,
+                                  "target_ids": [], "finished_at": utc_now()})
+        return {"sample_review": summary, "pipeline": self.active_pipeline}
+
     def audience_node(self, s: CreativeGraphState) -> AudienceUpdate:
+        if not s["sample_review"] or s["sample_review"].get("status") != "passed":
+            raise CreativeError("样本结论尚未通过证据评审，不能进入读者需求阶段。", "creative_sample_review_required")
         payload = reader_needs.prepare_audience_input(s["search"]["keyword"], s["options"]["audience"] or "内容创作者",
                                                      s["options"]["instruction"] or "围绕样本写自然精简的原创内容。", s["sample_analysis"])
         if s["audience"] is not None:
@@ -667,7 +820,9 @@ class LangGraphWorkflow:
         return update
 
     def result_node(self, s: CreativeGraphState) -> ResultUpdate:
-        if s["revision_plan"] or any(not s[field] or s[field]["status"] != "passed" for field in REVIEW_FIELD.values()):
+        if (not s["sample_review"] or s["sample_review"]["status"] != "passed"
+                or s["revision_plan"]
+                or any(not s[field] or s[field]["status"] != "passed" for field in REVIEW_FIELD.values())):
             self._quality_stop("仍有当前版本的评审未通过。")
         titles = {c["candidate_id"]: c for i in s["title"]["ideas"] for c in i["candidates"]}
         copies = {i["idea_id"]: i for i in s["copy"]["ideas"]}
