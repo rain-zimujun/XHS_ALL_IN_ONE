@@ -39,9 +39,10 @@ from backend.app.services.creative_diagnostics import (
 
 class GraphOutputError(CreativeError):
     def __init__(self, *, kind, attempts):
+        attempt_count = len(attempts)
         message = {
-            "creative_schema_invalid": "模型响应未符合当前 Agent 的结构定义，两次尝试后已停止；此前稿件已保存。",
-            "creative_handoff_invalid": "当前 Agent 的来源、数量或上下游关联未通过检查，两次尝试后已停止；此前稿件已保存。",
+            "creative_schema_invalid": f"模型响应未符合当前 Agent 的结构定义，{attempt_count} 次尝试后已停止；此前稿件已保存。",
+            "creative_handoff_invalid": f"当前 Agent 的来源、数量或上下游关联未通过检查，{attempt_count} 次尝试后已停止；此前稿件已保存。",
         }[kind]
         super().__init__(message, kind)
         self.attempts = attempts
@@ -163,6 +164,13 @@ class StructuredAgent:
                 diagnostic_event("输出校验失败", level="WARNING", **context, duration_ms=traces[-1].duration_ms,
                                  error_code=kind, reason=message, will_retry=attempt < self.spec.max_attempts)
                 repair = f"\n上一次输出未通过校验（{kind}），请按同一 Schema 返回完整对象。修正原因：{message}\n"
+                if self.spec.stage == "sample_analysis" and quote_detail:
+                    repair += (
+                        "引文规则再强调一次：每个 quote 必须从当前输入提供的同一个标题或正文片段中连续复制，"
+                        "保留原有词语与顺序；不得概括、补写、省略拼接或用省略号代替中间内容。"
+                        "如果某个风格维度在原文中没有可直接复制的证据，不要编造该维度；"
+                        "请用至少 8 个连续原文字的短摘录，并确保 note_id 与摘录来自同一篇输入样本。\n"
+                    )
                 if repair_output:
                     envelope["input"] = repair_output(value if value is not None else getattr(exc, "structured_output", None), message)
                     prompt = json.dumps(envelope, ensure_ascii=False)
@@ -178,8 +186,9 @@ class StructuredAgent:
 def build_agents(model: CompatibleChatModel) -> dict[str, StructuredAgent]:
     # Each role binds its own handwritten TypedDict at construction. Pydantic
     # models below are adapters for the existing deterministic business checks.
+    sample_agent = replace(SAMPLE_AGENT, max_attempts=3)
     return {
-        "sample_analysis": StructuredAgent(model, SAMPLE_AGENT, response_format=responses.SampleAnalysisResponse, output_model=legacy.SampleAnalysis, response_format_factory=sample_response_type),
+        "sample_analysis": StructuredAgent(model, sample_agent, response_format=responses.SampleAnalysisResponse, output_model=legacy.SampleAnalysis, response_format_factory=sample_response_type),
         "sample_review": StructuredAgent(model, SAMPLE_REVIEW_AGENT, response_format=responses.SampleReviewResponse, output_model=legacy.SampleReviewResponse, response_format_factory=sample_review_response_type),
         "audience": StructuredAgent(model, AUDIENCE_AGENT, response_format=responses.AudienceResponse, output_model=legacy.AudienceBrief),
         "topic": StructuredAgent(model, production_spec(TOPIC_AGENT), response_format=responses.TopicResponse, output_model=legacy.TopicBrief, include_prompt_schema=False, input_projection=partial(production_context, "topic"), response_format_factory=topic_response_type),

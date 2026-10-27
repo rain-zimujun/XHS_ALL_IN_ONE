@@ -768,5 +768,5 @@ def test_distinct_output_failure_reason_is_saved_in_global_state(kind):
     with pytest.raises(CreativeError) as caught:
         w.run()
     assert caught.value.code == w.state["pipeline"]["error_code"] == f"creative_{kind}_invalid"
-    assert len(model.calls) == 2 and w.state["audience"] is None
-    assert len(w.state["pipeline"]["stages"]["sample_analysis"]["metadata"]["failed_attempts"]) == 2
+    assert len(model.calls) == 3 and w.state["audience"] is None
+    assert len(w.state["pipeline"]["stages"]["sample_analysis"]["metadata"]["failed_attempts"]) == 3
