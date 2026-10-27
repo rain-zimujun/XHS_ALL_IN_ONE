@@ -170,8 +170,8 @@ def test_failed_batch_resume_reuses_only_current_valid_judgements(cache_fault):
     saved["options"]["workflow"] = "langgraph"
     metadata = saved["pipeline"]["stages"]["copy"]["metadata"]
     cache = metadata["copy_review_batches"]
-    assert len(cache["results"]) == 1
-    assert metadata["copy_review_completed_batches"] == 1
+    assert 1 <= len(cache["results"]) < 3
+    assert metadata["copy_review_completed_batches"] == len(cache["results"])
     assert metadata["failed_role"] == "copy_review"
     if cache_fault in ("version", "fingerprint"):
         cache["version" if cache_fault == "version" else "input_fingerprint"] = "stale"
@@ -193,12 +193,19 @@ def test_failed_batch_resume_reuses_only_current_valid_judgements(cache_fault):
     assert len(result["ideas"]) == 3
     assert all(len(i["variants"]) == 3 for i in result["ideas"])
     calls = [c for c in recovery.wire_calls if c["response_format"]["json_schema"]["name"] == "CopyReviewResponse"]
-    assert [json.loads(c["user_prompt"])["input"]["batch"]["index"] for c in calls] == ([2, 3] if cache_fault is None else [1, 2, 3])
+    valid_cached = len(cache["results"])
+    if cache_fault in ("version", "fingerprint", "shape", "results_shape"):
+        valid_cached = 0
+    elif cache_fault == "review":
+        valid_cached -= 1
+    indices = [json.loads(c["user_prompt"])["input"]["batch"]["index"] for c in calls]
+    assert len(calls) == 3 - valid_cached
+    assert len(set(indices)) == len(indices)
     assert recovery.counts["CopyVariants"] == 0
     for field in ("sample_analysis", "audience", "topic", "title", "title_review", "copy"):
         assert resumed.state[field] == saved[field]
     final_metadata = resumed.state["pipeline"]["stages"]["copy"]["metadata"]
-    assert final_metadata["copy_review_reused_batches"] == (1 if cache_fault is None else 0)
+    assert final_metadata["copy_review_reused_batches"] == valid_cached
     assert final_metadata["copy_review_completed_batches"] == 3
     assert task.payload == before
 

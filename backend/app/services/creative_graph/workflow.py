@@ -16,7 +16,6 @@ from pydantic import ValidationError
 
 from backend.app.core.security import decrypt_text
 from backend.app.schemas.creative import CreativeAnalysisOptions, CreativeAnalysisResult
-from backend.app.schemas.creative_agents import ItemReviewResponse
 from backend.app.services.creative_analysis import CreativeError, owned_text_model, request_analysis
 from backend.app.services.creative_agents import (
     sample_analysis, reader_needs, topic_selection, topic_review, title_generation,
@@ -682,46 +681,17 @@ class LangGraphWorkflow:
         )
 
         def invoke(agent, original_payload, validator, pipeline, revision):
-            metadata = pipeline["stages"]["title"]["metadata"]
-            cache = metadata.get("title_review_batches", {})
-            if cache.get("input_fingerprint") != payload["input_fingerprint"] or cache.get("version") != TITLE_REVIEW_VERSION:
-                cache = {"version": TITLE_REVIEW_VERSION, "input_fingerprint": payload["input_fingerprint"], "results": {}}
-            metadata["title_review_batches"] = cache
-            metadata["title_review_batch_count"] = len(batches)
-            metadata["title_review_reused_batches"] = 0
-            metadata["title_review_completed_batches"] = len(cache["results"])
-            results, traces = [], []
-            for index, batch in enumerate(batches, start=1):
-                fingerprint = batch["input_fingerprint"]
-                metadata["title_review_batch"] = {"index": index, "count": len(batches), "item_count": len(batch["items"])}
-                raw = cache["results"].get(fingerprint)
-                if raw is not None:
-                    try:
-                        stored = ItemReviewResponse.model_validate(raw)
-                        decide_review(stored, batch)
-                    except (ValidationError, AgentValidationError):
-                        cache["results"].pop(fingerprint)
-                        metadata["title_review_completed_batches"] = len(cache["results"])
-                    else:
-                        results.append(stored)
-                        metadata["title_review_reused_batches"] += 1
-                        diagnostic_event("复用标题评审批次", stage="title", agent=agent.spec.name,
-                                         batch_index=index, batch_count=len(batches), item_count=len(batch["items"]))
-                        continue
-                self._checkpoint(pipeline, f"标题评委 Agent · 评审批次 {index}/{len(batches)}")
-                run = agent.invoke(
-                    batch,
-                    validate_output=lambda raw, current=batch: decide_review(raw, current),
-                    on_progress=lambda text: self._checkpoint(pipeline, f"{text} · 批次 {index}/{len(batches)}"),
-                )
-                results.append(run.output)
-                traces.extend(run.attempts)
-                cache["results"][fingerprint] = run.output.model_dump(mode="json")
-                metadata["title_review_completed_batches"] = len(cache["results"])
-                self._checkpoint(pipeline, f"标题评委 Agent · 已完成 {index}/{len(batches)} 批")
-            merged = merge_title_review_results(results, original_payload)
-            validator(merged)
-            return AgentRun(stage=agent.spec.stage, name=agent.spec.name, output=merged, attempts=tuple(traces))
+            run = run_batches(
+                agent=agent, payload=original_payload, batches=batches,
+                metadata=pipeline["stages"]["title"]["metadata"], prefix="title_review",
+                version=TITLE_REVIEW_VERSION,
+                validate=decide_review,
+                merge=lambda results: merge_title_review_results(results, original_payload),
+                checkpoint=lambda text: self._checkpoint(pipeline, text),
+                max_workers=MAX_PARALLEL_BATCHES, state_lock=self._checkpoint_lock,
+            )
+            validator(run.output)
+            return run
 
         return self._reviewer(s, "title", payload, transform=title_review.select_titles, invoke=invoke)
 
@@ -737,49 +707,17 @@ class LangGraphWorkflow:
         )
 
         def invoke(agent, original_payload, validator, pipeline, revision):
-            metadata = pipeline["stages"]["copy"]["metadata"]
-            cache = metadata.get("copy_review_batches")
-            if (not isinstance(cache, dict) or cache.get("version") != COPY_REVIEW_VERSION
-                    or cache.get("input_fingerprint") != payload["input_fingerprint"]
-                    or not isinstance(cache.get("results"), dict)):
-                cache = {"version": COPY_REVIEW_VERSION, "input_fingerprint": payload["input_fingerprint"], "results": {}}
-            metadata["copy_review_batches"] = cache
-            # Revalidate every cached response against its current batch before
-            # counting it as complete or allowing a downstream handoff.
-            for batch in batches:
-                key = batch["input_fingerprint"]
-                if key in cache["results"]:
-                    try:
-                        decide_review(ItemReviewResponse.model_validate(cache["results"][key]), batch)
-                    except (ValidationError, AgentValidationError):
-                        cache["results"].pop(key)
-            known = {batch["input_fingerprint"] for batch in batches}
-            cache["results"] = {key: value for key, value in cache["results"].items() if key in known}
-            metadata.update(copy_review_batch_count=len(batches), copy_review_reused_batches=0,
-                            copy_review_completed_batches=len(cache["results"]))
-            results, traces = [], []
-            for index, batch in enumerate(batches, 1):
-                fingerprint = batch["input_fingerprint"]
-                metadata["copy_review_batch"] = {"index": index, "count": len(batches),
-                                                 "item_count": len(batch["items"])}
-                raw = cache["results"].get(fingerprint)
-                if raw is not None:
-                    results.append(ItemReviewResponse.model_validate(raw))
-                    metadata["copy_review_reused_batches"] += 1
-                    diagnostic_event("复用正文评审批次", stage="copy", agent=agent.spec.name,
-                                     batch_index=index, batch_count=len(batches), item_count=len(batch["items"]))
-                    continue
-                self._checkpoint(pipeline, f"文案评委 Agent · 评审批次 {index}/{len(batches)}")
-                run = agent.invoke(batch, validate_output=lambda raw, current=batch: decide_review(raw, current),
-                                   on_progress=lambda text: self._checkpoint(pipeline, f"{text} · 批次 {index}/{len(batches)}"))
-                results.append(run.output)
-                traces.extend(run.attempts)
-                cache["results"][fingerprint] = run.output.model_dump(mode="json")
-                metadata["copy_review_completed_batches"] = len(cache["results"])
-                self._checkpoint(pipeline, f"文案评委 Agent · 已完成 {index}/{len(batches)} 批")
-            merged = merge_copy_review_results(results, original_payload)
-            validator(merged)
-            return AgentRun(stage=agent.spec.stage, name=agent.spec.name, output=merged, attempts=tuple(traces))
+            run = run_batches(
+                agent=agent, payload=original_payload, batches=batches,
+                metadata=pipeline["stages"]["copy"]["metadata"], prefix="copy_review",
+                version=COPY_REVIEW_VERSION,
+                validate=decide_review,
+                merge=lambda results: merge_copy_review_results(results, original_payload),
+                checkpoint=lambda text: self._checkpoint(pipeline, text),
+                max_workers=MAX_PARALLEL_BATCHES, state_lock=self._checkpoint_lock,
+            )
+            validator(run.output)
+            return run
 
         return self._reviewer(s, "copy", payload, invoke=invoke)
 

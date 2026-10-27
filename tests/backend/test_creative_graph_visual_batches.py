@@ -248,7 +248,7 @@ def test_run_batches_resume_skips_every_successful_parallel_batch():
     assert [item.value for item in result.output] == list(range(6))
 
 
-def test_image_and_final_review_nodes_use_shared_parallel_limit(monkeypatch):
+def test_independent_review_and_visual_nodes_use_shared_parallel_limit(monkeypatch):
     configured = {}
     original = workflow_module.run_batches
 
@@ -260,7 +260,12 @@ def test_image_and_final_review_nodes_use_shared_parallel_limit(monkeypatch):
     result, _ = workflow(GraphCompletion()).run()
 
     assert result
-    assert configured == {"image": MAX_PARALLEL_BATCHES, "final_review": MAX_PARALLEL_BATCHES}
+    assert configured == {
+        "title_review": MAX_PARALLEL_BATCHES,
+        "copy_review": MAX_PARALLEL_BATCHES,
+        "image": MAX_PARALLEL_BATCHES,
+        "final_review": MAX_PARALLEL_BATCHES,
+    }
 
 
 def test_image_revision_calls_only_target_variant_with_local_feedback_and_preserves_other_images():

@@ -372,7 +372,7 @@ def test_title_review_resume_reuses_only_valid_batches_and_keeps_context_compact
     with pytest.raises(CreativeError):
         original.run()
     cache = original.state["pipeline"]["stages"]["title"]["metadata"]["title_review_batches"]
-    assert len(cache["results"]) == 1
+    assert 1 <= len(cache["results"]) < 3
     assert original.state["pipeline"]["stages"]["title"]["metadata"]["failed_role"] == "title_review"
 
     saved = copy.deepcopy(original.state)
@@ -394,11 +394,17 @@ def test_title_review_resume_reuses_only_valid_batches_and_keeps_context_compact
                                 complete=recovery, resume_state=restored, resume_role=role)
     result, _ = resumed.run()
     assert len(result["ideas"]) == 3
-    assert recovery.counts["title_review"] == (2 if cache_fault is None else 3)
-    assert [json.loads(c["user_prompt"])["input"]["batch"]["index"] for c in recovery.wire_calls
-            if c["response_format"]["json_schema"]["name"] == "TitleReviewResponse"] == ([2, 3] if cache_fault is None else [1, 2, 3])
+    valid_cached = len(cache["results"])
+    if cache_fault in ("version", "fingerprint"):
+        valid_cached = 0
+    elif cache_fault == "review":
+        valid_cached -= 1
+    calls = [c for c in recovery.wire_calls if c["response_format"]["json_schema"]["name"] == "TitleReviewResponse"]
+    indices = [json.loads(c["user_prompt"])["input"]["batch"]["index"] for c in calls]
+    assert len(calls) == 3 - valid_cached
+    assert len(set(indices)) == len(indices)
     metadata = resumed.state["pipeline"]["stages"]["title"]["metadata"]
-    assert metadata["title_review_reused_batches"] == (1 if cache_fault is None else 0)
+    assert metadata["title_review_reused_batches"] == valid_cached
     assert metadata["title_review_completed_batches"] == 3
     assert task.payload == before
 
