@@ -9,12 +9,13 @@ from backend.app.services.creative_graph.adaptive_batches import downstream_batc
 from backend.app.services.creative_analysis import CreativeError
 
 
-COPY_REVIEW_VERSION = "copy-review-adaptive-v2"
+COPY_REVIEW_VERSION = "copy-review-adaptive-v3"
 COPY_REVIEW_AGENT = replace(BASE_AGENT, system_prompt=BASE_AGENT.system_prompt + """
 当前只评一个锁定标题下的当前正文版本；若 context 提供 peer_summaries，只能将其作为简短对照资料。
 context 仅提供当前选题、锁定标题、主要受众和相关样本证据，不需要其他选题的信息。
 按 response_format 返回；每项评分理由用简短一句话，问题与修改指令具体简洁。
 sample_analysis 是文字分析和引句依据，不是原图或完整市场调研，不据此补造事实。
+若 context 提供 approved_claims 且 item 提供 evidence，逐版对照其 claim/source 绑定判断正文承诺；来源 ID 合法不等于正文语义已得到支持，不能只凭候选自报通过。
 related_item_ids 仅限本批其他版本；不得引用别的标题下的正文。
 版本号和输入指纹由程序绑定，无须输出。""")
 
@@ -42,6 +43,7 @@ def prepare_copy_review_batches(payload: dict, *, sample_batches: int = 1) -> li
             "keyword": context["keyword"], "requirements": context["requirements"],
             "variant_count": context["variant_count"],
             "locked_titles": [title], "topic_brief": {"ideas": [idea]},
+            "approved_claims": context.get("approved_claims_by_idea", {}).get(title["idea_id"], []),
             "audience": {key: segment[key] for key in (
                 "audience_terms", "role_context", "primary_scenario", "attention_points",
             )},
@@ -54,9 +56,10 @@ def prepare_copy_review_batches(payload: dict, *, sample_batches: int = 1) -> li
                     for item in items if item is not current
                 ][:2]
                 current_context = {**compact, "peer_summaries": peers}
+                review_item = _with_evidence(current)
                 batches.append({
                     "kind": "copy", "revision": payload["revision"], "context": current_context,
-                    "items": [current], "sample_note_ids": notes,
+                    "items": [review_item], "sample_note_ids": notes,
                     "rubric": payload["rubric"], "pass_threshold": payload["pass_threshold"],
                     "policy_version": COPY_REVIEW_VERSION,
                     "batch_policy": downstream_batch_policy(sample_batches, default_size=len(items)),
@@ -64,7 +67,7 @@ def prepare_copy_review_batches(payload: dict, *, sample_batches: int = 1) -> li
         else:
             batches.append({
                 "kind": "copy", "revision": payload["revision"], "context": compact,
-                "items": items, "sample_note_ids": notes,
+                "items": [_with_evidence(item) for item in items], "sample_note_ids": notes,
                 "rubric": payload["rubric"], "pass_threshold": payload["pass_threshold"],
                 "policy_version": COPY_REVIEW_VERSION,
                 "batch_policy": downstream_batch_policy(sample_batches, default_size=len(items)),
@@ -76,6 +79,15 @@ def prepare_copy_review_batches(payload: dict, *, sample_batches: int = 1) -> li
         batch["batch"] = {"index": index, "count": len(batches)}
         batch["input_fingerprint"] = content_fingerprint(batch)
     return deepcopy(batches)
+
+
+def _with_evidence(item: dict) -> dict:
+    fields = item["fields"]
+    return {
+        **{key: value for key, value in item.items() if key != "fields"},
+        "fields": {key: value for key, value in fields.items() if key not in {"claim_ids", "source_note_ids"}},
+        "evidence": {"claim_ids": fields.get("claim_ids", []), "source_note_ids": fields.get("source_note_ids", [])},
+    }
 
 
 def merge_copy_review_results(results, payload):

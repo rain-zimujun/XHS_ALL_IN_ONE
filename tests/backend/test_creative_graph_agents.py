@@ -15,6 +15,7 @@ from backend.app.services.creative_graph.model import CompatibleChatModel, respo
 from backend.app.services.creative_graph.review_schema import item_review_response_type
 from backend.app.services.creative_graph.sample_schema import sample_response_type
 from backend.app.services.creative_graph.source_schema import topic_response_type
+from backend.app.services.creative_graph.source_schema import copy_response_type
 from backend.app.services.creative_agents.title_generation import bind_title_ids, title_response_type
 from test_creative_sample_agent import OPTIONS, SEARCH, sources, valid_output
 from test_structured_output import assert_strict_contract
@@ -181,3 +182,19 @@ def test_topic_schema_limits_evidence_claim_ids_to_current_approved_registry():
     assert claim_ref.get("enum", [claim_ref.get("const")]) == ["claim_001_001"]
     assert evidence["claim_ids"]["uniqueItems"] is True
     assert evidence["note_ids"]["items"]["enum"] == payload["sample_note_ids"]
+
+
+def test_copy_schema_binds_claims_and_sources_to_each_locked_idea():
+    payload = {
+        "locked_titles": [{"idea_id": "idea_1", "candidate_id": "title_1"},
+                          {"idea_id": "idea_2", "candidate_id": "title_2"}],
+        "approved_claims_by_idea": {
+            "idea_1": [{"claim_id": "claim_a", "note_ids": ["note_a", "note_b"]}],
+            "idea_2": [{"claim_id": "claim_b", "note_ids": ["note_c", "note_d"]}],
+        },
+        "sample_note_ids": ["note_a", "note_b", "note_c", "note_d"], "variant_count": 2,
+    }
+    schema = response_parameter(copy_response_type(payload))["json_schema"]["schema"]
+    variant = schema["$defs"]["BoundCopyVariant"]["properties"]
+    assert variant["claim_ids"]["items"]["enum"] == ["claim_a", "claim_b"]
+    assert variant["source_note_ids"]["items"]["enum"] == ["note_a", "note_b", "note_c", "note_d"]

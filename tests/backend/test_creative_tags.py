@@ -52,7 +52,7 @@ def test_flexible_tag_range_retries_only_when_below_minimum(env, engine):
         result = run()
     assert len(calls) == 2
     schema = calls[0]["response_format"]["json_schema"]["schema"]
-    variant_type = "CreativeVariant" if engine == "legacy" else "CopyVariant"
+    variant_type = "CreativeVariant" if engine == "legacy" else "BoundCopyVariant" if engine == "langgraph" else "CopyVariant"
     tags = schema["$defs"][variant_type]["properties"]["tags"]
     assert tags["minItems"] == 5
     assert tags["maxItems"] == 8

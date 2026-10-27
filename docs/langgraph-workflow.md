@@ -263,3 +263,11 @@ LangGraph 样本数超过 3 时，`prepare_sample_batches` 将来源均分为 2�
 标题评委的精简批次携带当前选题的获批结论和候选 claim/source 绑定，便于对照标题承诺是否有支持；内部 ID 放在 evidence 而非可评分 fields，评委仍只对文案字段评分。标题评审批次版本升为 `title-review-adaptive-v3`，输入指纹改变时旧评审批次不会被错误复用。没有获批注册表的旧式输入使用空引用列表；已绑定的输入则不允许候选空引用或越权引用。
 
 本地关系检查不能判断标题语义是否真的由获批结论推出，这部分仍由标题评委审核；动态 Schema 也不保证所有兼容模型服务都会接受这些 ID 枚举，真实模型的响应和标题可用度仍需用户试用验收。
+
+## 22. 正文生成与评审绑定获批样本证据
+
+LangGraph 正文生成请求根据当前已锁定标题涉及的选题构造获批 claim/source 注册表。动态 TypedDict 将 `claim_ids` 限定为本次请求内获批 ID，来源 ID 限定为获批结论的来源合集；程序随后逐版按对应 `idea_id` 再校验 claim/source 配对，不接受跨选题 claim、空绑定或来源错配。旧的固定 CopyResponse/Pydantic 读取结构仍可读取没有 claim 的历史正文，LangGraph 实际请求使用动态响应类型。
+
+正文评委按锁定标题拆批时携带该选题的获批结论文本，并将每个版本的 claim/source 绑定放在独立 `evidence` 字段；评分 fields 只保留 label、body、tags、covered_points。评委提示词明确 ID 合法并不等于内容语义得到支持，仍须检查正文承诺。评审批次版本更新为 `copy-review-adaptive-v3`，输入指纹变化会使旧批次缓存失效。结果组装只输出用户文案字段，不泄露 `claim_ids`；尚未接入配图及终审的逐版 evidence。
+
+Schema 只验证当前请求允许的 ID 集合，选题与 ID 的交叉配对由本地确定性逻辑校验，以避免多选题联合 Schema 产生额外复杂结构。语义支持仍依赖 AI 评委，需用用户配置的真实模型验证兼容性和成稿质量。

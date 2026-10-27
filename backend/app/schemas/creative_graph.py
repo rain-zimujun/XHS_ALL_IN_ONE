@@ -319,6 +319,7 @@ class CopyVariant(TypedDict):
     label: Annotated[str, Field(min_length=1, max_length=40)]
     body: Annotated[str, Field(min_length=1, max_length=MAX_COPY_BODY_CHARS)]
     tags: Annotated[list[str], Field(min_length=COPY_TAG_MIN_COUNT, max_length=COPY_TAG_MAX_COUNT, description="与本版最终正文最相关的 5～8 个话题，按相关性降序，可带 #")]
+    claim_ids: Annotated[list[NoteId], Field(max_length=8)]
     covered_points: Annotated[list[Text], Field(min_length=1, max_length=8)]
     source_note_ids: Annotated[list[NoteId], Field(min_length=2, max_length=8)]
 

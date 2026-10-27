@@ -25,10 +25,13 @@ def test_copy_batches_keep_all_title_peers_and_only_relevant_context(count, vari
     batches = prepare_copy_review_batches(payload)
     assert len(batches) == count
     assert [len(b["items"]) for b in batches] == [variants] * count
-    assert [item for b in batches for item in b["items"]] == payload["items"]
+    batched = [item for b in batches for item in b["items"]]
+    assert [item["item_id"] for item in batched] == [item["item_id"] for item in payload["items"]]
+    assert all("claim_ids" not in item["fields"] and "source_note_ids" not in item["fields"] for item in batched)
+    assert all("evidence" in item for item in batched)
     for batch in batches:
         context = batch["context"]
-        assert set(context) == {"keyword", "requirements", "variant_count", "locked_titles", "topic_brief", "audience", "sample_analysis"}
+        assert set(context) == {"keyword", "requirements", "variant_count", "locked_titles", "topic_brief", "approved_claims", "audience", "sample_analysis"}
         assert len(context["locked_titles"]) == len(context["topic_brief"]["ideas"]) == 1
         title, idea = context["locked_titles"][0], context["topic_brief"]["ideas"][0]
         assert {(i["idea_id"], i["candidate_id"]) for i in batch["items"]} == {(title["idea_id"], title["candidate_id"])}
@@ -95,6 +98,21 @@ def test_compact_requests_do_not_repeat_full_audience_or_unrelated_source_findin
         assert "audience_brief" not in batch["context"]
         assert "topic_patterns" not in batch["context"]["sample_analysis"]
         assert len(batch["rubric"]) == 6
+
+
+def test_copy_review_receives_claim_text_and_keeps_internal_refs_out_of_scored_fields():
+    payload = prepare_copy_review_input(**inputs(1, 3))
+    idea = payload["context"]["topic_brief"]["ideas"][0]
+    payload["context"]["approved_claims_by_idea"] = {idea["idea_id"]: [
+        {"claim_id": "claim_copy", "text": "雾蓝与银色细节形成冷调搭配。", "note_ids": idea["source_note_ids"][:2]},
+    ]}
+    for item in payload["items"]:
+        item["fields"]["claim_ids"] = ["claim_copy"]
+        item["fields"]["source_note_ids"] = idea["source_note_ids"][:2]
+    batch = prepare_copy_review_batches(payload)[0]
+    assert batch["context"]["approved_claims"][0]["text"].startswith("雾蓝")
+    assert batch["items"][0]["evidence"]["claim_ids"] == ["claim_copy"]
+    assert "claim_ids" not in batch["items"][0]["fields"]
 
 
 def test_split_sample_analysis_adapts_copy_reviews_to_one_version_with_short_peer_summaries():

@@ -252,6 +252,7 @@ class CopyVariant(AgentOutputModel):
     label: str = Field(min_length=1, max_length=40)
     body: str = Field(min_length=1, max_length=3000)
     tags: list[str] = Field(min_length=1, max_length=10)
+    claim_ids: list[str] = Field(default_factory=list, max_length=8)
     covered_points: list[FindingText] = Field(min_length=1, max_length=8)
     source_note_ids: list[NoteId] = Field(min_length=2, max_length=8)
 

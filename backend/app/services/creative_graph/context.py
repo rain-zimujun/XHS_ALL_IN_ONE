@@ -62,6 +62,8 @@ def production_context(role, payload):
             result.update({key: payload[key] for key in ("topic_revision", "candidate_count", "title_max_length")})
         elif role == "copy":
             result["variant_count"] = payload["variant_count"]
+            if payload.get("approved_claims_by_idea"):
+                result["approved_claims_by_idea"] = payload["approved_claims_by_idea"]
             result["locked_titles"] = [{k: v for k, v in t.items() if k != "rationale"} for t in payload["locked_titles"]]
         else:
             raise ValueError("unknown production role")

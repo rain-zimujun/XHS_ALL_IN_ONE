@@ -25,7 +25,11 @@ def valid_copies(payload):
                 "variant_id": f"copy_{i}_{j}", "label": f"观察角度{j}",
                 "body": f"米色搭浅蓝，颜色轻一些，轮廓就更清晰。\n配色观察{i}·{j}。",
                 "tags": ["服装配色", "米色穿搭", "浅蓝色穿搭", "服装廓形", "配色灵感", "服装设计"], "covered_points": topics[title["idea_id"]]["must_cover"],
-                "source_note_ids": topics[title["idea_id"]]["source_note_ids"],
+                "claim_ids": [claim["claim_id"] for claim in payload.get("approved_claims_by_idea", {}).get(title["idea_id"], [])[:2]],
+                "source_note_ids": list(dict.fromkeys(
+                    note_id for claim in payload.get("approved_claims_by_idea", {}).get(title["idea_id"], [])[:2]
+                    for note_id in claim["note_ids"]
+                ))[:2] or topics[title["idea_id"]]["source_note_ids"],
             } for j in range(payload["variant_count"])],
         } for i, title in enumerate(payload["locked_titles"])],
         "limitations": ["需人工确认表达风格。"],

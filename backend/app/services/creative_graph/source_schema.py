@@ -74,16 +74,24 @@ def topic_response_type(payload: dict) -> type:
 
 
 def copy_response_type(payload: dict) -> type:
-    """Bind locked title IDs and sample source IDs for copy generation."""
+    """Bind locked title IDs and approved claim/source IDs for this request."""
     idea_ids = [item["idea_id"] for item in payload["locked_titles"]]
     candidate_ids = [item["candidate_id"] for item in payload["locked_titles"]]
-    variant = _strict("CopyVariant", {
+    claims_by_idea = payload.get("approved_claims_by_idea", {})
+    claim_ids = list(dict.fromkeys(claim["claim_id"] for idea_id in idea_ids
+                                   for claim in claims_by_idea.get(idea_id, [])))
+    source_ids = list(dict.fromkeys(note_id for idea_id in idea_ids
+                                    for claim in claims_by_idea.get(idea_id, []) for note_id in claim["note_ids"]))
+    claim_field = (Annotated[list[literal_values(claim_ids, "获批 claim_id")], Field(max_length=8)]
+                   if claim_ids else Annotated[list[str], Field(max_length=0)])
+    variant = _strict("BoundCopyVariant", {
         "variant_id": responses.CopyId,
         "label": Annotated[str, Field(min_length=1, max_length=40)],
         "body": Annotated[str, Field(min_length=1, max_length=MAX_COPY_BODY_CHARS)],
         "tags": Annotated[list[str], Field(min_length=COPY_TAG_MIN_COUNT, max_length=COPY_TAG_MAX_COUNT)],
+        "claim_ids": claim_field,
         "covered_points": Annotated[list[responses.Text], Field(min_length=1, max_length=8)],
-        "source_note_ids": source_note_ids_type(payload["sample_note_ids"], min_length=2, max_length=8),
+        "source_note_ids": source_note_ids_type(source_ids or payload["sample_note_ids"], min_length=2, max_length=8),
     })
     group = _strict("BoundCopyGroup", {
         "idea_id": literal_values(idea_ids, "选题"),

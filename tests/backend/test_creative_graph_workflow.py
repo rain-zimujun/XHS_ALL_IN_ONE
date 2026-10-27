@@ -108,6 +108,15 @@ class GraphCompletion(WorkflowCompletion):
                 },
                 "limitations": output["limitations"],
             }
+        elif wire_name == "CopyResponse":
+            claims_by_idea = prompt["input"].get("approved_claims_by_idea", {})
+            for idea in output["ideas"]:
+                claims = claims_by_idea.get(idea["idea_id"], [])
+                for variant in idea["variants"]:
+                    variant["claim_ids"] = [claim["claim_id"] for claim in claims[:2]]
+                    variant["source_note_ids"] = list(dict.fromkeys(
+                        note_id for claim in claims[:2] for note_id in claim["note_ids"]
+                    ))[:2] or prompt["input"]["sample_note_ids"][:2]
         for key in ("input_fingerprint", "revision", "topic_revision"):
             output.pop(key, None)
         for review in output.get("reviews", []):
@@ -145,6 +154,7 @@ def test_graph_executes_ten_roles_and_persists_serializable_global_state(count, 
     result, metadata = w.run()
     assert len(result["ideas"]) == count
     assert all("claim_ids" not in idea for idea in result["ideas"])
+    assert all("claim_ids" not in variant for idea in result["ideas"] for variant in idea["variants"])
     assert all(len(i["variants"]) == variants for i in result["ideas"])
     assert metadata["workflow"] == "langgraph"
     assert len(model.calls) == metadata["request_count"] == 8 + 2 * count + 2 * count * variants

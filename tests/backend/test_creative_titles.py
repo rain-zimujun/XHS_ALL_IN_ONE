@@ -5,6 +5,8 @@ import pytest
 import requests
 
 from backend.app.schemas.creative_agents import TitleCandidates
+from backend.app.schemas.creative_agents import CopyVariants
+from backend.app.services.creative_agents.copy_generation import validate_copy_variants
 from backend.app.services.creative_agents.title_generation import analyze_titles, bind_title_ids, prepare_title_input, run_title_generation, validate_title_candidates
 from backend.app.services.creative_agents.topic_review import run_topic_review
 from backend.app.services.creative_analysis import CreativeError
@@ -205,6 +207,33 @@ def test_title_candidate_sources_must_belong_to_their_cited_approved_claims():
     candidate.source_note_ids = ["sample-1"]
     with pytest.raises(AgentValidationError, match="来源必须来自其引用的获批 claim"):
         validate_title_candidates(result, prepared)
+
+
+def test_copy_variant_sources_must_belong_to_its_cited_approved_claims():
+    payload = {
+        "input_fingerprint": "a" * 64, "variant_count": 2,
+        "locked_titles": [{"idea_id": "idea_1", "candidate_id": "title_0_0"}],
+        "topic_brief": {"ideas": [{"idea_id": "idea_1", "source_note_ids": ["sample-0", "sample-1"], "must_cover": ["具体配色"]}]},
+        "approved_claims_by_idea": {"idea_1": [
+            {"claim_id": "claim_a", "note_ids": ["sample-0"]},
+            {"claim_id": "claim_b", "note_ids": ["sample-1"]},
+        ]},
+    }
+    variant = lambda index: {
+        "variant_id": f"copy_{index}", "label": f"角度{index}", "body": f"可以直接发布的配色观察正文 {index}。",
+        "tags": ["AI服装", "配色", "灵感分享", "服装设计", "廓形"],
+        "claim_ids": ["claim_a", "claim_b"], "covered_points": ["具体配色"],
+        "source_note_ids": ["sample-0", "sample-1"],
+    }
+    result = CopyVariants.model_validate({
+        "input_fingerprint": "a" * 64,
+        "ideas": [{"idea_id": "idea_1", "candidate_id": "title_0_0", "variants": [variant(0), variant(1)]}],
+        "limitations": ["仅基于文本样本。"],
+    })
+    validate_copy_variants(result, payload)
+    result.ideas[0].variants[0].claim_ids = ["claim_a"]
+    with pytest.raises(AgentValidationError, match="来源必须属于其引用的获批 claim"):
+        validate_copy_variants(result, payload)
 
 
 def test_joined_emoji_is_valid_title_text():

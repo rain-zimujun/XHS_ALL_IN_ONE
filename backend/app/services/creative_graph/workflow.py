@@ -859,7 +859,7 @@ class LangGraphWorkflow:
         for idea in s["topic"]["ideas"]:
             candidate_id = s["title_review"]["selected_candidate_ids"][idea["idea_id"]]
             title = titles[candidate_id]
-            variants = [{**v, **{k: val for k, val in images[v["variant_id"]].items() if k not in ("idea_id", "candidate_id")},
+            variants = [{**{k: val for k, val in v.items() if k != "claim_ids"}, **{k: val for k, val in images[v["variant_id"]].items() if k not in ("idea_id", "candidate_id")},
                          "quality": {"copy": copy_scores[v["variant_id"]], "final": final_scores[v["variant_id"]]}}
                         for v in copies[idea["idea_id"]]["variants"]]
             ideas.append({"idea_id": idea["idea_id"], "candidate_id": candidate_id, "title": title["title"], "reason": title["rationale"],
