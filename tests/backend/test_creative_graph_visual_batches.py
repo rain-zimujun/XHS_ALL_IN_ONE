@@ -26,6 +26,11 @@ from test_creative_graph_workflow import GraphCompletion, workflow
 @pytest.mark.parametrize("count,variants", [(1, 2), (3, 3), (5, 3)])
 def test_visual_batches_cover_each_copy_keep_full_fields_and_merge_in_original_order(count, variants):
     payload = prepare_image_input(**image_inputs(count, variants))
+    idea_id = payload["locked_copies"][0]["idea_id"]
+    payload["approved_claims_by_idea"] = {idea_id: [{
+        "claim_id": "claim_image", "text": "冷色配色与轮廓观察。", "note_ids": payload["locked_copies"][0]["source_note_ids"],
+    }]}
+    payload["locked_copies"][0]["claim_ids"] = ["claim_image"]
     before = copy.deepcopy(payload)
     batches = prepare_image_batches(payload)
     assert len(batches) == count * variants
@@ -33,6 +38,7 @@ def test_visual_batches_cover_each_copy_keep_full_fields_and_merge_in_original_o
         assert len(batch["locked_copies"]) == len(batch["locked_titles"]) == len(batch["topic_brief"]["ideas"]) == 1
         assert batch["locked_copies"][0] in payload["locked_copies"]
         assert batch["locked_copies"][0]["idea_id"] == batch["locked_titles"][0]["idea_id"]
+        assert set(batch["approved_claims_by_idea"]) == {batch["locked_copies"][0]["idea_id"]}
     results = [ImageBatchOutput.model_validate(valid_images(b)) for b in batches]
     merged = merge_image_batches(list(reversed(results)), payload)
     validate_image_plans(merged, payload)

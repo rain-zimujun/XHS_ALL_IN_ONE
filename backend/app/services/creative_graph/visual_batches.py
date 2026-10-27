@@ -12,11 +12,13 @@ from backend.app.services.creative_analysis import CreativeError
 from backend.app.services.creative_graph.title_review import merge_title_review_results
 
 
-IMAGE_BATCH_VERSION = "image-by-variant-v1"
+IMAGE_BATCH_VERSION = "image-by-variant-v2"
 FINAL_BATCH_VERSION = "final-by-variant-v1"
 IMAGE_AGENT = replace(BASE_IMAGE_AGENT, system_prompt=BASE_IMAGE_AGENT.system_prompt + """
 当前批次只为 locked_copies 中的一篇正文策划，variants 恰好一项。
 按 response_format 返回，简洁具体；只策划兑现本篇正文所需的图片，不为凑数量扩写。
+approved_claims_by_idea 是预处理评委认可的短结论及来源；可用来理解内容边界，不得将视觉设想伪装为样本事实或原图观察。
+围绕标题承诺、正文内容及随附的获批样本结论服务读者；图片是表现方式，不是新增事实证据。不能新增正文和获批结论均不支持的效果、数据或品牌背书。
 quality_revision 若存在，只含本篇的旧配图和相关反馈，输出本篇完整方案。""")
 FINAL_REVIEW_AGENT = replace(BASE_FINAL_AGENT, system_prompt=BASE_FINAL_AGENT.system_prompt + """
 当前批次只评一篇完整笔记，reviews 恰好一项；全部标题、正文和配图在 items.fields。
@@ -50,6 +52,7 @@ def prepare_image_batches(payload, revision=None):
         batches.append({
             "keyword": payload["keyword"], "requirements": payload["requirements"],
             "visual_preferences": payload["visual_preferences"],
+            "approved_claims_by_idea": {idea["idea_id"]: payload.get("approved_claims_by_idea", {}).get(idea["idea_id"], [])},
             "topic_brief": {"ideas": [idea]}, "locked_titles": [title], "locked_copies": [variant],
             "sample_note_ids": [n for n in payload["sample_note_ids"] if n in idea["source_note_ids"]],
             "prompt_version": IMAGE_BATCH_VERSION,

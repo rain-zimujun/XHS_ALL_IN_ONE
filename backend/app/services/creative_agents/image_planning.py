@@ -34,11 +34,13 @@ def prepare_image_input(*, copy_review, visual_preferences: str = "", **copy_rev
     result = {key: context[key] for key in (
         "keyword", "requirements", "topic_brief", "locked_titles", "sample_note_ids", "requested_idea_count", "variant_count",
     )}
+    if context.get("approved_claims_by_idea"):
+        result["approved_claims_by_idea"] = context["approved_claims_by_idea"]
     result.update({
         "approved_copy_fingerprint": review.input_fingerprint,
         "locked_copies": [{"variant_id": item["item_id"], "idea_id": item["idea_id"],
                            "candidate_id": item["candidate_id"], **item["fields"]} for item in payload["items"]],
-        "visual_preferences": visual_preferences.strip(), "prompt_version": "image-planning-v1",
+        "visual_preferences": visual_preferences.strip(), "prompt_version": "image-planning-v2",
     })
     result["input_fingerprint"] = content_fingerprint(result)
     return result
@@ -60,7 +62,7 @@ def validate_image_plans(result: ImagePlans, payload: dict) -> None:
 def _run_prepared(payload, complete, on_progress):
     run = run_agent(IMAGE_AGENT, input_payload=payload, output_model=ImagePlans, complete=complete, on_progress=on_progress,
                     validate_output=lambda result: validate_image_plans(result, payload))
-    return run, {"prompt_version": "image-planning-v1", "request_count": len(run.attempts),
+    return run, {"prompt_version": "image-planning-v2", "request_count": len(run.attempts),
                  "variant_count": len(run.output.variants), "quality_review_status": "not_reviewed"}
 
 
