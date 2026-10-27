@@ -250,11 +250,6 @@ scheduler:
 2. 作者联系方式在主页，有问题随时联系
 3. 欢迎 PR 和 Issue，也欢迎关注作者其他项目
 
-<div align="center">
-  <img src="./author/wx_pay.png" width="380px" alt="微信赞赏码">
-  <img src="./author/zfb_pay.jpg" width="380px" alt="支付宝收款码">
-</div>
-
 ---
 
 ## 📈 Star History
