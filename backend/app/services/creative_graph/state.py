@@ -27,12 +27,28 @@ class ImageArtifact(ImageResponse):
     input_fingerprint: str
 
 
+class ApprovedSampleClaim(TypedDict):
+    claim_id: str
+    section: str
+    text: str
+    note_ids: list[str]
+    review_reason: str
+
+
+class SampleReviewSummary(TypedDict):
+    status: str
+    batch_count: int
+    claim_count: int
+    input_fingerprints: list[str]
+    approved_claims: list[ApprovedSampleClaim]
+
+
 class CreativeGraphState(TypedDict):
     search: dict[str, Any]
     sources: list[dict[str, Any]]
     options: dict[str, Any]
     sample_analysis: SampleAnalysisResponse | None
-    sample_review: dict[str, Any] | None
+    sample_review: SampleReviewSummary | None
     audience: AudienceResponse | None
     topic: TopicResponse | None
     topic_review: dict[str, Any] | None
@@ -58,7 +74,7 @@ class SampleUpdate(NodeUpdate, total=False):
 
 
 class SampleReviewUpdate(NodeUpdate, total=False):
-    sample_review: dict[str, Any]
+    sample_review: SampleReviewSummary
 
 
 class AudienceUpdate(NodeUpdate, total=False):

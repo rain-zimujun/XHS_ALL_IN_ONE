@@ -119,6 +119,11 @@ def test_graph_executes_ten_roles_and_persists_serializable_global_state(count, 
     assert metadata["workflow"] == "langgraph"
     assert len(model.calls) == metadata["request_count"] == 8 + 2 * count + 2 * count * variants
     assert w.state["sample_review"]["status"] == "passed"
+    approved_claims = w.state["sample_review"]["approved_claims"]
+    assert len(approved_claims) == w.state["sample_review"]["claim_count"]
+    assert all(claim["claim_id"].startswith("claim_001_") for claim in approved_claims)
+    assert all(set(claim["note_ids"]) <= {source["note_id"] for source in sources()}
+               for claim in approved_claims)
     assert w.state["pipeline"]["stages"]["sample_analysis"]["metadata"]["quality_review_status"] == "passed"
     assert saved[-1]["result"] == result
     assert saved[-1]["pipeline"]["status"] == "completed"
@@ -143,6 +148,21 @@ def test_graph_routes_sample_preprocessing_to_its_dedicated_model_only():
     assert all(call["response_format"]["json_schema"]["name"] != "SampleAnalysisResponse"
                for call in creative_model.wire_calls)
     assert len(preprocess_model.calls) + len(creative_model.calls) == w.budget.request_count
+
+
+def test_passed_legacy_sample_review_rebuilds_registry_from_cache_without_model_calls():
+    model = GraphCompletion()
+    w = workflow(model, count=1, variants=2)
+    w.run()
+    before = w.budget.request_count
+    legacy_summary = {key: value for key, value in w.state["sample_review"].items()
+                      if key != "approved_claims"}
+    w.state["sample_review"] = legacy_summary
+
+    update = w.sample_review_node(w.state)
+
+    assert update["sample_review"]["approved_claims"]
+    assert w.budget.request_count == before
 
 
 def test_sample_preprocessing_runs_at_most_three_batches_concurrently_and_merges_in_source_order():

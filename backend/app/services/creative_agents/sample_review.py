@@ -87,6 +87,24 @@ def validate_sample_review(result: SampleReviewResponse, payload: dict[str, Any]
             raise AgentValidationError(f"{decision.claim_id} 未获原文语义支持：{decision.reason}")
 
 
+def approved_claim_registry(result: SampleReviewResponse, payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Build a compact downstream registry from claims accepted by the judge."""
+    validate_sample_review(result, payload)
+    claims = {claim["claim_id"]: claim for claim in payload["claims"]}
+    decisions = {decision.claim_id: decision for decision in result.decisions}
+    return [
+        {
+            "claim_id": claim["claim_id"],
+            "section": claim["section"],
+            "text": claim["text"],
+            "note_ids": list(decisions[claim["claim_id"]].note_ids),
+            "review_reason": decisions[claim["claim_id"]].reason,
+        }
+        for claim in payload["claims"]
+        if decisions[claim["claim_id"]].supported
+    ]
+
+
 def validate_sample_claim_coverage(result: SampleAnalysis, payload: dict[str, Any]) -> None:
     """Reject analysis claims whose evidence points outside this exact batch."""
     known = {source["note_id"] for source in payload["sources"]}

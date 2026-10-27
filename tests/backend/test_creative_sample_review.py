@@ -4,7 +4,8 @@ import pytest
 
 from backend.app.schemas.creative_agents import SampleAnalysis, SampleReviewResponse
 from backend.app.services.creative_agents.sample_review import (
-    prepare_sample_review_input, validate_sample_claim_coverage, validate_sample_review,
+    approved_claim_registry, prepare_sample_review_input, validate_sample_claim_coverage,
+    validate_sample_review,
 )
 from backend.app.services.creative_graph.sample_review_schema import sample_review_response_type
 from backend.app.services.creative_graph.model import response_parameter
@@ -46,6 +47,23 @@ def test_valid_semantic_review_is_accepted():
                   "note_ids": claim["candidate_note_ids"][:1], "reason": "有对应样本支持。"}
                  for claim in review_payload["claims"]]
     validate_sample_review(SampleReviewResponse(decisions=decisions), review_payload)
+
+
+def test_approved_registry_preserves_program_claim_ids_and_judged_sources():
+    payload, analysis = prepared()
+    review_payload = prepare_sample_review_input(analysis, payload)
+    decisions = [{"claim_id": claim["claim_id"], "supported": True,
+                  "note_ids": claim["candidate_note_ids"][:1], "reason": "来源内容支持该归纳。"}
+                 for claim in review_payload["claims"]]
+
+    registry = approved_claim_registry(SampleReviewResponse(decisions=decisions), review_payload)
+
+    assert [claim["claim_id"] for claim in registry] == [claim["claim_id"] for claim in review_payload["claims"]]
+    assert all(item["text"] and item["review_reason"] for item in registry)
+    assert all(item["note_ids"] == review_payload["claims"][i]["candidate_note_ids"][:1]
+               for i, item in enumerate(registry))
+    assert all(set(item["note_ids"]) <= set(review_payload["claims"][i]["candidate_note_ids"])
+               for i, item in enumerate(registry))
 
 
 @pytest.mark.parametrize("mutation", ["missing", "duplicate", "unknown", "source", "unsupported"])

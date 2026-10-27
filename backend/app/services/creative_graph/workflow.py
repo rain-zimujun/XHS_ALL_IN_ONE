@@ -448,8 +448,9 @@ class LangGraphWorkflow:
                             break
                         outputs_by_key[key] = run.output
                         runs.append(run)
-                        cache["results"][key] = run.output.model_dump(mode="json")
-                        stage_metadata["sample_completed_batches"] = len(cache["results"])
+                        with self._checkpoint_lock:
+                            cache["results"][key] = run.output.model_dump(mode="json")
+                            stage_metadata["sample_completed_batches"] = len(cache["results"])
                         self._checkpoint(pipeline, f"样本分析 Agent · 已保存批次 {len(outputs_by_key)}/{len(batches)}")
                     # Requests already running when a peer fails may finish; retain
                     # their successful results, but never schedule replacement work.
@@ -464,8 +465,9 @@ class LangGraphWorkflow:
                             if key not in outputs_by_key:
                                 outputs_by_key[key] = run.output
                                 runs.append(run)
-                                cache["results"][key] = run.output.model_dump(mode="json")
-                                stage_metadata["sample_completed_batches"] = len(cache["results"])
+                                with self._checkpoint_lock:
+                                    cache["results"][key] = run.output.model_dump(mode="json")
+                                    stage_metadata["sample_completed_batches"] = len(cache["results"])
                                 self._checkpoint(pipeline, "样本分析 Agent · 已保存并行完成批次")
                 if first_error:
                     raise first_error
@@ -480,7 +482,8 @@ class LangGraphWorkflow:
                               lambda r: sample_analysis.validate_sample_evidence(r, payload), invoke=invoke)
 
     def sample_review_node(self, s: CreativeGraphState) -> SampleReviewUpdate:
-        if s["sample_review"] and s["sample_review"].get("status") == "passed":
+        if (s["sample_review"] and s["sample_review"].get("status") == "passed"
+                and isinstance(s["sample_review"].get("approved_claims"), list)):
             return {"pipeline": self.active_pipeline}
         filtered_sources, _ = filter_sample_sources(
             s["sources"], keyword=s["search"]["keyword"], audience=s["options"].get("audience", ""),
@@ -579,9 +582,10 @@ class LangGraphWorkflow:
                                 queued.cancel()
                         break
                     results[key] = run.output
-                    cache["results"][key] = run.output.model_dump(mode="json")
-                    cache["traces"][key] = [asdict(attempt) for attempt in run.attempts]
-                    metadata["sample_review_completed_batches"] = len(results)
+                    with self._checkpoint_lock:
+                        cache["results"][key] = run.output.model_dump(mode="json")
+                        cache["traces"][key] = [asdict(attempt) for attempt in run.attempts]
+                        metadata["sample_review_completed_batches"] = len(results)
                     self._checkpoint(self.active_pipeline, f"样本证据评委 Agent · 已保存 {len(results)}/{len(review_batches)} 批")
                 if first_error:
                     for future, review_input in futures.items():
@@ -593,22 +597,26 @@ class LangGraphWorkflow:
                             continue
                         if key not in results:
                             results[key] = run.output
-                            cache["results"][key] = run.output.model_dump(mode="json")
-                            cache["traces"][key] = [asdict(attempt) for attempt in run.attempts]
-                            metadata["sample_review_completed_batches"] = len(results)
+                            with self._checkpoint_lock:
+                                cache["results"][key] = run.output.model_dump(mode="json")
+                                cache["traces"][key] = [asdict(attempt) for attempt in run.attempts]
+                                metadata["sample_review_completed_batches"] = len(results)
                             self._checkpoint(self.active_pipeline, "样本证据评委 Agent · 已保存并行完成批次")
                     raise first_error
 
         accepted = []
+        approved_claims = []
         trace_history = []
         for review_input in review_batches:
             key = review_input["input_fingerprint"]
             review = results[key]
             sample_review.validate_sample_review(review, review_input)
             accepted.extend(review.decisions)
+            approved_claims.extend(sample_review.approved_claim_registry(review, review_input))
             trace_history.extend(cache["traces"].get(key, []))
         summary = {"status": "passed", "batch_count": len(review_batches), "claim_count": len(accepted),
-                   "input_fingerprints": [item["input_fingerprint"] for item in review_batches]}
+                   "input_fingerprints": [item["input_fingerprint"] for item in review_batches],
+                   "approved_claims": approved_claims}
         metadata.update(quality_review_status="passed", sample_review_completed_batches=len(review_batches),
                         sample_review_request_count=self.budget.request_count - review_requests_before)
         diagnostic_event("样本语义评审完成", stage="sample_analysis", agent=agent.spec.name,
