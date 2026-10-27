@@ -92,7 +92,17 @@ def prepare_title_review_batches(payload: dict, *, sample_batches: int = 1) -> l
     return deepcopy(batches)
 
 
-def expand_title_review(value: dict) -> dict:
+TITLE_REVISION_HINTS = {
+    "hook": "改用更具体的问题、细节或结果切入，避免空泛和夸张承诺。",
+    "specificity": "明确标题对应的服装场景和一个具体制作环节。",
+    "reader_benefit": "写清读者能获得的具体方法、检查点或思路。",
+    "relevance": "自然补足当前选题要求的 AI、服装或时尚主题词。",
+    "difference": "避开同组选题已有的表达角度，突出本标题独有的切入点。",
+    "naturalness": "改成语义完整、搭配自然、读起来顺口的短句。",
+}
+
+
+def expand_title_review(value: dict, payload: dict | None = None) -> dict:
     """Adapt the compact wire format to existing deterministic quality checks.
 
     Six scalar scores share one brief overall comment. Empty source references
@@ -100,6 +110,10 @@ def expand_title_review(value: dict) -> dict:
     Detailed low-score reasons still live in field/quote-bound issues.
     """
     criteria = {criterion.key: criterion for criterion in rubric_for("title")}
+    titles = {
+        item["item_id"]: item.get("fields", {}).get("title", "")
+        for item in (payload or {}).get("items", [])
+    }
     reviews = []
     for review in value["reviews"]:
         expanded = {key: val for key, val in review.items() if key != "comment"}
@@ -120,6 +134,28 @@ def expand_title_review(value: dict) -> dict:
                     and score < criterion.minimum and normalized["severity"] == "suggestion"):
                 normalized["severity"] = "blocking"
             expanded["issues"].append(normalized)
+        # Scores remain model-owned, but a missing low-score issue should not
+        # discard an otherwise useful review. Synthesize a traceable repair
+        # item from the rubric, score comment, and exact title being reviewed.
+        for score in expanded["scores"]:
+            criterion = criteria.get(score["criterion"])
+            if not criterion or score["score"] >= criterion.minimum:
+                continue
+            matches = [issue for issue in expanded["issues"] if issue["criterion"] == criterion.key]
+            if matches:
+                continue
+            title = titles.get(review["item_id"], "")
+            if not title:
+                continue
+            expanded["issues"].append({
+                "criterion": criterion.key,
+                "severity": "blocking" if criterion.blocking else "suggestion",
+                "field": "title",
+                "quote": title,
+                "problem": f"{criterion.label}评分 {score['score']:g}，低于 {criterion.minimum:g} 分门槛。评语：{score['comment']}"[:120],
+                "revision_instruction": TITLE_REVISION_HINTS[criterion.key],
+                "note_ids": [], "related_item_ids": [], "responsible_stage": None,
+            })
         reviews.append(expanded)
     return {**value, "reviews": reviews}
 

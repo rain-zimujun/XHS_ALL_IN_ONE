@@ -75,6 +75,32 @@ def test_compact_title_review_promotes_existing_low_score_issue_to_blocking():
     assert decision.status == "revision_required"
 
 
+def test_compact_title_review_synthesizes_missing_low_score_issue_from_candidate():
+    args = inputs(count=1, candidate_count=5)
+    run, _ = run_title_generation(**args, complete=TitleCompletion())
+    payload = prepare_title_review_input(**args, title_candidates=run.output, title_revision=1)
+    batch = prepare_title_review_batches(payload)[0]
+    compact = valid_review(batch)
+    for review in compact["reviews"]:
+        review["scores"] = {
+            score["criterion"]: 6.5 for score in review["scores"]
+        }
+        review["comment"] = "主题明确，但措辞读起来不顺。"
+    review = compact["reviews"][0]
+    review["scores"]["naturalness"] = 3.5
+
+    normalized = expand_title_review(compact, batch)
+    item = normalized["reviews"][0]
+    issue = next(issue for issue in item["issues"] if issue["criterion"] == "naturalness")
+    assert issue["severity"] == "suggestion"
+    assert issue["quote"] == batch["items"][0]["fields"]["title"]
+    assert "3.5" in issue["problem"]
+    assert "自然" in issue["revision_instruction"]
+    decision = decide_review(ItemReviewResponse.model_validate(normalized), batch)
+    assert decision.status == "revision_required"
+    assert decision.reviews[0].quality.passed is False
+
+
 def test_split_sample_analysis_adapts_title_reviews_to_one_title_with_id_free_peer_summaries():
     args = inputs(count=3, candidate_count=5)
     run, _ = run_title_generation(**args, complete=TitleCompletion())

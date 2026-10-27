@@ -127,6 +127,43 @@ def compact_text(value: str) -> str:
     return "".join(unicodedata.normalize("NFKC", value).casefold().split())
 
 
+_TITLE_BRACKETS = {
+    "（": "）", "(": ")", "【": "】", "[": "]", "《": "》", "〈": "〉",
+    "「": "」", "『": "』", "“": "”", '"': '"',
+}
+_INCOMPLETE_TITLE_ENDINGS = ("以及", "怎么", "如何", "从", "到", "与", "和", "及", "把", "对", "按", "为", "的", "并")
+
+
+def _title_is_obviously_incomplete(title: str) -> bool:
+    stack = []
+    closing = set(_TITLE_BRACKETS.values())
+    for char in title:
+        if char in _TITLE_BRACKETS:
+            if char == '"' and stack and stack[-1] == '"':
+                stack.pop()
+            else:
+                stack.append(_TITLE_BRACKETS[char])
+        elif char in closing:
+            if not stack or stack.pop() != char:
+                return True
+    return bool(stack) or title.endswith(_INCOMPLETE_TITLE_ENDINGS) or title.endswith(("：", ":", "，", ",", "、"))
+
+
+def ensure_title_revision_progress(previous: dict, proposed: dict, target_ids: list[str]) -> None:
+    old = {candidate["candidate_id"]: candidate["title"]
+           for idea in previous.get("ideas", []) for candidate in idea.get("candidates", [])}
+    new = {candidate["candidate_id"]: candidate["title"]
+           for idea in proposed.get("ideas", []) for candidate in idea.get("candidates", [])}
+    normalize = lambda value: "".join(
+        char for char in unicodedata.normalize("NFKC", value).casefold()
+        if not unicodedata.category(char).startswith(("P", "S", "Z"))
+    )
+    unchanged = [candidate_id for candidate_id in target_ids
+                 if candidate_id in old and candidate_id in new and normalize(old[candidate_id]) == normalize(new[candidate_id])]
+    if unchanged:
+        raise AgentValidationError("质量返工没有实质修改指定标题：" + ", ".join(unchanged[:8]))
+
+
 def prepare_title_input(
     keyword: str, requirements: str, requested_idea_count: int,
     sample_analysis: dict[str, Any] | SampleAnalysis, audience_brief: dict[str, Any] | AudienceBrief,
@@ -187,6 +224,8 @@ def validate_title_candidates(result: TitleCandidates, payload: dict[str, Any]) 
                 (unicodedata.category(c).startswith("C") and c != "\u200d") or c in "\u2028\u2029" for c in title
             ):
                 raise AgentValidationError("标题必须是长度预算内的单行纯文本，不含控制字符")
+            if _title_is_obviously_incomplete(title):
+                raise AgentValidationError("标题存在未闭合标点或明显未完成的结尾表达，请改成语义完整的自然短句")
             if has_editorial_leak(title) or title.startswith(("标题：", "标题:", "#", "＃")):
                 raise AgentValidationError("标题中不能包含编辑标签、助手开场白、话题或待填写占位符")
             candidate_ids.add(candidate.candidate_id)

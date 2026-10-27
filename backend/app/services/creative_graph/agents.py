@@ -130,6 +130,8 @@ class StructuredAgent:
                     adapted = preserve_unselected_title_candidates(
                         adapted, revision["previous_output"], revision["target_ids"],
                     )
+                    from backend.app.services.creative_agents.title_generation import ensure_title_revision_progress
+                    ensure_title_revision_progress(revision["previous_output"], adapted, revision["target_ids"])
                 if self.spec.stage == "copy":
                     from backend.app.services.creative_copy import normalize_result_copy
                     adapted = normalize_result_copy(adapted)
@@ -183,7 +185,7 @@ def build_agents(model: CompatibleChatModel) -> dict[str, StructuredAgent]:
         "topic": StructuredAgent(model, production_spec(TOPIC_AGENT), response_format=responses.TopicResponse, output_model=legacy.TopicBrief, include_prompt_schema=False, input_projection=partial(production_context, "topic"), response_format_factory=topic_response_type),
         "topic_review": StructuredAgent(model, TOPIC_REVIEW_AGENT, response_format=responses.TopicReviewResponse, output_model=legacy.TopicReviewResponse, state_fields=("topic_revision", "input_fingerprint"), include_prompt_schema=False, response_format_factory=topic_review_response_type),
         "title": StructuredAgent(model, production_spec(langgraph_title_spec()), response_format=responses.TitleResponse, output_model=legacy.TitleCandidates, state_fields=("topic_revision", "input_fingerprint"), include_prompt_schema=False, input_projection=partial(production_context, "title"), response_format_factory=title_response_type, payload_output_adapter=bind_title_ids),
-        "title_review": StructuredAgent(model, TITLE_REVIEW_AGENT, response_format=responses.TitleReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), output_adapter=expand_title_review, include_prompt_schema=False, response_format_factory=title_review_response_type),
+        "title_review": StructuredAgent(model, TITLE_REVIEW_AGENT, response_format=responses.TitleReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False, response_format_factory=title_review_response_type, payload_output_adapter=expand_title_review),
         "copy": StructuredAgent(model, production_spec(COPY_AGENT), response_format=responses.CopyResponse, output_model=legacy.CopyVariants, state_fields=("input_fingerprint",), include_prompt_schema=False, input_projection=partial(production_context, "copy"), response_format_factory=copy_response_type),
         "copy_review": StructuredAgent(model, COPY_REVIEW_AGENT, response_format=responses.CopyReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False, response_format_factory=item_review_response_type),
         "image": StructuredAgent(model, IMAGE_AGENT, response_format=responses.ImageResponse, output_model=ImageBatchOutput, state_fields=("input_fingerprint",), include_prompt_schema=False),
@@ -210,5 +212,6 @@ def langgraph_title_spec():
     )
     prompt += """
 每个候选都要填写 claim_ids 和 source_note_ids，只能引用当前选题随附的获批结论及其来源；每个来源必须属于至少一个所引 claim。标题承诺和支撑要点要能由获批结论或选题中的用户要求支持；不能把用户要求伪装成样本结论。
+如果输入包含 quality_revision，必须进入质量返工模式：逐一阅读 revision_briefs，只修改指定 candidate_id 对应的候选，并落实该标题的每一条 must_fix；保留 preserve 中明确要求保留的要点。不要只替换一两个词，也不要把一个标题的反馈套用到同组其他标题。先保证语义完整、搭配自然和读者收益清楚，再兼顾关键词与吸引力；不得为了关键词堆叠而生成生硬或截断表达。返回完整结构，程序会恢复非目标候选。
 """
     return replace(TITLE_AGENT, system_prompt=prompt)

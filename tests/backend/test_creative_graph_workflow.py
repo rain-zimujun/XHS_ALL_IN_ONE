@@ -11,7 +11,7 @@ from backend.app.services.creative_analysis import CreativeError
 from backend.app.services.creative_agents.revision import PipelineCancelled
 from backend.app.services.creative_graph.state import SampleUpdate
 from backend.app.services.creative_graph.recovery import prepare_resume
-from backend.app.services.creative_graph.workflow import LangGraphWorkflow, estimate_graph_request_budget
+from backend.app.services.creative_graph.workflow import LangGraphWorkflow, estimate_graph_request_budget, title_revision_briefs
 from backend.app.services.creative_pipeline import validate_pipeline_state
 from test_creative_sample_agent import SEARCH, sources
 from test_creative_workflow import WorkflowCompletion
@@ -348,6 +348,27 @@ def test_graph_title_revision_restores_approved_candidates_changed_by_model():
     assert model.counts["TitleCandidates"] == 2
     assert model.counts["title_review"] == 6
     assert w.state["pipeline"]["status"] == "completed"
+
+
+def test_title_revision_briefs_bind_scores_and_actionable_issues_to_each_candidate():
+    feedback = {"review": {"reviews": [
+        {"judgement": {
+            "item_id": "title_0_3",
+            "scores": [{"criterion": "naturalness", "score": 3.5}],
+            "issues": [{"criterion": "naturalness", "severity": "suggestion",
+                        "problem": "“姿势换”搭配不自然。", "revision_instruction": "改成语义完整的自然短句。"}],
+            "preserve": ["保留AI服装Lookbook主题。"],
+        }},
+        {"judgement": {"item_id": "title_1_0", "scores": [], "issues": [], "preserve": []}},
+    ]}}
+    briefs = title_revision_briefs(feedback, ["title_0_3"])
+    assert briefs == [{
+        "candidate_id": "title_0_3",
+        "scores_below_minimum": [{"criterion": "naturalness", "score": 3.5, "minimum": 5.0}],
+        "must_fix": [{"criterion": "naturalness", "severity": "suggestion",
+                      "problem": "“姿势换”搭配不自然。", "revision_instruction": "改成语义完整的自然短句。"}],
+        "preserve": ["保留AI服装Lookbook主题。"],
+    }]
 
 
 @pytest.mark.parametrize("cache_fault", [None, "version", "fingerprint", "review"])
