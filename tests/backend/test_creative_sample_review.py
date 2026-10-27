@@ -40,6 +40,21 @@ def test_response_schema_binds_claim_ids_and_sources_as_literals():
     assert "unknown" not in serialized
 
 
+def test_response_schema_binds_each_claim_to_its_own_source_ids():
+    schema = response_parameter(sample_review_response_type({"claims": [
+        {"claim_id": "claim-a", "candidate_note_ids": ["source-a"]},
+        {"claim_id": "claim-b", "candidate_note_ids": ["source-b"]},
+    ]})) ["json_schema"]["schema"]
+    branches = schema["properties"]["decisions"]["items"]["anyOf"]
+    first = schema["$defs"][branches[0]["$ref"].rsplit("/", 1)[-1]]["properties"]
+    second = schema["$defs"][branches[1]["$ref"].rsplit("/", 1)[-1]]["properties"]
+
+    assert first["claim_id"]["const"] == "claim-a"
+    assert first["note_ids"]["items"]["const"] == "source-a"
+    assert second["claim_id"]["const"] == "claim-b"
+    assert second["note_ids"]["items"]["const"] == "source-b"
+
+
 def test_valid_semantic_review_is_accepted():
     payload, analysis = prepared()
     review_payload = prepare_sample_review_input(analysis, payload)
