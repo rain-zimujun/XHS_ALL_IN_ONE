@@ -134,6 +134,7 @@ def test_restart_marks_graph_snapshot_interrupted_without_model_calls(env):
         task = db.get(Task, task_id)
         assert task.status == task.payload["graph_state"]["pipeline"]["status"] == "failed"
         assert task.payload["graph_state"]["pipeline"]["error_code"] == "creative_interrupted"
+        assert task.error_type == "creative_interrupted"
         assert task.payload["graph_state"]["pipeline"] == task.payload["pipeline"]
     assert model.calls == []
 

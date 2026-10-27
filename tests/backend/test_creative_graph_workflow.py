@@ -9,7 +9,7 @@ from backend.app.services.creative_analysis import CreativeError
 from backend.app.services.creative_agents.revision import PipelineCancelled
 from backend.app.services.creative_graph.state import SampleUpdate
 from backend.app.services.creative_graph.recovery import prepare_resume
-from backend.app.services.creative_graph.workflow import LangGraphWorkflow
+from backend.app.services.creative_graph.workflow import LangGraphWorkflow, estimate_graph_request_budget
 from backend.app.services.creative_pipeline import validate_pipeline_state
 from test_creative_sample_agent import SEARCH, sources
 from test_creative_workflow import WorkflowCompletion
@@ -79,6 +79,16 @@ class GraphCompletion(WorkflowCompletion):
 
 def workflow(model, count=1, variants=2, **kwargs):
     return LangGraphWorkflow(search=SEARCH, sources=sources(), options={"model_id": 1, "idea_count": count, "variant_count": variants}, complete=model, **kwargs)
+
+
+@pytest.mark.parametrize("source_count,ideas,variants,minimum", [
+    (3, 3, 3, 72), (22, 3, 3, 200), (50, 5, 3, 350),
+])
+def test_request_budget_scales_with_sample_and_output_fanout(source_count, ideas, variants, minimum):
+    budget = estimate_graph_request_budget(source_count, {"idea_count": ideas, "variant_count": variants})
+    assert budget >= minimum
+    assert budget <= 512
+    assert budget == estimate_graph_request_budget(source_count, {"idea_count": ideas, "variant_count": variants})
 
 
 @pytest.mark.parametrize("count", [1, 3, 5])
@@ -317,7 +327,8 @@ def test_sample_analysis_batches_sequentially_and_resume_reuses_completed_sample
                     if call["response_format"]["json_schema"]["name"] == "SampleAnalysisResponse"]
     assert len(sample_calls) == 2
     assert [json.loads(call["user_prompt"])["input"]["batch"]["index"] for call in sample_calls] == [2, 3]
-    assert pipeline_metadata["request_count"] == 16
+    # The split sample run also uses one-object title/copy reviews downstream.
+    assert pipeline_metadata["request_count"] == 21
 
 
 def test_sample_relevance_filter_preserves_raw_sources_and_batches_only_selected_notes():

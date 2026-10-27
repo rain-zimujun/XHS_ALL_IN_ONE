@@ -9,6 +9,7 @@ from backend.app.services.creative_pipeline import validate_pipeline_state
 
 MODEL_ERROR_CODES = {"ai_connect_timeout", "ai_read_timeout", "ai_network_error", "ai_http_error", "ai_response_invalid"}
 TIME_BUDGET_CODES = {"creative_time_exhausted", "creative_budget_exhausted"}
+INTERRUPTED_CODE = "creative_interrupted"
 LEGACY_TAG_SCHEMA_MARKERS = (
     "tags 必须是与本版最终正文最相关的 6 个不同话题",
     "tags 必须是与本版最终正文最相关的6个不同话题",
@@ -41,7 +42,13 @@ def prepare_resume(task):
         if state["options"] != options:
             raise ValueError("changed options")
         item = pipeline["stages"][stage]
-        if task.error_type not in MODEL_ERROR_CODES | TIME_BUDGET_CODES:
+        if task.error_type == INTERRUPTED_CODE:
+            # A process restart is not a model/business failure. It is safe to
+            # continue only when startup recovery marked both persisted copies
+            # consistently and the original cumulative budget still has room.
+            if pipeline["error_code"] != INTERRUPTED_CODE or payload.get("pipeline") != state["pipeline"]:
+                raise ValueError("inconsistent interrupted snapshot")
+        elif task.error_type not in MODEL_ERROR_CODES | TIME_BUDGET_CODES:
             attempts = item.get("metadata", {}).get("failed_attempts", [])
             legacy_tag_failure = any(
                 any(marker in str(attempt.get("error", "")) for marker in LEGACY_TAG_SCHEMA_MARKERS)
@@ -65,7 +72,16 @@ def prepare_resume(task):
         if role not in ALL_ROLES or (role.removesuffix("_review") if role != "final_review" else role) != stage:
             raise ValueError("invalid role")
         if pipeline["request_count"] >= pipeline["max_requests"]:
-            raise ValueError("request budget exhausted")
+            if task.error_type != INTERRUPTED_CODE:
+                raise ValueError("request budget exhausted")
+        if task.error_type == INTERRUPTED_CODE:
+            from backend.app.services.creative_graph.workflow import estimate_graph_request_budget
+
+            required_budget = estimate_graph_request_budget(len(state["sources"]), options)
+            if required_budget > pipeline["max_requests"]:
+                pipeline["max_requests"] = required_budget
+            if pipeline["request_count"] >= pipeline["max_requests"]:
+                raise ValueError("request budget exhausted after adaptive estimate")
         # Old versions used one error code for both limits. With requests still
         # available, a matching budget failure was an expired execution window.
         if task.error_type in TIME_BUDGET_CODES:

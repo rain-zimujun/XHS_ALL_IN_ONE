@@ -8,7 +8,7 @@ import requests
 from backend.app.models import Task
 from backend.app.services.creative_analysis import CreativeError
 from backend.app.services.creative_graph.recovery import prepare_resume
-from backend.app.services.creative_graph.workflow import LangGraphWorkflow
+from backend.app.services.creative_graph.workflow import LangGraphWorkflow, estimate_graph_request_budget
 from backend.app.services.creative_agents.revision import RequestBudget
 from test_creative import env, collect_for_analysis
 from test_creative_graph_workflow import GraphCompletion, workflow
@@ -171,6 +171,43 @@ def test_old_snapshot_without_role_still_resumes_title_judge():
     assert role == "title_review"
 
 
+def test_restart_interrupted_snapshot_resumes_exact_incomplete_batch():
+    model = GraphCompletion()
+    w = workflow(model, count=3, variants=3)
+    # Build a realistic resumable snapshot with an in-progress judge and two
+    # validated cached batches; recovery must not re-run any earlier agent.
+    saved = copy.deepcopy(w.state)
+    saved["options"]["workflow"] = "langgraph"
+    saved["pipeline"].update(status="failed", current_stage="title", error_code="creative_interrupted")
+    saved["pipeline"]["request_count"] = 40
+    saved["pipeline"]["max_requests"] = 72
+    stage = saved["pipeline"]["stages"]["title"]
+    stage.update(status="failed", output=saved["title"])
+    stage["metadata"].update(failed_role="title_review")
+    task_payload = {
+        "analysis": saved["options"], "search": saved["search"],
+        "sources": saved["sources"], "graph_state": saved, "pipeline": saved["pipeline"],
+    }
+    task = SimpleNamespace(status="failed", error_type="creative_interrupted", payload=task_payload)
+
+    # Incomplete/mismatched snapshots and exhausted budgets remain forbidden.
+    broken = copy.deepcopy(task)
+    broken.payload["pipeline"]["error_code"] = "ai_http_error"
+    with pytest.raises(CreativeError, match="没有可继续"):
+        prepare_resume(broken)
+    broken = copy.deepcopy(task)
+    broken.payload["graph_state"]["pipeline"]["request_count"] = 124
+    broken.payload["pipeline"]["request_count"] = broken.payload["graph_state"]["pipeline"]["request_count"]
+    with pytest.raises(CreativeError, match="没有可继续"):
+        prepare_resume(broken)
+
+    restored, role = prepare_resume(task)
+    assert role == "title_review"
+    assert restored["pipeline"]["request_count"] == 40
+    assert restored["pipeline"]["max_requests"] > 72
+    assert restored["pipeline"]["error_code"] is None
+
+
 def test_title_revision_scope_failure_is_resumable_but_other_handoff_failures_are_not():
     model = GraphCompletion()
     w = workflow(model, count=1, variants=2)
@@ -251,11 +288,12 @@ def test_expired_window_resumes_at_fifth_final_batch_with_cumulative_request_lim
     saved["options"]["workflow"] = "langgraph"
     pipeline = saved["pipeline"]
     metadata = pipeline["stages"]["final_review"]["metadata"]
+    expected_budget = estimate_graph_request_budget(len(saved["sources"]), saved["options"])
     assert metadata["final_review_completed_batches"] == 4
     assert metadata["final_review_batch"]["index"] == 5
     assert metadata["budget_exhaustion"] == {
         "reason": "time", "elapsed_seconds": 1801, "max_seconds": 1800,
-        "request_count": 26, "max_requests": 72,
+        "request_count": 26, "max_requests": expected_budget,
     }
     if error_code == "creative_budget_exhausted":
         # Historical snapshots did not distinguish request and time limits.
@@ -284,7 +322,7 @@ def test_expired_window_resumes_at_fifth_final_batch_with_cumulative_request_lim
     assert len(result["ideas"]) == 3
     assert resumed.budget.max_seconds == 90 * 60
     assert meta["request_count"] == 31
-    assert resumed.budget.max_requests == 72
+    assert resumed.budget.max_requests == expected_budget
     assert len(recovery.wire_calls) == 5
     assert [json.loads(c["user_prompt"])["input"]["batch"]["index"] for c in recovery.wire_calls] == [5, 6, 7, 8, 9]
     assert all(c["response_format"]["json_schema"]["name"] == "FinalReviewResponse" for c in recovery.wire_calls)

@@ -97,6 +97,25 @@ def test_compact_requests_do_not_repeat_full_audience_or_unrelated_source_findin
         assert len(batch["rubric"]) == 6
 
 
+def test_split_sample_analysis_adapts_copy_reviews_to_one_version_with_short_peer_summaries():
+    payload = prepare_copy_review_input(**inputs(3, 3))
+    batches = prepare_copy_review_batches(payload, sample_batches=4)
+
+    assert len(batches) == 9
+    assert all(len(batch["items"]) == 1 for batch in batches)
+    assert all(batch["batch_policy"]["sample_batch_count"] == 4 for batch in batches)
+    assert [batch["items"][0]["item_id"] for batch in batches] == [item["item_id"] for item in payload["items"]]
+    for batch in batches:
+        peers = batch["context"]["peer_summaries"]
+        assert len(peers) == 2
+        assert all(len(peer["opening"]) <= 120 for peer in peers)
+        assert all(set(peer) == {"label", "opening"} for peer in peers)
+        assert not any("variant_id" in peer or "item_id" in peer for peer in peers)
+    results = [ItemReviewResponse.model_validate(valid_review(batch)) for batch in batches]
+    merged = merge_copy_review_results(results, payload)
+    assert [review.item_id for review in merged.reviews] == [item["item_id"] for item in payload["items"]]
+
+
 @pytest.mark.parametrize("fault", ["cross_title", "quote", "score", "coverage"])
 def test_per_batch_checks_reject_bad_references_quotes_scores_and_missing_versions(fault):
     batches = prepare_copy_review_batches(prepare_copy_review_input(**inputs(3, 3)))

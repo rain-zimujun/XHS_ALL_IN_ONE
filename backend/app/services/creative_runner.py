@@ -206,6 +206,8 @@ def recover_interrupted_runs(session_factory):
                 pipeline["stages"] = {name: {**item, "status": "failed" if item["status"] == "running" else item["status"]}
                                       for name, item in pipeline["stages"].items()}
                 task.payload = {**task.payload, "pipeline": pipeline}
+                task.error_type = "creative_interrupted"
+                task.payload["error"] = "服务重启中断，已保存阶段结果；可从最近的完整批次接续。"
                 if task.payload.get("graph_state"):
                     task.payload = {**task.payload, "graph_state": {
                         **task.payload["graph_state"], "pipeline": pipeline, "result": None, "metadata": {},

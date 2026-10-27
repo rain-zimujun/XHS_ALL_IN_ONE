@@ -7,10 +7,13 @@ from backend.app.services.creative_agents.title_generation import content_finger
 from backend.app.services.creative_analysis import CreativeError
 from backend.app.services.creative_quality import rubric_for
 from backend.app.services.creative_orchestrator import AgentSpec
+from backend.app.services.creative_graph.adaptive_batches import (
+    adaptive_batch_size, downstream_batch_policy,
+)
 
 
 TITLE_REVIEW_BATCH_SIZE = 5
-TITLE_REVIEW_VERSION = "title-review-compact-v1"
+TITLE_REVIEW_VERSION = "title-review-adaptive-v2"
 TITLE_REVIEW_AGENT = AgentSpec(stage="title", name="标题评委 Agent", temperature=0.2, system_prompt="""你是独立标题评委，只评价当前批次 items，不修改标题或上游选题。
 按 response_format 返回 JSON，每个 item_id 恰好一次；scores 的六项分数为 0～10 数字，对应 rubric，不添加标准。
 按标题实际表达评价点击吸引力、具体程度、读者收益、关键词与受众匹配、同组差异和自然度。
@@ -26,8 +29,13 @@ issue.field 只能取当前候选 fields 的字段；quote 必须逐字出现在
 summary、limitations 简短说明本批判断和证据局限；不保证流量或事实真实。""")
 
 
-def prepare_title_review_batches(payload: dict) -> list[dict]:
-    """Send one topic and at most five candidates, with minimal reader/style context."""
+def prepare_title_review_batches(payload: dict, *, sample_batches: int = 1) -> list[dict]:
+    """Prepare bounded title reviews, adapting to upstream sample fan-out.
+
+    In fine-grained mode each request has one candidate. A short peer summary is
+    retained for comparison, but peer IDs are deliberately absent so they
+    cannot be used as structured references in the current judgement.
+    """
     context = payload["context"]
     sample, audience = context["sample_analysis"], context["audience_brief"]
     batches = []
@@ -46,16 +54,29 @@ def prepare_title_review_batches(payload: dict) -> list[dict]:
             "title_style": [p["finding"] for p in sample["style_patterns"] if p["dimension"] == "title"],
             "style_summary": sample["style_summary"],
         }
-        # Balance uncommon 6-8 candidate groups rather than leaving a lone
-        # candidate with no meaningful peer comparison (6 -> 3+3, 8 -> 4+4).
-        batch_count = (len(items) + TITLE_REVIEW_BATCH_SIZE - 1) // TITLE_REVIEW_BATCH_SIZE
-        size = (len(items) + batch_count - 1) // batch_count if batch_count else 0
+        size = adaptive_batch_size(sample_batches, default_size=TITLE_REVIEW_BATCH_SIZE)
+        if size == 1:
+            batch_count = len(items)
+        else:
+            # Balance uncommon 6-8 candidate groups rather than leaving a lone
+            # candidate with no meaningful peer comparison (6 -> 3+3, 8 -> 4+4).
+            batch_count = (len(items) + TITLE_REVIEW_BATCH_SIZE - 1) // TITLE_REVIEW_BATCH_SIZE
+            size = (len(items) + batch_count - 1) // batch_count if batch_count else 0
         for offset in range(0, len(items), size or 1):
+            current = items[offset:offset + size]
+            peer_summaries = []
+            if size == 1:
+                peer_summaries = [
+                    {"title": item["fields"]["title"], "angle": item["fields"].get("angle", "")[:120]}
+                    for item in items if item not in current
+                ][:4]
+            batch_context = compact if not peer_summaries else {**compact, "peer_summaries": peer_summaries}
             batches.append({
-                "kind": "title", "revision": payload["revision"], "context": compact,
-                "items": items[offset:offset + size], "sample_note_ids": [],
+                "kind": "title", "revision": payload["revision"], "context": batch_context,
+                "items": current, "sample_note_ids": [],
                 "rubric": payload["rubric"], "pass_threshold": payload["pass_threshold"],
                 "policy_version": TITLE_REVIEW_VERSION,
+                "batch_policy": downstream_batch_policy(sample_batches, default_size=TITLE_REVIEW_BATCH_SIZE),
             })
     if not batches:
         raise CreativeError("标题评审没有可处理的候选。", "review_input_invalid")

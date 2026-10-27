@@ -57,3 +57,25 @@ def test_compact_title_review_promotes_existing_low_score_issue_to_blocking():
     checked = ItemReviewResponse.model_validate(normalized)
     decision = decide_review(checked, batch)
     assert decision.status == "revision_required"
+
+
+def test_split_sample_analysis_adapts_title_reviews_to_one_title_with_id_free_peer_summaries():
+    args = inputs(count=3, candidate_count=5)
+    run, _ = run_title_generation(**args, complete=TitleCompletion())
+    payload = prepare_title_review_input(**args, title_candidates=run.output, title_revision=1)
+    batches = prepare_title_review_batches(payload, sample_batches=4)
+
+    assert len(batches) == 15
+    assert all(len(batch["items"]) == 1 for batch in batches)
+    assert all(batch["batch_policy"] == {
+        "version": "adaptive-batches-v1", "sample_batch_count": 4,
+        "mode": "per_item", "batch_size": 1,
+    } for batch in batches)
+    for batch in batches:
+        peers = batch["context"]["peer_summaries"]
+        assert 1 <= len(peers) <= 4
+        assert all(set(peer) == {"title", "angle"} for peer in peers)
+        assert not any("candidate_id" in peer or "item_id" in peer for peer in peers)
+    results = [ItemReviewResponse.model_validate(valid_review(batch)) for batch in batches]
+    merged = merge_title_review_results(results, payload)
+    assert [review.item_id for review in merged.reviews] == [item["item_id"] for item in payload["items"]]

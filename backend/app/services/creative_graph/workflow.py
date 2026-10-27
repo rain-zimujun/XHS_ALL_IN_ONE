@@ -35,6 +35,7 @@ from backend.app.services.creative_graph.audience import run_audience_steps
 from backend.app.services.creative_graph.copy_review import (
     COPY_REVIEW_VERSION, prepare_copy_review_batches, merge_copy_review_results,
 )
+from backend.app.services.creative_graph.adaptive_batches import sample_batch_count
 from backend.app.services.creative_graph.batch_runner import run_batches
 from backend.app.services.creative_graph.visual_batches import (
     IMAGE_BATCH_VERSION, FINAL_BATCH_VERSION, prepare_image_batches, image_batch_revision,
@@ -56,8 +57,29 @@ REVIEW_FIELD = {"topic": "topic_review", "title": "title_review", "copy": "copy_
 DISCLAIMER = "基于本批文字样本，未分析原图；模型评分未经人工校准，不保证事实或流量。发布前请核实原创性、事实及素材授权。"
 # At most 47 first-pass requests (5 topics x 3 variants); keep bounded room
 # for structural repair, quality revisions and network retries on new runs.
-MAX_GRAPH_REQUESTS = 72
+MIN_GRAPH_REQUESTS = 72
+MAX_GRAPH_REQUESTS = 512
+GRAPH_REQUEST_HEADROOM_MULTIPLIER = 4
 MAX_GRAPH_SECONDS = 90 * 60
+
+
+def estimate_graph_request_budget(source_count: int, options: dict) -> int:
+    """Estimate first-pass fan-out, then leave finite retry/repair headroom."""
+    from math import ceil
+
+    idea_count = options.get("idea_count", 3)
+    variant_count = options.get("variant_count", 3)
+    candidate_count = options.get("candidate_count", 5)
+    sample_batches = 1 if source_count <= 3 else ceil(source_count / 3)
+    if sample_batches > 1:
+        title_review_calls = idea_count * candidate_count
+        copy_review_calls = idea_count * variant_count
+    else:
+        title_review_calls = idea_count * ceil(candidate_count / 5)
+        copy_review_calls = idea_count
+    first_pass = (sample_batches + 2 + 2 + 1 + title_review_calls + 1
+                  + copy_review_calls + idea_count * variant_count * 2)
+    return min(MAX_GRAPH_REQUESTS, max(MIN_GRAPH_REQUESTS, first_pass * GRAPH_REQUEST_HEADROOM_MULTIPLIER))
 
 
 def base_inputs(s):
@@ -113,9 +135,11 @@ def add_dependents(s, plan, stage, ids, feedback):
 
 
 class LangGraphWorkflow:
-    def __init__(self, *, search, sources, options, complete, on_state=None, on_graph_state=None, max_requests=MAX_GRAPH_REQUESTS,
+    def __init__(self, *, search, sources, options, complete, on_state=None, on_graph_state=None, max_requests=None,
                  resume_state=None, resume_role=None):
         config = CreativeAnalysisOptions.model_validate(options)
+        if max_requests is None:
+            max_requests = estimate_graph_request_budget(len(sources), config.model_dump())
         pipeline = new_pipeline_state()
         pipeline["max_requests"] = max_requests
         self.state: CreativeGraphState = {
@@ -424,7 +448,10 @@ class LangGraphWorkflow:
 
     def title_review_node(self, s: CreativeGraphState) -> TitleReviewUpdate:
         payload = title_review.prepare_title_review_input(**title_inputs(s))
-        batches = prepare_title_review_batches(payload)
+        batches = prepare_title_review_batches(
+            payload,
+            sample_batches=sample_batch_count(self.active_pipeline["stages"]["sample_analysis"]["metadata"]),
+        )
 
         def invoke(agent, original_payload, validator, pipeline, revision):
             metadata = pipeline["stages"]["title"]["metadata"]
@@ -476,7 +503,10 @@ class LangGraphWorkflow:
 
     def copy_review_node(self, s: CreativeGraphState) -> CopyReviewUpdate:
         payload = copy_review.prepare_copy_review_input(**copy_inputs(s))
-        batches = prepare_copy_review_batches(payload)
+        batches = prepare_copy_review_batches(
+            payload,
+            sample_batches=sample_batch_count(self.active_pipeline["stages"]["sample_analysis"]["metadata"]),
+        )
 
         def invoke(agent, original_payload, validator, pipeline, revision):
             metadata = pipeline["stages"]["copy"]["metadata"]
