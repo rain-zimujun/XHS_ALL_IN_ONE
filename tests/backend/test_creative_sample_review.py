@@ -66,7 +66,7 @@ def test_approved_registry_preserves_program_claim_ids_and_judged_sources():
                for i, item in enumerate(registry))
 
 
-@pytest.mark.parametrize("mutation", ["missing", "duplicate", "unknown", "source", "unsupported"])
+@pytest.mark.parametrize("mutation", ["missing", "duplicate", "unknown", "source"])
 def test_review_rejects_incomplete_or_invalid_decisions(mutation):
     payload, analysis = prepared()
     review_payload = prepare_sample_review_input(analysis, payload)
@@ -85,6 +85,22 @@ def test_review_rejects_incomplete_or_invalid_decisions(mutation):
         decisions[0].update(supported=False, note_ids=[], reason="原文不支持该结论。")
     with pytest.raises(AgentValidationError):
         validate_sample_review(SampleReviewResponse(decisions=decisions), review_payload)
+
+
+def test_semantic_rejection_is_a_valid_decision_and_is_excluded_from_registry():
+    payload, analysis = prepared()
+    review_payload = prepare_sample_review_input(analysis, payload)
+    decisions = [{"claim_id": claim["claim_id"], "supported": True,
+                  "note_ids": claim["candidate_note_ids"][:1], "reason": "有对应样本支持。"}
+                 for claim in review_payload["claims"]]
+    decisions[0].update(supported=False, note_ids=[], reason="来源材料不能支持这个概括。")
+    response = SampleReviewResponse(decisions=decisions)
+
+    validate_sample_review(response, review_payload)
+    registry = approved_claim_registry(response, review_payload)
+
+    assert len(registry) == len(decisions) - 1
+    assert all(claim["claim_id"] != decisions[0]["claim_id"] for claim in registry)
 
 
 def test_claim_source_ids_are_locally_bound_to_the_batch():

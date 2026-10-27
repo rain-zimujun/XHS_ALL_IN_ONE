@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
 from dataclasses import asdict
 from functools import partial
+from math import ceil
 from threading import RLock
 
 from langgraph.graph import END, START, StateGraph
@@ -88,7 +89,8 @@ def estimate_graph_request_budget(source_count: int, options: dict) -> int:
 
 def base_inputs(s):
     return dict(keyword=s["search"]["keyword"], requirements=s["options"]["instruction"] or "围绕样本写自然精简的原创内容。",
-                requested_idea_count=s["options"]["idea_count"], sample_analysis=s["sample_analysis"], audience_brief=s["audience"])
+                requested_idea_count=s["options"]["idea_count"],
+                sample_analysis=s["sample_review"]["approved_analysis"], audience_brief=s["audience"])
 
 
 def topic_inputs(s):
@@ -517,7 +519,9 @@ class LangGraphWorkflow:
 
     def sample_review_node(self, s: CreativeGraphState) -> SampleReviewUpdate:
         if (s["sample_review"] and s["sample_review"].get("status") == "passed"
-                and isinstance(s["sample_review"].get("approved_claims"), list)):
+                and isinstance(s["sample_review"].get("approved_claims"), list)
+                and isinstance(s["sample_review"].get("approved_analysis"), dict)
+                and isinstance(s["sample_review"].get("approved_note_ids"), list)):
             return {"pipeline": self.active_pipeline}
         filtered_sources, _ = filter_sample_sources(
             s["sources"], keyword=s["search"]["keyword"], audience=s["options"].get("audience", ""),
@@ -640,6 +644,7 @@ class LangGraphWorkflow:
 
         accepted = []
         approved_claims = []
+        rejected_claims = []
         trace_history = []
         for review_input in review_batches:
             key = review_input["input_fingerprint"]
@@ -647,10 +652,45 @@ class LangGraphWorkflow:
             sample_review.validate_sample_review(review, review_input)
             accepted.extend(review.decisions)
             approved_claims.extend(sample_review.approved_claim_registry(review, review_input))
+            claim_by_id = {claim["claim_id"]: claim for claim in review_input["claims"]}
+            rejected_claims.extend({
+                "claim_id": decision.claim_id,
+                "section": claim_by_id[decision.claim_id]["section"],
+                "text": claim_by_id[decision.claim_id]["text"][:200],
+                "reason": decision.reason,
+            } for decision in review.decisions if not decision.supported)
             trace_history.extend(cache["traces"].get(key, []))
+        approved_note_ids = list(dict.fromkeys(note_id for claim in approved_claims for note_id in claim["note_ids"]))
+        required_source_count = max(3, ceil(len(filtered_sources) * 0.3))
+        metadata.update(
+            sample_review_approved_claim_count=len(approved_claims),
+            sample_review_rejected_claim_count=len(rejected_claims),
+            sample_review_rejected_claims=rejected_claims,
+            sample_review_approved_note_ids=approved_note_ids,
+            sample_review_required_source_count=required_source_count,
+            sample_review_covered_source_count=len(approved_note_ids),
+        )
+        self._checkpoint(self.active_pipeline, "样本证据评委 Agent · 已汇总批准与淘汰结论")
+        if len(approved_claims) < 3 or len(approved_note_ids) < required_source_count:
+            diagnostic_event("样本有效证据覆盖不足", stage="sample_analysis", agent=agent.spec.name,
+                             approved_claim_count=len(approved_claims), rejected_claim_count=len(rejected_claims),
+                             covered_source_count=len(approved_note_ids), required_source_count=required_source_count)
+            raise CreativeError(
+                f"样本证据评审完成，但有效证据不足：获批结论 {len(approved_claims)} 条（至少 3 条），"
+                f"覆盖样本 {len(approved_note_ids)}/{len(filtered_sources)} 篇（至少 {required_source_count} 篇）。"
+                "请更换或补充样本后重新生成。",
+                "creative_sample_evidence_insufficient",
+            )
+        approved_analysis = sample_review.approved_sample_analysis(
+            sample_analysis.SampleAnalysis.model_validate(s["sample_analysis"]), review_batches,
+            [results[item["input_fingerprint"]] for item in review_batches],
+        )
+        approved_analysis["sample_note_ids"] = approved_note_ids
         summary = {"status": "passed", "batch_count": len(review_batches), "claim_count": len(accepted),
                    "input_fingerprints": [item["input_fingerprint"] for item in review_batches],
-                   "approved_claims": approved_claims}
+                   "approved_claims": approved_claims, "approved_analysis": approved_analysis,
+                   "approved_note_ids": approved_note_ids, "rejected_claim_count": len(rejected_claims),
+                   "rejected_claims": rejected_claims}
         metadata.update(quality_review_status="passed", sample_review_completed_batches=len(review_batches),
                         sample_review_request_count=self.budget.request_count - review_requests_before)
         diagnostic_event("样本语义评审完成", stage="sample_analysis", agent=agent.spec.name,
@@ -670,7 +710,9 @@ class LangGraphWorkflow:
         if not s["sample_review"] or s["sample_review"].get("status") != "passed":
             raise CreativeError("样本结论尚未通过证据评审，不能进入读者需求阶段。", "creative_sample_review_required")
         payload = reader_needs.prepare_audience_input(s["search"]["keyword"], s["options"]["audience"] or "内容创作者",
-                                                     s["options"]["instruction"] or "围绕样本写自然精简的原创内容。", s["sample_analysis"])
+                                                     s["options"]["instruction"] or "围绕样本写自然精简的原创内容。",
+                                                     s["sample_review"]["approved_analysis"],
+                                                     approved_note_ids=s["sample_review"]["approved_note_ids"])
         approved_claims = [
             {key: claim[key] for key in ("claim_id", "section", "text", "note_ids")}
             for claim in s["sample_review"].get("approved_claims", [])
@@ -835,8 +877,10 @@ class LangGraphWorkflow:
                         for v in copies[idea["idea_id"]]["variants"]]
             ideas.append({"idea_id": idea["idea_id"], "candidate_id": candidate_id, "title": title["title"], "reason": title["rationale"],
                           "source_note_ids": idea["source_note_ids"], "variants": variants, "quality": {"title": title_scores[candidate_id]}})
-        sample = s["sample_analysis"]
-        result = {"summary": sample["summary"], "style_summary": sample["style_summary"], "patterns": [p["finding"] for p in sample["topic_patterns"]], "ideas": ideas}
+        sample = s["sample_review"]["approved_analysis"]
+        result = {"summary": sample["summary"], "style_summary": sample["style_summary"],
+                  "patterns": [p["finding"] for p in sample["topic_patterns"]] or ["暂无通过评审的主题模式。"],
+                  "ideas": ideas}
         CreativeAnalysisResult.model_validate(result)
         self.active_pipeline.update(status="completed", current_stage=None, activity="LangGraph 创作及评审完成")
         metadata = {**s["pipeline"]["stages"]["sample_analysis"]["metadata"], "workflow": "langgraph",

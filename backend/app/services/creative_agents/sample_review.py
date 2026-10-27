@@ -1,13 +1,14 @@
 """Semantic evidence review for small, source-bound sample-analysis batches."""
 from __future__ import annotations
 
+from collections import Counter
 from typing import Any
 
 from backend.app.schemas.creative_agents import SampleAnalysis, SampleReviewResponse
 from backend.app.services.creative_orchestrator import AgentSpec, AgentValidationError
 
 
-SAMPLE_REVIEW_PROMPT_VERSION = "sample-semantic-review-v1"
+SAMPLE_REVIEW_PROMPT_VERSION = "sample-semantic-review-v2"
 SAMPLE_REVIEW_AGENT = AgentSpec(
     stage="sample_analysis",
     name="样本证据评委 Agent",
@@ -83,8 +84,8 @@ def validate_sample_review(result: SampleReviewResponse, payload: dict[str, Any]
             raise AgentValidationError(f"{decision.claim_id} 的评审来源必须来自该结论已绑定的来源 note_id")
         if decision.supported and not cited:
             raise AgentValidationError(f"{decision.claim_id} 判为有依据时必须至少给出一个有效来源 note_id")
-        if not decision.supported:
-            raise AgentValidationError(f"{decision.claim_id} 未获原文语义支持：{decision.reason}")
+        if not decision.supported and cited:
+            raise AgentValidationError(f"{decision.claim_id} 判为无依据时 note_ids 必须为空")
 
 
 def approved_claim_registry(result: SampleReviewResponse, payload: dict[str, Any]) -> list[dict[str, Any]]:
@@ -103,6 +104,48 @@ def approved_claim_registry(result: SampleReviewResponse, payload: dict[str, Any
         for claim in payload["claims"]
         if decisions[claim["claim_id"]].supported
     ]
+
+
+def approved_sample_analysis(analysis: SampleAnalysis, review_payloads: list[dict[str, Any]],
+                            reviews: list[SampleReviewResponse]) -> dict[str, Any]:
+    """Project only semantically approved analysis items for downstream agents."""
+    accepted = Counter()
+    for payload, review in zip(review_payloads, reviews):
+        validate_sample_review(review, payload)
+        claims = {claim["claim_id"]: claim for claim in payload["claims"]}
+        accepted.update(
+            (claims[decision.claim_id]["section"], claims[decision.claim_id]["text"],
+             tuple(claims[decision.claim_id]["candidate_note_ids"]))
+            for decision in review.decisions if decision.supported
+        )
+
+    output = analysis.model_dump(mode="json")
+    for section, attribute in CLAIM_SECTIONS:
+        values = getattr(analysis, attribute)
+        if section in ("summary", "style_summary"):
+            approved_texts = list(dict.fromkeys(
+                claim["text"] for payload, review in zip(review_payloads, reviews)
+                for claim in payload["claims"]
+                if claim["section"] == section and any(
+                    decision.claim_id == claim["claim_id"] and decision.supported for decision in review.decisions
+                )
+            ))
+            output[attribute] = "；".join(approved_texts) or "没有通过语义评审的样本概览结论。"
+            continue
+        kept = []
+        for item in values:
+            evidence = [{"note_id": entry.note_id, "field": entry.field, "quote": entry.quote}
+                        for entry in item.evidence] if section != "observations" else [
+                            {"note_id": item.note_id, "field": "quote", "quote": item.quote}
+                        ]
+            text = f"{item.topic}；{item.reader_value}" if section == "observations" else item.finding
+            note_ids = tuple(sorted({entry["note_id"] for entry in evidence}))
+            key = (section, text, note_ids)
+            if accepted[key]:
+                kept.append(item.model_dump(mode="json"))
+                accepted[key] -= 1
+        output[attribute] = kept
+    return output
 
 
 def validate_sample_claim_coverage(result: SampleAnalysis, payload: dict[str, Any]) -> None:

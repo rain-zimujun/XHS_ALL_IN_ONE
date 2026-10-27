@@ -50,7 +50,7 @@ class AudienceBriefInput(BaseModel):
     keyword: str = Field(min_length=1, max_length=120)
     audience_terms: list[str] = Field(min_length=1, max_length=20)
     requirements: str = Field(min_length=1, max_length=2000)
-    sample_analysis: SampleAnalysis
+    sample_analysis: dict[str, Any]
     sample_note_ids: list[str] = Field(min_length=3, max_length=50)
 
 
@@ -65,16 +65,20 @@ def split_audience_terms(audience: str) -> list[str]:
     return unique
 
 
-def prepare_audience_input(keyword: str, audience: str, requirements: str, sample_analysis: dict[str, Any] | SampleAnalysis) -> dict[str, Any]:
+def prepare_audience_input(keyword: str, audience: str, requirements: str,
+                           sample_analysis: dict[str, Any] | SampleAnalysis,
+                           approved_note_ids: list[str] | None = None) -> dict[str, Any]:
     """Prepare an allowlisted brief without sending original notes or secrets."""
     try:
         if not isinstance(keyword, str) or not keyword.strip() or len(keyword.strip()) > 120:
             raise ValueError("keyword")
         if not isinstance(requirements, str) or not requirements.strip() or len(requirements) > 2000:
             raise ValueError("requirements")
-        sample = sample_analysis if isinstance(sample_analysis, SampleAnalysis) else SampleAnalysis.model_validate(sample_analysis)
+        sample = sample_analysis.model_dump(mode="json") if isinstance(sample_analysis, SampleAnalysis) else sample_analysis
+        if not isinstance(sample, dict) or not isinstance(sample.get("observations"), list):
+            raise ValueError("sample_analysis")
         terms = split_audience_terms(audience)
-        note_ids = [item.note_id for item in sample.observations]
+        note_ids = approved_note_ids or sample.get("sample_note_ids") or [item["note_id"] for item in sample["observations"]]
         if len(note_ids) < 3 or len(note_ids) != len(set(note_ids)):
             raise ValueError("sample_note_ids")
         brief = AudienceBriefInput(

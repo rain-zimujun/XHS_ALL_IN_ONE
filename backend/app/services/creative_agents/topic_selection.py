@@ -59,7 +59,7 @@ class TopicBriefInput(BaseModel):
     keyword: str = Field(min_length=1, max_length=120)
     requirements: str = Field(min_length=1, max_length=2000)
     requested_idea_count: Literal[1, 3, 5]
-    sample_analysis: SampleAnalysis
+    sample_analysis: dict[str, Any]
     audience_brief: AudienceBrief
     sample_note_ids: list[str] = Field(min_length=3, max_length=50)
     audience_segment_ids: list[str] = Field(min_length=1, max_length=8)
@@ -70,13 +70,16 @@ def prepare_topic_input(
     sample_analysis: dict[str, Any] | SampleAnalysis,
     audience_brief: dict[str, Any] | AudienceBrief,
     approved_claims: list[dict[str, Any]] | None = None,
+    approved_note_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     """Recheck upstream structure/references, not source quotes or semantic truth."""
     try:
         # A model instance may have been mutated since its original validation.
-        sample = SampleAnalysis.model_validate(
-            sample_analysis.model_dump() if isinstance(sample_analysis, SampleAnalysis) else sample_analysis,
-        )
+        sample = sample_analysis.model_dump(mode="json") if isinstance(sample_analysis, SampleAnalysis) else sample_analysis
+        if not isinstance(sample, dict) or any(not isinstance(sample.get(key), list) for key in (
+            "observations", "topic_patterns", "style_patterns", "value_patterns", "avoid_patterns",
+        )):
+            raise ValueError("sample_analysis")
         audience = AudienceBrief.model_validate(
             audience_brief.model_dump() if isinstance(audience_brief, AudienceBrief) else audience_brief,
         )
@@ -86,15 +89,16 @@ def prepare_topic_input(
             raise ValueError("requirements")
         if type(requested_idea_count) is not int or requested_idea_count not in (1, 3, 5):
             raise ValueError("requested_idea_count")
-        note_ids = [item.note_id for item in sample.observations]
+        note_ids = approved_note_ids or sample.get("sample_note_ids") or [item["note_id"] for item in sample["observations"]]
         segment_ids = [item.segment_id for item in audience.segments]
         if len(note_ids) < 3 or len(note_ids) != len(set(note_ids)):
             raise ValueError("sample_note_ids")
         if not segment_ids or len(segment_ids) != len(set(segment_ids)):
             raise ValueError("audience_segment_ids")
         known_notes = set(note_ids)
-        for pattern in (*sample.topic_patterns, *sample.style_patterns, *sample.value_patterns, *sample.avoid_patterns):
-            if any(evidence.note_id not in known_notes for evidence in pattern.evidence):
+        for pattern in (pattern for key in ("topic_patterns", "style_patterns", "value_patterns", "avoid_patterns")
+                        for pattern in sample[key]):
+            if any(evidence["note_id"] not in known_notes for evidence in pattern["evidence"]):
                 raise ValueError("sample_pattern_note_ids")
         validate_audience_brief(audience, {
             "audience_terms": audience.requested_audience_terms,

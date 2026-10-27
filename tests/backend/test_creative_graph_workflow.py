@@ -164,7 +164,7 @@ def test_graph_executes_ten_roles_and_persists_serializable_global_state(count, 
     assert len(model.calls) == metadata["request_count"] == 8 + 2 * count + 2 * count * variants
     assert w.state["sample_review"]["status"] == "passed"
     approved_claims = w.state["sample_review"]["approved_claims"]
-    assert len(approved_claims) == w.state["sample_review"]["claim_count"]
+    assert len(approved_claims) == w.state["sample_review"]["claim_count"] - w.state["sample_review"]["rejected_claim_count"]
     assert all(claim["claim_id"].startswith("claim_001_") for claim in approved_claims)
     assert all(set(claim["note_ids"]) <= {source["note_id"] for source in sources()}
                for claim in approved_claims)
@@ -588,7 +588,7 @@ def test_failed_sample_review_resumes_only_unreviewed_batch():
     assert result["ideas"]
 
 
-def test_semantically_rejected_sample_claim_can_resume_at_sample_review():
+def test_semantically_rejected_sample_claim_is_excluded_and_workflow_continues():
     model = GraphCompletion()
 
     def reject_claim(**kwargs):
@@ -600,20 +600,42 @@ def test_semantically_rejected_sample_claim_can_resume_at_sample_review():
         return raw
 
     w = workflow(reject_claim)
+    result, _ = w.run()
+
+    assert result["ideas"]
+    summary = w.state["sample_review"]
+    assert summary["status"] == "passed"
+    assert summary["rejected_claim_count"] == 1
+    assert summary["rejected_claims"][0]["reason"] == "来源材料不能支持这个概括。"
+    assert all(claim["claim_id"] != "claim_001_001" for claim in summary["approved_claims"])
+    audience_call = next(call for call in model.wire_calls
+                         if call["response_format"]["json_schema"]["name"] == "AudienceGroupingResponse")
+    sent = json.loads(audience_call["user_prompt"])["input"]["sample_analysis"]
+    assert "claim_001_001" not in json.dumps(sent, ensure_ascii=False)
+
+
+def test_sample_evidence_below_minimum_stops_with_coverage_diagnostic():
+    model = GraphCompletion()
+
+    def reject_most_claims(**kwargs):
+        raw = model(**kwargs)
+        if kwargs["response_format"]["json_schema"]["name"] == "SampleReviewResponse":
+            output = json.loads(raw)
+            for decision in output["decisions"][2:]:
+                decision.update(supported=False, note_ids=[], reason="当前样本没有充分支撑该结论。")
+            return json.dumps(output, ensure_ascii=False)
+        return raw
+
+    w = workflow(reject_most_claims)
     with pytest.raises(CreativeError) as caught:
         w.run()
 
-    assert caught.value.code == "creative_handoff_invalid"
-    assert w.state["sample_review"] is None and w.state["audience"] is None
-    assert w.state["pipeline"]["stages"]["sample_analysis"]["metadata"]["failed_role"] == "sample_review"
-    saved = copy.deepcopy(w.state)
-    saved["options"]["workflow"] = "langgraph"
-    task = SimpleNamespace(status="failed", error_type="creative_handoff_invalid", payload={
-        "analysis": saved["options"], "search": saved["search"], "sources": saved["sources"], "graph_state": saved,
-    })
-    restored, role = prepare_resume(task)
-    assert role == "sample_review"
-    assert restored["sample_analysis"] is not None
+    assert caught.value.code == "creative_sample_evidence_insufficient"
+    metadata = w.state["pipeline"]["stages"]["sample_analysis"]["metadata"]
+    assert metadata["sample_review_approved_claim_count"] == 2
+    assert metadata["sample_review_rejected_claim_count"] >= 1
+    assert metadata["failed_role"] == "sample_review"
+    assert w.state["audience"] is None
 
 
 def test_sample_relevance_filter_preserves_raw_sources_and_batches_only_selected_notes():

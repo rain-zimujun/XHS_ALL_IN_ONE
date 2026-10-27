@@ -36,7 +36,9 @@ def prepare_final_review_input(*, image_plans: ImagePlans | dict, final_revision
     except (ValidationError, AgentValidationError) as exc:
         raise CreativeError("配图集合与当前正文不一致或未通过校验。", "final_review_input_invalid") from exc
     sample = image_inputs["sample_analysis"]
-    context = {**context, "sample_analysis": SampleAnalysis.model_validate(sample.model_dump() if isinstance(sample, SampleAnalysis) else sample).model_dump(mode="json"),
+    sample_dict = sample.model_dump(mode="json") if isinstance(sample, SampleAnalysis) else dict(sample)
+    sample_dict.pop("sample_note_ids", None)
+    context = {**context, "sample_analysis": sample_dict,
                "field_owners": FINAL_FIELD_OWNERS}
     titles = {t["idea_id"]: t for t in context["locked_titles"]}
     topics = {t["idea_id"]: t for t in context["topic_brief"]["ideas"]}

@@ -41,6 +41,10 @@ class SampleReviewSummary(TypedDict):
     claim_count: int
     input_fingerprints: list[str]
     approved_claims: list[ApprovedSampleClaim]
+    approved_analysis: dict[str, Any]
+    approved_note_ids: list[str]
+    rejected_claim_count: int
+    rejected_claims: list[dict[str, str]]
 
 
 class CreativeGraphState(TypedDict):

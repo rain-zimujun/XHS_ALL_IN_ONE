@@ -43,6 +43,14 @@ export function CreativePipelineProgress({ pipeline }: { pipeline: CreativePipel
       </Space>,
     }];
   });
+  const sampleReview = pipeline.stages.sample_analysis?.metadata;
+  const rejectedClaims = Array.isArray(sampleReview?.sample_review_rejected_claims)
+    ? sampleReview.sample_review_rejected_claims as { claim_id?: string; section?: string; text?: string; reason?: string }[]
+    : [];
+  const approvedClaimCount = typeof sampleReview?.sample_review_approved_claim_count === "number"
+    ? sampleReview.sample_review_approved_claim_count : undefined;
+  const rejectedClaimCount = typeof sampleReview?.sample_review_rejected_claim_count === "number"
+    ? sampleReview.sample_review_rejected_claim_count : undefined;
   return <Space orientation="vertical" size={12} style={{ width: "100%", marginBottom: 16 }} data-testid="creative-pipeline">
     <Typography.Text strong>{pipeline.activity || "多 Agent 创作"}</Typography.Text>
     <Row gutter={[8, 12]} aria-label="生成阶段进度">
@@ -62,6 +70,17 @@ export function CreativePipelineProgress({ pipeline }: { pipeline: CreativePipel
     <Typography.Text type="secondary">已发出 {pipeline.request_count} / {pipeline.max_requests} 次模型请求（包括评审、网络重试、格式修复和质量返工）。临时网络故障最多额外重试 3 次；阶段进度不是剩余耗时估计。</Typography.Text>
     {pipeline.status === "revision_required" && <Alert type="warning" title="达到返工上限，仍有内容未通过评审" description="稿件、评分和修改意见已保留，不会将其作为已通过成稿。重新生成会创建新任务并再次调用模型，不会自动续跑。" />}
     {pipeline.status === "failed" && <Alert type="info" title="已保存完成阶段的稿件与评审" description="本次没有继续调用模型。若是超时，请先核对中转服务记录，避免重复计费。" />}
+    {(approvedClaimCount !== undefined || rejectedClaims.length > 0) && <Collapse items={[{
+      key: "sample-evidence",
+      label: `样本证据评审 · 获批 ${approvedClaimCount ?? "-"} 条 · 淘汰 ${rejectedClaimCount ?? rejectedClaims.length} 条`,
+      children: rejectedClaims.length ? <Space orientation="vertical" style={{ width: "100%" }}>
+        {rejectedClaims.map((claim, index) => <div key={claim.claim_id || index}>
+          <Typography.Text strong>{claim.section || "样本结论"} · {claim.claim_id || ""}</Typography.Text>
+          {claim.text && <Typography.Paragraph style={{ marginBottom: 4 }}>{claim.text}</Typography.Paragraph>}
+          <Typography.Text type="secondary">淘汰原因：{claim.reason || "未提供"}</Typography.Text>
+        </div>)}
+      </Space> : <Typography.Text type="secondary">没有结论因语义证据不足而淘汰。</Typography.Text>,
+    }]} />}
     {failures.length > 0 && <Collapse items={failures} />}
     {pipeline.status === "cancelled" && <Typography.Text type="secondary">已停止后续阶段；已发出的模型请求无法撤回。</Typography.Text>}
   </Space>;
