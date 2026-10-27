@@ -53,6 +53,19 @@ class SampleAnalysis(AgentOutputModel):
     limitations: list[FindingText] = Field(min_length=1, max_length=8)
 
 
+class SampleClaimDecision(AgentOutputModel):
+    claim_id: str = Field(min_length=1, max_length=40)
+    supported: bool
+    note_ids: list[NoteId] = Field(max_length=8)
+    reason: FindingText
+
+
+class SampleReviewResponse(AgentOutputModel):
+    """Semantic review of every program-identified sample-analysis claim."""
+
+    decisions: list[SampleClaimDecision] = Field(min_length=1, max_length=80)
+
+
 AudienceTerm = Annotated[str, Field(min_length=1, max_length=60)]
 
 
