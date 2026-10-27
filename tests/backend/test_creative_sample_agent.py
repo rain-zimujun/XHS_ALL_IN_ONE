@@ -17,7 +17,7 @@ from backend.app.services.creative_agents.sample_analysis import (
     validate_sample_evidence,
 )
 from backend.app.services.creative_analysis import CreativeError
-from backend.app.services.creative_orchestrator import AgentRunError, AgentSpec, run_agent
+from backend.app.services.creative_orchestrator import AgentRunError, AgentSpec, AgentValidationError, run_agent
 from backend.app.services.creative_pipeline import begin_stage, complete_stage, new_pipeline_state, validate_pipeline_state
 
 
@@ -120,6 +120,22 @@ def test_composite_quote_is_recovered_to_a_real_single_field_fragment():
     validate_sample_evidence(result, payload)
 
     assert result.style_patterns[0].evidence[0].quote == "可以像专业摄影师一样编辑照片"
+
+
+def test_whitespace_recovery_never_expands_quote_beyond_output_limit():
+    notes = sources()
+    notes[0]["content"] = "abcdefghij" + " " * 181 + "klmnopqrst"
+    payload = prepare_sample_input(SEARCH, notes, OPTIONS)
+    output = valid_output(payload)
+    output["observations"][0]["quote"] = "abcdefghij klmnopqrst"
+    output["observations"][0]["reader_value"] = " provides an example"
+    output["topic_patterns"][0]["evidence"][0].update(
+        note_id=notes[0]["note_id"], quote="abcdefghij klmnopqrst",
+    )
+    result = SampleAnalysis.model_validate(output)
+
+    with pytest.raises(AgentValidationError, match="逐字匹配失败"):
+        validate_sample_evidence(result, payload)
 
 
 def test_allowlist_excludes_account_config_raw_and_media_fields():

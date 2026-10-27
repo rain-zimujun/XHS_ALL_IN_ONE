@@ -30,6 +30,7 @@ MAX_BODY_CHARS_PER_NOTE = 1800
 # The model still sees complete bounded excerpts for every note in the batch.
 MAX_SAMPLE_BATCH_NOTES = 3
 MIN_RECOVERED_QUOTE_CHARS = 8
+MAX_SAMPLE_QUOTE_CHARS = 180
 
 SAMPLE_SYSTEM_PROMPT = """你是样本分析 Agent，只负责分析本批已采集的小红书文字资料，不写发布成稿或配图提示词。
 严格返回符合 output_schema 的 JSON 对象，不返回 Markdown、其他字段或额外说明。
@@ -229,7 +230,7 @@ def _recover_source_quote(quote: str, text: str) -> str | None:
     """
     exact = _canonical_source_quote(quote, text)
     if exact is not None:
-        return exact
+        return exact if len(exact) <= MAX_SAMPLE_QUOTE_CHARS else None
     compact_quote = _compact_quote(quote)
     if len(compact_quote) < MIN_RECOVERED_QUOTE_CHARS:
         return None
@@ -246,7 +247,9 @@ def _recover_source_quote(quote: str, text: str) -> str | None:
             if source_start < 0:
                 continue
             source_end = source_start + length - 1
-            return text[positions[source_start]:positions[source_end] + 1]
+            recovered = text[positions[source_start]:positions[source_end] + 1]
+            if len(recovered) <= MAX_SAMPLE_QUOTE_CHARS:
+                return recovered
     return None
 
 
