@@ -31,7 +31,10 @@ from backend.app.services.creative_graph.review_schema import topic_review_respo
 from backend.app.services.creative_graph.sample_schema import sample_response_type
 from backend.app.services.creative_graph.sample_review_schema import sample_review_response_type
 from backend.app.services.creative_graph.source_schema import copy_response_type, topic_response_type
-from backend.app.services.creative_diagnostics import capture_model_quotes, diagnostic_event, exception_details, failed_quote_diagnostic, validation_summary
+from backend.app.services.creative_diagnostics import (
+    capture_model_quotes, capture_model_response, diagnostic_event, exception_details,
+    failed_model_response, failed_quote_diagnostic, validation_summary,
+)
 
 
 class GraphOutputError(CreativeError):
@@ -108,10 +111,11 @@ class StructuredAgent:
             kind = "creative_schema_invalid"
             value = None
             raw_quotes = {}
+            raw_response = {}
             try:
                 # Output is constrained in the actual request, then validated
                 # against TypedDict at runtime before business checks see it.
-                with capture_model_quotes() as raw_quotes:
+                with capture_model_response() as raw_response, capture_model_quotes() as raw_quotes:
                     value = runnable.invoke([
                         SystemMessage(content=graph_prompt(self.spec)),
                         HumanMessage(content=prompt + repair),
@@ -149,6 +153,9 @@ class StructuredAgent:
                         message += "；优先选择 5～8 个与本版最终正文相关的话题，不需要凑无关热词，程序会清理格式。"
                 quote_detail = failed_quote_diagnostic(exc, value, raw_quotes)
                 traces.append(AgentAttemptTrace(attempt, round((monotonic() - started) * 1000), kind, message, quote_detail))
+                response_detail = failed_model_response(raw_response)
+                if response_detail:
+                    diagnostic_event("模型原始输出（校验失败）", level="WARNING", **context, **response_detail)
                 if quote_detail:
                     diagnostic_event("原文引用不匹配", level="WARNING", **context, **quote_detail)
                 diagnostic_event("输出校验失败", level="WARNING", **context, duration_ms=traces[-1].duration_ms,

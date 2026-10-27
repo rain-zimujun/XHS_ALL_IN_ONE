@@ -7,8 +7,9 @@ from pydantic import ValidationError, TypeAdapter
 
 from backend.app.schemas.creative_graph import SampleAnalysisResponse
 from backend.app.services.creative_diagnostics import (
-    capture_model_quotes, diagnostic_context, diagnostic_event, quote_mismatch_details,
-    record_model_quotes, validation_summary,
+    MAX_LOGGED_MODEL_RESPONSE_CHARS, capture_model_quotes, diagnostic_context,
+    diagnostic_event, failed_model_response, quote_mismatch_details, record_model_quotes,
+    validation_summary,
 )
 from backend.app.services.creative_graph.agents import GraphOutputError, build_agents
 from backend.app.services.creative_graph.model import CompatibleChatModel, response_parameter
@@ -65,9 +66,14 @@ def test_failed_quote_diagnostics_record_only_failed_quote_and_bounded_source_wi
     assert quotes[0]["source_position"] == position
     assert quotes[0]["source_candidates"][0]["source_window"] == payload["sources"][position - 1]["title"]
     assert caught.value.attempts[-1].quote_diagnostic["model_quote"] == "private-generated-quote"
-    assert "private-generated-quote" not in json.dumps(failures)
-    assert "unrelated-model-summary" not in json.dumps(events)
-    assert "sample-" not in json.dumps(events)
+    raw_outputs = [e for e in events if e["event"] == "模型原始输出（校验失败）"]
+    if workflow == "langgraph":
+        assert len(raw_outputs) == 2
+        assert raw_outputs[0]["model_response"] == json.dumps(output)
+        assert "private-generated-quote" in raw_outputs[0]["model_response"]
+        assert "unrelated-model-summary" in raw_outputs[0]["model_response"]
+    else:
+        assert not raw_outputs
 
 
 def test_graph_logs_actual_quote_before_typed_dict_whitespace_normalization():
@@ -82,6 +88,15 @@ def test_graph_logs_actual_quote_before_typed_dict_whitespace_normalization():
     assert detail["validated_quote"] == "原文没有这句"
     assert detail["model_quote_changed_by_validation"] is True
     assert detail["model_quote_truncated"] is False
+
+
+def test_failed_model_response_log_is_bounded():
+    raw = "x" * (MAX_LOGGED_MODEL_RESPONSE_CHARS + 10)
+    detail = failed_model_response({"text": raw})
+    assert len(detail["model_response"]) == MAX_LOGGED_MODEL_RESPONSE_CHARS
+    assert detail["model_response_chars"] == len(raw)
+    assert detail["model_response_truncated"] is True
+    assert failed_model_response({}) is None
 
 
 @pytest.mark.parametrize("kind", ["whitespace", "width", "wrong_field", "cross_segment", "long"])

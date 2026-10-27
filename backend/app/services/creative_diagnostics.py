@@ -12,6 +12,8 @@ from pydantic import ValidationError
 
 _context = ContextVar("creative_diagnostics", default={})
 _raw_quotes = ContextVar("creative_raw_quotes", default=None)
+_raw_model_response = ContextVar("creative_raw_model_response", default=None)
+MAX_LOGGED_MODEL_RESPONSE_CHARS = 8000
 
 
 @contextmanager
@@ -22,6 +24,22 @@ def capture_model_quotes():
         yield quotes
     finally:
         _raw_quotes.reset(token)
+
+
+@contextmanager
+def capture_model_response():
+    response = {}
+    token = _raw_model_response.set(response)
+    try:
+        yield response
+    finally:
+        _raw_model_response.reset(token)
+
+
+def record_model_response(output):
+    response = _raw_model_response.get()
+    if response is not None and isinstance(output, str):
+        response["text"] = output
 
 
 def record_model_quotes(output):
@@ -59,10 +77,22 @@ def diagnostic_context(*, task_id, workflow):
 
 
 def diagnostic_event(event, *, level="INFO", **details):
-    # Quote mismatch events may include the failed quote and bounded source
-    # windows. Never pass full responses, prompts, kwargs or credentials here.
+    # Callers may include a bounded failed model response, never prompts,
+    # request kwargs or credentials.
     record = {**_context.get(), "event": event, **details}
     logger.log(level, "创作诊断 {}", json.dumps(record, ensure_ascii=False))
+
+
+def failed_model_response(response):
+    """Return bounded raw provider text for a failed structured response."""
+    raw = (response or {}).get("text")
+    if not isinstance(raw, str):
+        return None
+    return {
+        "model_response": raw[:MAX_LOGGED_MODEL_RESPONSE_CHARS],
+        "model_response_chars": len(raw),
+        "model_response_truncated": len(raw) > MAX_LOGGED_MODEL_RESPONSE_CHARS,
+    }
 
 
 def quote_mismatch_details(*, path, quote, source, source_position, field=None):
