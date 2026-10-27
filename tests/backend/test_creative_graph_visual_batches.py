@@ -53,12 +53,17 @@ def test_visual_batches_cover_each_copy_keep_full_fields_and_merge_in_original_o
 @pytest.mark.parametrize("count,variants", [(1, 2), (3, 3), (5, 3)])
 def test_final_batches_preserve_full_note_and_relevant_evidence_only(count, variants):
     payload = prepare_final_review_input(**final_inputs(count, variants))
+    for item in payload["items"]:
+        item["evidence"] = {"claim_ids": ["claim_final"], "source_note_ids": item["fields"]["source_note_ids"],
+                            "approved_claims": [{"claim_id": "claim_final", "text": "获批配色观察。",
+                                                 "note_ids": item["fields"]["source_note_ids"]}]}
     before = copy.deepcopy(payload)
     batches = prepare_final_batches(payload)
     assert len(batches) == count * variants
     assert [b["items"][0] for b in batches] == payload["items"]
     for batch in batches:
         assert len(batch["items"]) == 1
+        assert batch["items"][0]["evidence"]["approved_claims"][0]["text"] == "获批配色观察。"
         assert "locked_copies" not in batch["context"]
         for field in ("topic_patterns", "style_patterns", "value_patterns", "avoid_patterns"):
             for pattern in batch["context"]["sample_analysis"][field]:

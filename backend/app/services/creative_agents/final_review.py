@@ -18,7 +18,7 @@ from backend.app.services.creative_orchestrator import AgentRun, AgentSpec, Agen
 
 FINAL_REVIEW_AGENT = AgentSpec(stage="final_review", name="最终评委 Agent", temperature=0.2, system_prompt=REVIEW_INSTRUCTIONS + """
 本阶段逐版检查完整组合：标题与正文一致性、标题承诺兑现、配图匹配、标签质量、事实/原创/素材边界。
-逐一对照当前标题、正文、标签、封面文案、构图、找图说明、生图提示词与选题证据，不因上游通过而跳过核对。
+逐一对照当前标题、正文、标签、封面文案、构图、找图说明、生图提示词与选题证据，不因上游通过而跳过核对。若 item.evidence 声明获批 claim/source，必须按对应获批结论检查正文承诺，不得仅凭 ID 合法或上游评审通过就认定语义有依据。
 标签以本版最终正文为依据，检查每个话题的主题相关性；正文未涉及的热词、行业或引流标签不能因受众或关键词包含就通过。合理的不同排序只作为建议，不单独阻断。发现问题交正文阶段修改，不让配图阶段改标签。
 配图要具体可执行，正负向提示词应独立可用；封面文字交用户后期排版，不要求生图准确生成汉字。
 概念服装图不能伪装成真实商品细节/案例或效果证据；没有提供原图，不能声称核对了原图或视觉趋势。
@@ -43,6 +43,11 @@ def prepare_final_review_input(*, image_plans: ImagePlans | dict, final_revision
     pictures = {v.variant_id: v for v in images.variants}
     items = [{
         "item_id": v["variant_id"], "idea_id": v["idea_id"], "candidate_id": v["candidate_id"],
+        "evidence": {
+            "claim_ids": list(v.get("claim_ids", [])),
+            "source_note_ids": list(v["source_note_ids"]),
+            "approved_claims": context.get("approved_claims_by_idea", {}).get(v["idea_id"], []),
+        },
         "fields": {
             "topic": topics[v["idea_id"]], "title": titles[v["idea_id"]]["title"],
             "body": v["body"], "tags": v["tags"], "source_note_ids": v["source_note_ids"],

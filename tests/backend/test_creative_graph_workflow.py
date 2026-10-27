@@ -155,6 +155,10 @@ def test_graph_executes_ten_roles_and_persists_serializable_global_state(count, 
     assert len(result["ideas"]) == count
     assert all("claim_ids" not in idea for idea in result["ideas"])
     assert all("claim_ids" not in variant for idea in result["ideas"] for variant in idea["variants"])
+    final_calls = [call for call in model.wire_calls if call["response_format"]["json_schema"]["name"] == "FinalReviewResponse"]
+    assert len(final_calls) == count * variants
+    assert all(json.loads(call["user_prompt"])["input"]["items"][0]["evidence"]["approved_claims"]
+               for call in final_calls)
     assert all(len(i["variants"]) == variants for i in result["ideas"])
     assert metadata["workflow"] == "langgraph"
     assert len(model.calls) == metadata["request_count"] == 8 + 2 * count + 2 * count * variants
