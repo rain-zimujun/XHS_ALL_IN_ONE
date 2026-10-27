@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from threading import RLock
 from time import monotonic
 
 from backend.app.services.creative_analysis import CreativeError
@@ -73,16 +74,24 @@ class RequestBudget:
         self.clock, self.started = clock, clock()
         self.request_count = 0
         self.before_request = before_request
+        self._request_lock = RLock()
 
     def ensure_available(self):
-        if self.before_request:
-            self.before_request()
+        with self._request_lock:
+            if self.before_request:
+                self.before_request()
+            self._raise_if_unavailable()
+
+    def _raise_if_unavailable(self):
         if self.request_count >= self.max_requests:
             raise CreativeError(f"多阶段生成已达到累计 {self.max_requests} 次模型请求上限，当前稿件和评审已保存。", "creative_budget_exhausted")
         if self.clock() - self.started >= self.max_seconds:
             raise CreativeError(f"多阶段生成已达到本轮 {self.max_seconds / 60:g} 分钟执行时间上限，当前稿件和已完成批次已保存；LangGraph 任务可从失败阶段继续。", "creative_time_exhausted")
 
     def __call__(self, **kwargs):
-        self.ensure_available()
-        self.request_count += 1
+        with self._request_lock:
+            if self.before_request:
+                self.before_request()
+            self._raise_if_unavailable()
+            self.request_count += 1
         return self.complete(**kwargs)

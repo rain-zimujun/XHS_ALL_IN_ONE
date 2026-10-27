@@ -1,5 +1,7 @@
 import copy
 import json
+from threading import Event, Lock
+from time import sleep
 from types import SimpleNamespace
 
 import pytest
@@ -122,6 +124,44 @@ def test_graph_routes_sample_preprocessing_to_its_dedicated_model_only():
     assert all(call["response_format"]["json_schema"]["name"] != "SampleAnalysisResponse"
                for call in creative_model.wire_calls)
     assert len(preprocess_model.calls) + len(creative_model.calls) == w.budget.request_count
+
+
+def test_sample_preprocessing_runs_at_most_three_batches_concurrently_and_merges_in_source_order():
+    class ConcurrentCompletion(GraphCompletion):
+        def __init__(self):
+            super().__init__()
+            self.lock = Lock()
+            self.in_flight = 0
+            self.max_in_flight = 0
+
+        def __call__(self, **kwargs):
+            if kwargs["response_format"]["json_schema"]["name"] == "SampleAnalysisResponse":
+                with self.lock:
+                    self.in_flight += 1
+                    self.max_in_flight = max(self.max_in_flight, self.in_flight)
+                sleep(0.03)
+                try:
+                    return super().__call__(**kwargs)
+                finally:
+                    with self.lock:
+                        self.in_flight -= 1
+            return super().__call__(**kwargs)
+
+    model = ConcurrentCompletion()
+    sample_sources = sources(11)
+    w = LangGraphWorkflow(search=SEARCH, sources=sample_sources,
+                          options={"model_id": 1, "idea_count": 1, "variant_count": 2}, complete=model)
+
+    result, _ = w.run()
+
+    sample_calls = [call for call in model.wire_calls
+                    if call["response_format"]["json_schema"]["name"] == "SampleAnalysisResponse"]
+    assert len(sample_calls) == 4
+    assert 1 < model.max_in_flight <= 3
+    assert [item["note_id"] for item in w.state["sample_analysis"]["observations"]] == [
+        source["note_id"] for source in sample_sources
+    ]
+    assert len(result["ideas"]) == 1
 
 
 def test_graph_full_chain_normalizes_title_review_blocking_severity_without_retry():
@@ -305,26 +345,33 @@ def test_budget_and_timeout_stop_without_further_requests_and_preserve_global_ou
     assert "secret-transport-details" not in json.dumps(w.state)
 
 
-def test_sample_analysis_batches_sequentially_and_resume_reuses_completed_sample_batches():
+def test_parallel_sample_analysis_persists_completed_batches_and_resume_retries_only_the_failure():
     notes = sources(7)
+    peers_saved = Event()
     def fail_second_batch(**kwargs):
         prompt = json.loads(kwargs["user_prompt"])
         if (kwargs["response_format"]["json_schema"]["name"] == "SampleAnalysisResponse"
                 and prompt["input"]["batch"]["index"] == 2):
+            assert peers_saved.wait(5)
             raise CreativeError("模型服务返回错误（HTTP 401）", "ai_http_error", http_status=401)
         return model(**kwargs)
 
     model = GraphCompletion()
+    def save_checkpoint(state):
+        cached = state["pipeline"]["stages"]["sample_analysis"]["metadata"].get("sample_analysis_batches", {}).get("results", {})
+        if len(cached) >= 2:
+            peers_saved.set()
+
     original = LangGraphWorkflow(search=SEARCH, sources=notes,
                                  options={"model_id": 1, "workflow": "langgraph", "idea_count": 1, "variant_count": 2},
-                                 complete=fail_second_batch)
+                                 complete=fail_second_batch, on_graph_state=save_checkpoint)
     with pytest.raises(CreativeError):
         original.run()
     saved = copy.deepcopy(original.state)
     metadata = saved["pipeline"]["stages"]["sample_analysis"]["metadata"]
     assert metadata["sample_batch_count"] == 3
-    assert metadata["sample_completed_batches"] == 1
-    assert len(metadata["sample_analysis_batches"]["results"]) == 1
+    assert metadata["sample_completed_batches"] == 2
+    assert len(metadata["sample_analysis_batches"]["results"]) == 2
     task = SimpleNamespace(status="failed", error_type="ai_http_error", payload={
         "analysis": saved["options"], "search": saved["search"], "sources": saved["sources"], "graph_state": saved,
     })
@@ -336,11 +383,11 @@ def test_sample_analysis_batches_sequentially_and_resume_reuses_completed_sample
     assert len(result["ideas"]) == 1
     sample = resumed.state["pipeline"]["stages"]["sample_analysis"]["metadata"]
     assert sample["sample_completed_batches"] == 3
-    assert sample["sample_reused_batches"] == 1
+    assert sample["sample_reused_batches"] == 2
     sample_calls = [call for call in resumed_model.wire_calls
                     if call["response_format"]["json_schema"]["name"] == "SampleAnalysisResponse"]
-    assert len(sample_calls) == 2
-    assert [json.loads(call["user_prompt"])["input"]["batch"]["index"] for call in sample_calls] == [2, 3]
+    assert len(sample_calls) == 1
+    assert [json.loads(call["user_prompt"])["input"]["batch"]["index"] for call in sample_calls] == [2]
     # The split sample run also uses one-object title/copy reviews downstream.
     assert pipeline_metadata["request_count"] == 21
 

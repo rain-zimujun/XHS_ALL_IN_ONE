@@ -10,6 +10,7 @@ from __future__ import annotations
 
 
 ADAPTIVE_BATCH_POLICY_VERSION = "adaptive-batches-v1"
+MAX_PARALLEL_BATCHES = 3
 
 
 def sample_batch_count(metadata: dict | None) -> int:

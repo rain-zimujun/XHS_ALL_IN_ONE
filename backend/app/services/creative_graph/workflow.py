@@ -5,8 +5,11 @@ The mutable snapshot on the runner mirrors graph state solely for persistence
 and errors during a request; downstream nodes receive StateGraph's state.
 """
 from copy import deepcopy
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from dataclasses import asdict
 from functools import partial
+from threading import RLock
 
 from langgraph.graph import END, START, StateGraph
 from pydantic import ValidationError
@@ -35,7 +38,7 @@ from backend.app.services.creative_graph.audience import run_audience_steps
 from backend.app.services.creative_graph.copy_review import (
     COPY_REVIEW_VERSION, prepare_copy_review_batches, merge_copy_review_results,
 )
-from backend.app.services.creative_graph.adaptive_batches import sample_batch_count
+from backend.app.services.creative_graph.adaptive_batches import MAX_PARALLEL_BATCHES, sample_batch_count
 from backend.app.services.creative_graph.batch_runner import run_batches
 from backend.app.services.creative_graph.visual_batches import (
     IMAGE_BATCH_VERSION, FINAL_BATCH_VERSION, prepare_image_batches, image_batch_revision,
@@ -150,6 +153,7 @@ class LangGraphWorkflow:
         self.on_state, self.on_graph_state = on_state, on_graph_state
         self.transports = {"default": complete, "sample_analysis": preprocess_complete or complete}
         self.current, self.current_role = "sample_analysis", "sample_analysis"
+        self._checkpoint_lock = RLock()
         self.active_pipeline = pipeline
         self.budget = RequestBudget(self._recorded_transport, max_requests=max_requests, max_seconds=MAX_GRAPH_SECONDS)
         self.agents = build_agents(CompatibleChatModel(self._complete))
@@ -167,16 +171,17 @@ class LangGraphWorkflow:
         self.graph = self._build_graph()
 
     def _checkpoint(self, pipeline, activity=None):
-        if activity:
-            pipeline["activity"] = activity
-        pipeline["request_count"] = self.budget.request_count
-        pipeline["updated_at"] = utc_now()
-        validate_pipeline_state(pipeline)
-        self.state["pipeline"] = deepcopy(pipeline)
-        if self.on_graph_state:
-            self.on_graph_state(deepcopy(self.state))
-        if self.on_state:
-            self.on_state(deepcopy(pipeline))
+        with self._checkpoint_lock:
+            if activity:
+                pipeline["activity"] = activity
+            pipeline["request_count"] = self.budget.request_count
+            pipeline["updated_at"] = utc_now()
+            validate_pipeline_state(pipeline)
+            self.state["pipeline"] = deepcopy(pipeline)
+            if self.on_graph_state:
+                self.on_graph_state(deepcopy(self.state))
+            if self.on_state:
+                self.on_state(deepcopy(pipeline))
 
     def _recorded_transport(self, **kwargs):
         self._checkpoint(self.active_pipeline)
@@ -401,22 +406,65 @@ class LangGraphWorkflow:
             stage_metadata["sample_analysis_batches"] = cache
             stage_metadata.update({"sample_batch_count": len(batches), "sample_batch_size": sample_analysis.MAX_SAMPLE_BATCH_NOTES,
                                    "sample_completed_batches": len(cache["results"]), "sample_reused_batches": 0})
-            runs, outputs = [], []
+            outputs_by_key = {}
             for index, batch in enumerate(batches, 1):
-                self._checkpoint(pipeline, f"样本分析 Agent · 批次 {index}/{len(batches)}（{len(batch['sources'])} 篇）")
                 key = batch["input_fingerprint"]
                 if key in valid_cache:
-                    outputs.append(valid_cache[key])
+                    outputs_by_key[key] = valid_cache[key]
                     stage_metadata["sample_reused_batches"] += 1
                     self._checkpoint(pipeline, f"样本分析 Agent · 复用已完成批次 {index}/{len(batches)}")
-                    continue
-                run = agent.invoke(batch, validate_output=lambda result, current=batch: sample_analysis.validate_sample_evidence(result, current),
-                                   on_progress=lambda text: self._checkpoint(pipeline, f"{text} · 批次 {index}/{len(batches)}"))
-                runs.append(run)
-                outputs.append(run.output)
-                cache["results"][key] = run.output.model_dump(mode="json")
-                stage_metadata["sample_completed_batches"] = len(cache["results"])
-                self._checkpoint(pipeline, f"样本分析 Agent · 已保存批次 {index}/{len(batches)}")
+            pending = [(index, batch) for index, batch in enumerate(batches, 1)
+                       if batch["input_fingerprint"] not in valid_cache]
+
+            def process(index, batch):
+                self._checkpoint(pipeline, f"样本分析 Agent · 批次 {index}/{len(batches)}（{len(batch['sources'])} 篇）")
+                run = agent.invoke(
+                    batch,
+                    validate_output=lambda result, current=batch: sample_analysis.validate_sample_evidence(result, current),
+                    on_progress=lambda text: self._checkpoint(pipeline, f"{text} · 批次 {index}/{len(batches)}"),
+                )
+                return batch["input_fingerprint"], run
+
+            if pending:
+                futures = {}
+                first_error = None
+                with ThreadPoolExecutor(max_workers=MAX_PARALLEL_BATCHES, thread_name_prefix="creative-sample") as executor:
+                    for index, batch in pending:
+                        context = copy_context()
+                        future = executor.submit(context.run, process, index, batch)
+                        futures[future] = (index, batch)
+                    for future in as_completed(futures):
+                        try:
+                            key, run = future.result()
+                        except Exception as exc:
+                            first_error = first_error or exc
+                            for queued in futures:
+                                if queued is not future:
+                                    queued.cancel()
+                            break
+                        outputs_by_key[key] = run.output
+                        cache["results"][key] = run.output.model_dump(mode="json")
+                        stage_metadata["sample_completed_batches"] = len(cache["results"])
+                        self._checkpoint(pipeline, f"样本分析 Agent · 已保存批次 {len(outputs_by_key)}/{len(batches)}")
+                    # Requests already running when a peer fails may finish; retain
+                    # their successful results, but never schedule replacement work.
+                    if first_error:
+                        for future, (_index, _batch) in futures.items():
+                            if future.cancelled() or not future.done():
+                                continue
+                            try:
+                                key, run = future.result()
+                            except Exception:
+                                continue
+                            if key not in outputs_by_key:
+                                outputs_by_key[key] = run.output
+                                cache["results"][key] = run.output.model_dump(mode="json")
+                                stage_metadata["sample_completed_batches"] = len(cache["results"])
+                                self._checkpoint(pipeline, "样本分析 Agent · 已保存并行完成批次")
+                if first_error:
+                    raise first_error
+
+            outputs = [outputs_by_key[batch["input_fingerprint"]] for batch in batches]
             merged = sample_analysis.merge_sample_batches(outputs)
             stage_metadata["sample_completed_batches"] = len(batches)
             return AgentRun(stage="sample_analysis", name=agent.spec.name, output=merged,
