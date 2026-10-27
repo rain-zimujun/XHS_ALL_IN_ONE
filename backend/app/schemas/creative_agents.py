@@ -120,6 +120,7 @@ TopicContentType = Literal["作品展示", "灵感分享", "行业观察", "方�
 class TopicEvidence(AgentOutputModel):
     basis: Literal["sample_pattern", "sample_observation", "user_requirement"]
     note_ids: list[NoteId] = Field(default_factory=list, max_length=8, description="本条依据的不同来源；用户要求不附样本 ID")
+    claim_ids: list[Annotated[str, Field(min_length=1, max_length=40)]] = Field(default_factory=list, max_length=8)
     statement: FindingText
 
 

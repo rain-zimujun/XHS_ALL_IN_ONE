@@ -27,6 +27,10 @@ def production_context(role, payload):
     sample = payload["sample_analysis"]
     if role == "topic":
         result["audience_segment_ids"] = payload["audience_segment_ids"]
+        relevant_claims = [claim for claim in payload.get("approved_claims", [])
+                           if claim["section"] in {"summary", "observations", "topic_patterns", "value_patterns", "avoid_patterns"}]
+        result["approved_claims"] = relevant_claims
+        result["approved_claim_ids"] = [claim["claim_id"] for claim in relevant_claims]
         result["sample_analysis"] = {
             "summary": sample["summary"],
             "observations": [{k: v for k, v in o.items() if k != "quote"} for o in sample["observations"]],

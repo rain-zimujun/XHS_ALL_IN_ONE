@@ -92,7 +92,13 @@ def base_inputs(s):
 
 
 def topic_inputs(s):
-    return dict(**base_inputs(s), topic_brief=s["topic"], topic_revision=s["pipeline"]["stages"]["topic"]["revision"])
+    approved_claims = [
+        {key: claim[key] for key in ("claim_id", "section", "text", "note_ids")}
+        for claim in s["sample_review"].get("approved_claims", [])
+    ]
+    return dict(**base_inputs(s), topic_brief=s["topic"],
+                topic_revision=s["pipeline"]["stages"]["topic"]["revision"],
+                approved_claims=approved_claims or None)
 
 
 def title_inputs(s):
@@ -653,11 +659,16 @@ class LangGraphWorkflow:
         return {"audience": output, "pipeline": pipeline, "revision_plan": s["revision_plan"]}
 
     def topic_node(self, s: CreativeGraphState) -> TopicUpdate:
-        payload = topic_selection.prepare_topic_input(**base_inputs(s))
+        approved_claims = [
+            {key: claim[key] for key in ("claim_id", "section", "text", "note_ids")}
+            for claim in s["sample_review"].get("approved_claims", [])
+        ]
+        payload = topic_selection.prepare_topic_input(**base_inputs(s), approved_claims=approved_claims)
         return self._producer(s, "topic", payload, lambda r: topic_selection.validate_topic_brief(r, payload))
 
     def topic_review_node(self, s: CreativeGraphState) -> TopicReviewUpdate:
-        return self._reviewer(s, "topic", topic_review.prepare_topic_review_input(**topic_inputs(s)))
+        payload = topic_review.prepare_topic_review_input(**topic_inputs(s))
+        return self._reviewer(s, "topic", payload)
 
     def title_node(self, s: CreativeGraphState) -> TitleUpdate:
         payload = title_generation.prepare_title_input(**topic_inputs(s), topic_review=s["topic_review"])

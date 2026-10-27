@@ -60,6 +60,7 @@ def test_defaulted_fields_are_required_and_nullable_review_owner_remains_nullabl
     audience_schema = json_schema_response_format(AudienceBrief)["json_schema"]["schema"]
     evidence = audience_schema["$defs"]["AudienceEvidence"]
     assert "note_ids" in evidence["required"]
+    assert "claim_ids" in evidence["required"]
     assert evidence["properties"]["note_ids"]["type"] == "array"
     sample_schema = json_schema_response_format(SampleAnalysis)["json_schema"]["schema"]
     quote = sample_schema["$defs"]["SampleEvidence"]["properties"]["quote"]

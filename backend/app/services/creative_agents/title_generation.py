@@ -117,6 +117,7 @@ def prepare_title_input(
     sample_analysis: dict[str, Any] | SampleAnalysis, audience_brief: dict[str, Any] | AudienceBrief,
     topic_brief: dict[str, Any] | TopicBrief, topic_revision: int,
     topic_review: dict[str, Any] | TopicReviewResult, candidate_count: int = 5, title_max_length: int = 20,
+    approved_claims: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if type(candidate_count) is not int or not 5 <= candidate_count <= 8:
         raise CreativeError("每个选题需要 5～8 个候选标题。", "title_input_invalid")
@@ -124,6 +125,7 @@ def prepare_title_input(
         raise CreativeError("标题长度预算需要在 10～40 个字符之间。", "title_input_invalid")
     topic_payload = prepare_topic_review_input(
         keyword, requirements, requested_idea_count, sample_analysis, audience_brief, topic_brief, topic_revision,
+        approved_claims=approved_claims,
     )
     review = verified_topic_review(topic_review, topic_payload)
     # Keep the validated context, but do not send judge scores as creative instructions.

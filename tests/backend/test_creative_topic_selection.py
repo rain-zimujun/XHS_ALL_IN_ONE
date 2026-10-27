@@ -14,7 +14,7 @@ from backend.app.services.creative_agents.topic_selection import (
     TOPIC_PROMPT_VERSION, analyze_topics, prepare_topic_input, run_topic_selection,
 )
 from backend.app.services.creative_analysis import CreativeError
-from backend.app.services.creative_orchestrator import AgentRunError
+from backend.app.services.creative_orchestrator import AgentRunError, AgentValidationError
 
 
 REQUIREMENTS = "符合小红书爆款文案的调性，文案尽可能精简、抓眼球"
@@ -87,7 +87,7 @@ def valid_output(payload):
             "core_angle": f"从样本中的颜色和轮廓切入第 {i + 1} 个讨论角度。",
             "must_cover": ["具体颜色", "轮廓细节"],
             "source_note_ids": source_ids,
-            "evidence": [{"basis": "sample_pattern", "note_ids": source_ids, "statement": "多个样本都出现配色和轮廓描述。"}],
+            "evidence": [{"basis": "sample_pattern", "note_ids": source_ids, "claim_ids": [], "statement": "多个样本都出现配色和轮廓描述。"}],
             "boundaries": ["不虚构流量、转化或亲测效果。"],
             "differentiator": f"与其他方向区分的角度 {i + 1}。",
         })
@@ -125,6 +125,25 @@ def test_prepare_topic_input_preserves_requested_count_without_mutating_briefs()
     assert "api_key" not in serialized
     assert '"content"' not in serialized
     assert "sample_analysis" in payload and "audience_brief" in payload
+
+
+def test_topic_evidence_must_bind_approved_claims_to_their_source_notes():
+    claims = [
+        {"claim_id": "claim_001_001", "section": "topic_patterns", "text": "配色是常见切入点。", "note_ids": ["sample-0", "sample-1"]},
+        {"claim_id": "claim_001_002", "section": "style_patterns", "text": "短句描述具体颜色。", "note_ids": ["sample-0"]},
+    ]
+    payload = prepare_topic_input("AI 服装", REQUIREMENTS, 1, sample_analysis(), audience_brief(), claims)
+    assert payload["approved_claim_ids"] == ["claim_001_001"]
+    result = valid_output(payload)
+    result["ideas"][0]["evidence"][0]["claim_ids"] = ["claim_001_001"]
+    topic = TopicBrief.model_validate(result)
+    from backend.app.services.creative_agents.topic_selection import validate_topic_brief
+    validate_topic_brief(topic, payload)
+
+    topic.ideas[0].evidence[0].note_ids = ["sample-2"]
+    topic.ideas[0].source_note_ids = ["sample-2", "sample-1"]
+    with pytest.raises(AgentValidationError, match="属于本条 evidence"):
+        validate_topic_brief(topic, payload)
 
 
 @pytest.mark.parametrize("count", [0, 2, 4, 6, True, False, 1.0, 3.0, "1", None])
@@ -201,7 +220,14 @@ def test_topic_input_revalidates_mutated_model_instances(kind):
     audience = AudienceBrief.model_validate(audience_brief())
     payload = prepare_topic_input("AI 服装", REQUIREMENTS, 1, sample, audience)
     assert payload["sample_analysis"] == sample.model_dump(mode="json")
-    assert payload["audience_brief"] == audience.model_dump(mode="json")
+    expected_audience = audience.model_dump(mode="json")
+    for segment in expected_audience["segments"]:
+        for evidence in segment["evidence"]:
+            evidence.pop("claim_ids", None)
+    for need in expected_audience["shared_needs"]:
+        for evidence in need["evidence"]:
+            evidence.pop("claim_ids", None)
+    assert payload["audience_brief"] == expected_audience
     if kind == "sample":
         sample.observations[0].topic = ""
     else:

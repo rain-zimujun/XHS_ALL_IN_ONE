@@ -19,7 +19,9 @@ from backend.app.schemas.creative import CreativeAnalysisOptions
 from backend.app.schemas.creative_agents import (
     AgentOutputModel, AudienceBrief, SampleAnalysis, TopicBrief, TopicJudgement, TopicReviewResponse,
 )
-from backend.app.services.creative_agents.topic_selection import prepare_topic_input, validate_topic_brief
+from backend.app.services.creative_agents.topic_selection import (
+    _drop_empty_claim_ids, prepare_topic_input, validate_topic_brief,
+)
 from backend.app.services.creative_analysis import CreativeError, owned_text_model, request_analysis
 from backend.app.services.creative_orchestrator import AgentRun, AgentSpec, AgentValidationError, run_agent
 from backend.app.services.creative_quality import (
@@ -27,8 +29,8 @@ from backend.app.services.creative_quality import (
 )
 
 
-TOPIC_REVIEW_PROMPT_VERSION = "topic-review-v1"
-TOPIC_REVIEW_SCHEMA_VERSION = 1
+TOPIC_REVIEW_PROMPT_VERSION = "topic-review-v2"
+TOPIC_REVIEW_SCHEMA_VERSION = 2
 TOPIC_REVIEW_POLICY_VERSION = "topic-rubric-v1"
 
 TOPIC_REVIEW_SYSTEM_PROMPT = """你是选题评委 Agent，只评价选题，不重写选题、标题、正文或配图。
@@ -39,6 +41,7 @@ TOPIC_REVIEW_SYSTEM_PROMPT = """你是选题评委 Agent，只评价选题，不
 结合样本、主要受众和用户要求判断读者价值、具体程度、匹配度、差异化和样本依据。不要采信生产者自己的好评。
 审美参考、灵感和行业观察也有价值，不强迫改成赚钱、省钱或教程；吸引力不等于夸张、承诺流量或制造焦虑。
 检查证据陈述是否受到所给样本简报支持：有真实 note_id 不代表论断成立。evidence 评分至少引用一个已提供 note_id。
+如果选题 evidence 绑定了获批 claim，评审样本证据时只能引用该选题已绑定 claim 的来源 note_id；不能因为某来源在全局样本中存在就用于无关选题。
 比较本批选题是否只是同义改写；需要比较时，在问题中引用其他已存在的 related_idea_ids，不能引用自身。
 每个低于 rubric.minimum 的评分都要有对应问题与具体 revision_instruction；blocking 标准低于 minimum 时必须标成 blocking。
 即使总分较高，虚构数据/亲测、没有依据的效果承诺或核心内容无法支撑也应列为 blocking，不能用其他高分抵消。
@@ -77,20 +80,25 @@ def prepare_topic_review_input(
     sample_analysis: dict[str, Any] | SampleAnalysis,
     audience_brief: dict[str, Any] | AudienceBrief,
     topic_brief: dict[str, Any] | TopicBrief, topic_revision: int,
+    approved_claims: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Revalidate upstream contracts and bind the review to the complete input."""
     try:
-        payload = prepare_topic_input(keyword, requirements, requested_idea_count, sample_analysis, audience_brief)
+        payload = prepare_topic_input(keyword, requirements, requested_idea_count, sample_analysis, audience_brief,
+                                      approved_claims=approved_claims)
         topic = TopicBrief.model_validate(
             topic_brief.model_dump() if isinstance(topic_brief, TopicBrief) else topic_brief,
         )
         validate_topic_brief(topic, payload)
+        topic_payload = topic.model_dump(mode="json")
+        if not payload.get("approved_claims"):
+            topic_payload = _drop_empty_claim_ids(topic_payload)
         if type(topic_revision) is not int or topic_revision < 1:
             raise ValueError("topic_revision")
     except (CreativeError, ValidationError, ValueError, AgentValidationError) as exc:
         raise CreativeError("选题评审输入无效，请确认上游简报、选题数量和产物版本。", "topic_review_input_invalid") from exc
     payload.update({
-        "topic_brief": topic.model_dump(mode="json"),
+        "topic_brief": topic_payload,
         "topic_revision": topic_revision,
         "rubric": [asdict(criterion) for criterion in rubric_for("topic")],
         "pass_threshold": REVIEW_PASS_THRESHOLD,
@@ -136,13 +144,25 @@ def validate_topic_review(result: TopicReviewResponse, payload: dict[str, Any]) 
     criteria = {item.key: item for item in rubric_for("topic")}
     notes = set(payload["sample_note_ids"])
     for review in result.reviews:
+        idea = ideas[review.idea_id]
+        if payload.get("approved_claims"):
+            approved = {item["claim_id"]: item for item in payload["approved_claims"]}
+            referenced_claims = {claim_id for evidence in idea["evidence"] for claim_id in evidence["claim_ids"]}
+            allowed_notes = {note_id for claim_id in referenced_claims if claim_id in approved
+                             for note_id in approved[claim_id]["note_ids"]}
+            if not referenced_claims.issubset(approved):
+                raise AgentValidationError("选题评审发现选题引用了未知的获批 claim_id")
+            if not referenced_claims:
+                raise AgentValidationError("选题评审发现选题没有绑定任何获批 claim_id")
+        else:
+            allowed_notes = notes
         keys = [score.criterion for score in review.scores]
         if len(keys) != len(set(keys)) or set(keys) != set(criteria):
             raise AgentValidationError("每个选题必须完整且唯一地包含固定的五个评分项")
         for score in review.scores:
             if len(score.fields) != len(set(score.fields)):
                 raise AgentValidationError("评分定位 fields 不可重复")
-            _validate_refs(score.note_ids, notes)
+            _validate_refs(score.note_ids, allowed_notes)
             if score.criterion == "evidence" and not score.note_ids:
                 raise AgentValidationError("evidence 评分需要已提供的样本 note_id 依据")
             criterion = criteria[score.criterion]
@@ -151,7 +171,7 @@ def validate_topic_review(result: TopicReviewResponse, payload: dict[str, Any]) 
                 if not issues or (criterion.blocking and not any(issue.severity == "blocking" for issue in issues)):
                     raise AgentValidationError("低分项必须给出对应问题和修改要求；阻断项低于门槛时需标为 blocking")
         for issue in review.issues:
-            _validate_refs(issue.note_ids, notes)
+            _validate_refs(issue.note_ids, allowed_notes)
             _validate_refs(issue.related_idea_ids, set(ideas) - {review.idea_id})
             if not any(issue.quote in text for text in _field_texts(ideas[review.idea_id][issue.field])):
                 raise AgentValidationError("问题 quote 必须逐字出现在当前选题的对应 field 中")
@@ -222,9 +242,11 @@ def run_topic_review(
     sample_analysis: dict[str, Any] | SampleAnalysis, audience_brief: dict[str, Any] | AudienceBrief,
     topic_brief: dict[str, Any] | TopicBrief, topic_revision: int,
     complete: Callable[..., str], on_progress: Callable[[str], None] | None = None,
+    approved_claims: list[dict[str, Any]] | None = None,
 ) -> tuple[AgentRun, dict[str, Any]]:
     payload = prepare_topic_review_input(
         keyword, requirements, requested_idea_count, sample_analysis, audience_brief, topic_brief, topic_revision,
+        approved_claims=approved_claims,
     )
     return _run_prepared(payload, complete, on_progress)
 
@@ -234,9 +256,11 @@ def analyze_topic_review(
     sample_analysis: dict[str, Any] | SampleAnalysis, audience_brief: dict[str, Any] | AudienceBrief,
     topic_brief: dict[str, Any] | TopicBrief, topic_revision: int,
     options: dict[str, Any], client_factory, on_progress: Callable[[str], None] | None = None,
+    approved_claims: list[dict[str, Any]] | None = None,
 ) -> tuple[AgentRun, dict[str, Any]]:
     payload = prepare_topic_review_input(
         keyword, requirements, requested_idea_count, sample_analysis, audience_brief, topic_brief, topic_revision,
+        approved_claims=approved_claims,
     )
     config = CreativeAnalysisOptions.model_validate(options)
     if "idea_count" in config.model_fields_set and (

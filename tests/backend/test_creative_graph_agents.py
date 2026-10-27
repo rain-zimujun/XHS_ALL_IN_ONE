@@ -14,6 +14,7 @@ from backend.app.services.creative_graph.agents import GraphOutputError, build_a
 from backend.app.services.creative_graph.model import CompatibleChatModel, response_parameter
 from backend.app.services.creative_graph.review_schema import item_review_response_type
 from backend.app.services.creative_graph.sample_schema import sample_response_type
+from backend.app.services.creative_graph.source_schema import topic_response_type
 from backend.app.services.creative_agents.title_generation import bind_title_ids, title_response_type
 from test_creative_sample_agent import OPTIONS, SEARCH, sources, valid_output
 from test_structured_output import assert_strict_contract
@@ -149,3 +150,16 @@ def test_title_schema_uses_program_owned_idea_keys_and_adapter_binds_candidate_i
         "title_0_0", "title_0_1", "title_1_0", "title_1_1",
     ]
     assert adapted["ideas"][0]["candidates"][0]["title"] == "标题 一"
+
+
+def test_topic_schema_limits_evidence_claim_ids_to_current_approved_registry():
+    payload = {
+        "audience_segment_ids": ["designers"], "sample_note_ids": ["sample-0", "sample-1", "sample-2"],
+        "approved_claim_ids": ["claim_001_001"], "requested_idea_count": 1,
+    }
+    schema = response_parameter(topic_response_type(payload))["json_schema"]["schema"]
+    evidence = schema["$defs"]["BoundTopicEvidence"]["properties"]
+    claim_ref = evidence["claim_ids"]["items"]
+    assert claim_ref.get("enum", [claim_ref.get("const")]) == ["claim_001_001"]
+    assert evidence["claim_ids"]["uniqueItems"] is True
+    assert evidence["note_ids"]["items"]["enum"] == payload["sample_note_ids"]

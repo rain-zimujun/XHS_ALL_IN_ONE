@@ -141,6 +141,22 @@ def test_fingerprint_is_stable_for_dictionary_order_and_model_input():
     assert prepare_topic_review_input(**args)["input_fingerprint"] == first["input_fingerprint"]
 
 
+def test_empty_claim_bindings_preserve_legacy_review_fingerprint():
+    args = inputs(1)
+    legacy_fingerprint = prepare_topic_review_input(**args)["input_fingerprint"]
+    for segment in args["audience_brief"]["segments"]:
+        for evidence in segment["evidence"]:
+            evidence["claim_ids"] = []
+    for need in args["audience_brief"]["shared_needs"]:
+        for evidence in need["evidence"]:
+            evidence["claim_ids"] = []
+    for idea in args["topic_brief"]["ideas"]:
+        for evidence in idea["evidence"]:
+            evidence["claim_ids"] = []
+
+    assert prepare_topic_review_input(**args, approved_claims=[])["input_fingerprint"] == legacy_fingerprint
+
+
 @pytest.mark.parametrize("field", ["keyword", "requirements", "topic_revision", "sample_analysis", "audience_brief", "topic_brief"])
 def test_fingerprint_changes_when_any_review_context_changes(field):
     args = inputs()
@@ -208,6 +224,23 @@ def test_judge_reviews_all_ideas_and_program_builds_serializable_decisions(count
     assert metadata["downstream_ready"] is True
     assert metadata["prompt_version"] == TOPIC_REVIEW_PROMPT_VERSION
     assert progress == ["选题评委 Agent（第 1/2 次）"]
+
+
+def test_topic_judge_cannot_cite_a_note_outside_the_idea_approved_claims():
+    args = inputs(1)
+    args["approved_claims"] = [{
+        "claim_id": "claim_001_001", "section": "topic_patterns",
+        "text": "样本讨论服装配色。", "note_ids": ["sample-0", "sample-1"],
+    }]
+    args["topic_brief"]["ideas"][0]["evidence"][0]["claim_ids"] = ["claim_001_001"]
+
+    def unrelated_note(result, _payload, _call):
+        score = next(item for item in result["reviews"][0]["scores"] if item["criterion"] == "evidence")
+        score["note_ids"] = ["sample-2"]
+        return result
+
+    with pytest.raises(AgentRunError):
+        run_topic_review(**args, complete=FakeCompletion(unrelated_note))
 
 
 def test_review_order_is_restored_by_id_not_model_array_order():

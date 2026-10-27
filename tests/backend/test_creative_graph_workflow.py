@@ -78,8 +78,14 @@ class GraphCompletion(WorkflowCompletion):
                         claim_for_note[note_id] for note_id in evidence["note_ids"] if note_id in claim_for_note
                     )) if evidence["basis"] == "sample_evidence" else []
         elif wire_name == "TopicResponse":
+            claims = prompt["input"].get("approved_claims", [])
+            claim_for_note = {note_id: claim["claim_id"] for claim in claims for note_id in claim["note_ids"]}
             for idea in output["ideas"]:
                 idea["primary_segment_id"] = prompt["input"]["audience_brief"]["segments"][0]["segment_id"]
+                for evidence in idea["evidence"]:
+                    evidence["claim_ids"] = list(dict.fromkeys(
+                        claim_for_note[note_id] for note_id in evidence["note_ids"] if note_id in claim_for_note
+                    )) if evidence["basis"] != "user_requirement" else []
         elif wire_name == "TitleResponse":
             output = {
                 "ideas": {

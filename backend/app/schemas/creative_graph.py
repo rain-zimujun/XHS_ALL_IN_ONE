@@ -149,6 +149,7 @@ class AudienceResponse(TypedDict):
 class TopicEvidence(TypedDict):
     basis: Literal["sample_pattern", "sample_observation", "user_requirement"]
     note_ids: Annotated[list[NoteId], Field(max_length=8)]
+    claim_ids: Annotated[list[NoteId], Field(max_length=8)]
     statement: Text
 
 

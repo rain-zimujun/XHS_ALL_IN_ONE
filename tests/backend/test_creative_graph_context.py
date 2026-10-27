@@ -73,6 +73,9 @@ def test_full_graph_sends_compact_production_inputs_native_schema_and_keeps_evid
             assert "quote" not in all_keys(payload)
             assert "sources" not in all_keys(payload)
             assert call["response_format"]["json_schema"]["schema"]["properties"]
+            if role == "TopicResponse":
+                assert payload["approved_claims"]
+                assert payload["approved_claim_ids"] == [claim["claim_id"] for claim in payload["approved_claims"]]
         elif role in ("TopicReviewResponse", "CopyReviewResponse", "FinalReviewResponse"):
             assert "output_schema" not in prompt
             context = payload.get("context", payload)
