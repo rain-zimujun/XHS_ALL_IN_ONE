@@ -152,6 +152,24 @@ def test_title_schema_uses_program_owned_idea_keys_and_adapter_binds_candidate_i
     assert adapted["ideas"][0]["candidates"][0]["title"] == "标题 一"
 
 
+def test_title_schema_limits_each_idea_to_its_own_approved_claims_and_sources():
+    payload = {
+        "title_max_length": 20, "candidate_count": 5,
+        "topic_brief": {"ideas": [{"idea_id": "idea_1"}, {"idea_id": "idea_2"}]},
+        "approved_claims_by_idea": {
+            "idea_1": [{"claim_id": "claim_a", "note_ids": ["note_a"]}],
+            "idea_2": [{"claim_id": "claim_b", "note_ids": ["note_b"]}],
+        },
+    }
+    schema = response_parameter(title_response_type(payload))["json_schema"]["schema"]
+    candidate_a = schema["$defs"]["TitleCandidateContent"]["properties"]
+    candidate_b = schema["$defs"]["TitleCandidate_idea_2"]["properties"]
+    assert candidate_a["claim_ids"]["items"]["const"] == "claim_a"
+    assert candidate_a["source_note_ids"]["items"]["const"] == "note_a"
+    assert candidate_b["claim_ids"]["items"]["const"] == "claim_b"
+    assert candidate_b["source_note_ids"]["items"]["const"] == "note_b"
+
+
 def test_topic_schema_limits_evidence_claim_ids_to_current_approved_registry():
     payload = {
         "audience_segment_ids": ["designers"], "sample_note_ids": ["sample-0", "sample-1", "sample-2"],

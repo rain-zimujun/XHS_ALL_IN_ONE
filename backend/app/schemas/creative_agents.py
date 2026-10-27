@@ -190,6 +190,8 @@ class TopicReviewResponse(AgentOutputModel):
 class TitleCandidate(AgentOutputModel):
     candidate_id: str = Field(pattern=r"^title_[a-z0-9_]{1,60}$")
     title: str = Field(min_length=1, max_length=40)
+    claim_ids: list[str] = Field(default_factory=list, max_length=8)
+    source_note_ids: list[NoteId] = Field(default_factory=list, max_length=8)
     angle: FindingText
     reader_value: FindingText
     promise: FindingText

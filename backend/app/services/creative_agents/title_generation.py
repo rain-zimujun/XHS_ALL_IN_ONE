@@ -6,7 +6,7 @@ import json
 import re
 import unicodedata
 from functools import partial
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 from typing_extensions import TypedDict
 from pydantic import ConfigDict, Field, with_config
 from typing import Annotated
@@ -22,7 +22,7 @@ from backend.app.services.creative_copy import has_editorial_leak
 from backend.app.services.creative_orchestrator import AgentRun, AgentSpec, AgentValidationError, run_agent
 
 
-TITLE_PROMPT_VERSION = "title-generation-v1"
+TITLE_PROMPT_VERSION = "title-generation-v2"
 TITLE_SYSTEM_PROMPT = """你是标题 Agent，只为已通过评审的选题生成候选标题，不选优、不写正文和配图。
 只返回符合 output_schema 的 JSON；原样回填 topic_revision 和 input_fingerprint。
 逐一覆盖 topic_brief.ideas，每个 idea_id 恰好一次，每项严格生成 candidate_count 个候选，全批 candidate_id 唯一。
@@ -44,18 +44,31 @@ def title_response_type(payload: dict[str, Any]) -> type:
     strict = lambda name, fields: with_config(ConfigDict(extra="forbid", str_strip_whitespace=True))(
         TypedDict(name, fields, total=True)
     )
-    candidate = strict("TitleCandidateContent", {
-        "title": Annotated[str, Field(min_length=1, max_length=payload["title_max_length"])],
-        "angle": Annotated[str, Field(min_length=1, max_length=600)],
-        "reader_value": Annotated[str, Field(min_length=1, max_length=600)],
-        "promise": Annotated[str, Field(min_length=1, max_length=600)],
-        "support_points": Annotated[list[Annotated[str, Field(min_length=1, max_length=600)]], Field(min_length=1, max_length=8)],
-        "rationale": Annotated[str, Field(min_length=1, max_length=600)],
-    })
-    group = strict("TitleCandidateGroupContent", {
-        "candidates": Annotated[list[candidate], Field(min_length=payload["candidate_count"], max_length=payload["candidate_count"])],
-    })
-    idea_fields = {idea["idea_id"]: group for idea in payload["topic_brief"]["ideas"]}
+    idea_fields = {}
+    claims_by_idea = payload.get("approved_claims_by_idea", {})
+    for idea in payload["topic_brief"]["ideas"]:
+        claims = claims_by_idea.get(idea["idea_id"], [])
+        claim_ids = [claim["claim_id"] for claim in claims]
+        note_ids = list(dict.fromkeys(note_id for claim in claims for note_id in claim["note_ids"]))
+        claim_type = Literal.__getitem__(tuple(claim_ids)) if claim_ids else str
+        note_type = Literal.__getitem__(tuple(note_ids)) if note_ids else str
+        claim_field = Annotated[list[claim_type], Field(max_length=8)] if claim_ids else Annotated[list[str], Field(max_length=0)]
+        note_field = Annotated[list[note_type], Field(max_length=8)] if note_ids else Annotated[list[str], Field(max_length=0)]
+        candidate_name = "TitleCandidateContent" if not idea_fields else f"TitleCandidate_{idea['idea_id']}"
+        candidate = strict(candidate_name, {
+            "title": Annotated[str, Field(min_length=1, max_length=payload["title_max_length"])],
+            "claim_ids": claim_field,
+            "source_note_ids": note_field,
+            "angle": Annotated[str, Field(min_length=1, max_length=600)],
+            "reader_value": Annotated[str, Field(min_length=1, max_length=600)],
+            "promise": Annotated[str, Field(min_length=1, max_length=600)],
+            "support_points": Annotated[list[Annotated[str, Field(min_length=1, max_length=600)]], Field(min_length=1, max_length=8)],
+            "rationale": Annotated[str, Field(min_length=1, max_length=600)],
+        })
+        group = strict(f"TitleCandidateGroup_{idea['idea_id']}", {
+            "candidates": Annotated[list[candidate], Field(min_length=payload["candidate_count"], max_length=payload["candidate_count"])],
+        })
+        idea_fields[idea["idea_id"]] = group
     if not idea_fields or len(idea_fields) != len(payload["topic_brief"]["ideas"]):
         raise AgentValidationError("标题响应 Schema 的选题 ID 缺失或重复")
     ideas = strict("TitleIdeasByProgramId", idea_fields)
@@ -76,6 +89,8 @@ def bind_title_ids(value: dict[str, Any], payload: dict[str, Any]) -> dict[str, 
             clean = dict(candidate)
             title = clean["title"]
             clean["title"] = " ".join(re.sub(r"[\x00-\x1f\x7f-\x9f\u2028\u2029]", " ", title).split())
+            clean["claim_ids"] = list(dict.fromkeys(clean.get("claim_ids", [])))
+            clean["source_note_ids"] = list(dict.fromkeys(clean.get("source_note_ids", [])))
             clean["candidate_id"] = f"title_{idea_index}_{candidate_index}"
             candidates.append(clean)
         ideas.append({"idea_id": idea["idea_id"], "candidates": candidates})
@@ -133,6 +148,15 @@ def prepare_title_input(
         "keyword", "requirements", "requested_idea_count", "sample_analysis", "audience_brief",
         "topic_brief", "topic_revision", "sample_note_ids",
     )}
+    registry = {claim["claim_id"]: claim for claim in topic_payload.get("approved_claims", [])}
+    claims_by_idea = {}
+    for idea in topic_payload["topic_brief"]["ideas"]:
+        referenced = {claim_id for evidence in idea.get("evidence", []) for claim_id in evidence.get("claim_ids", [])}
+        if not referenced.issubset(registry):
+            raise CreativeError("选题包含未获批的样本结论，无法生成标题。", "title_input_invalid")
+        claims_by_idea[idea["idea_id"]] = [registry[claim_id] for claim_id in sorted(referenced)]
+    if registry:
+        payload["approved_claims_by_idea"] = claims_by_idea
     payload.update({
         "approved_topic_fingerprint": review.input_fingerprint,
         "candidate_count": candidate_count, "title_max_length": title_max_length,
@@ -168,6 +192,15 @@ def validate_title_candidates(result: TitleCandidates, payload: dict[str, Any]) 
             candidate_ids.add(candidate.candidate_id)
             titles.add(key)
             angles.add(compact_text(candidate.angle))
+            claims_by_id = {claim["claim_id"]: claim for claim in payload.get("approved_claims_by_idea", {}).get(idea.idea_id, [])}
+            if claims_by_id:
+                if not candidate.claim_ids or len(candidate.claim_ids) != len(set(candidate.claim_ids)) or not set(candidate.claim_ids).issubset(claims_by_id):
+                    raise AgentValidationError("标题必须引用当前选题已获批且不重复的 claim_id")
+                allowed_notes = {note_id for claim_id in candidate.claim_ids for note_id in claims_by_id[claim_id]["note_ids"]}
+                if not candidate.source_note_ids or len(candidate.source_note_ids) != len(set(candidate.source_note_ids)) or not set(candidate.source_note_ids).issubset(allowed_notes):
+                    raise AgentValidationError("标题来源必须来自其引用的获批 claim，且不可重复或为空")
+            elif candidate.claim_ids or candidate.source_note_ids:
+                raise AgentValidationError("没有获批样本结论时，标题不能伪造 claim_id 或来源 note_id")
         if len(angles) < 3:
             raise AgentValidationError("同一选题至少提供三种不同的表达角度，语义差异另交评委评审")
 

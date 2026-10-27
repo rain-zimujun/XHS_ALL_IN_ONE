@@ -198,4 +198,7 @@ def langgraph_title_spec():
         "逐一覆盖 topic_brief.ideas，每个 idea_id 恰好一次，每项严格生成 candidate_count 个候选，全批 candidate_id 唯一。",
         "按 response_format.ideas 中程序固定的选题 ID 键逐项填写，每个键返回严格 candidate_count 个候选；不要输出 idea_id 或 candidate_id 字段，候选 ID 由程序绑定。",
     )
+    prompt += """
+每个候选都要填写 claim_ids 和 source_note_ids，只能引用当前选题随附的获批结论及其来源；每个来源必须属于至少一个所引 claim。标题承诺和支撑要点要能由获批结论或选题中的用户要求支持；不能把用户要求伪装成样本结论。
+"""
     return replace(TITLE_AGENT, system_prompt=prompt)

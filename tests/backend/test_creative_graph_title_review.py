@@ -21,7 +21,10 @@ def test_batches_bound_work_keep_topic_peers_and_merge_in_original_order(count, 
     before = copy.deepcopy(payload)
     batches = prepare_title_review_batches(payload)
     assert [len(batch["items"]) for batch in batches] == sizes * 3
-    assert [item for batch in batches for item in batch["items"]] == payload["items"]
+    batched = [item for batch in batches for item in batch["items"]]
+    assert [item["item_id"] for item in batched] == [item["item_id"] for item in payload["items"]]
+    assert all("claim_ids" not in item["fields"] and "source_note_ids" not in item["fields"] for item in batched)
+    assert all("evidence" in item for item in batched)
     for batch in batches:
         idea_id = batch["context"]["topic_brief"]["ideas"][0]["idea_id"]
         assert {item["idea_id"] for item in batch["items"]} == {idea_id}
@@ -33,6 +36,19 @@ def test_batches_bound_work_keep_topic_peers_and_merge_in_original_order(count, 
     assert selected.status == "passed"
     assert len(selected.selected_candidate_ids) == 3
     assert payload == before
+
+
+def test_title_judge_receives_relevant_approved_claims_and_candidate_bindings():
+    args = inputs(count=1, candidate_count=5, with_claims=True)
+    run, _ = run_title_generation(**args, complete=TitleCompletion())
+    payload = prepare_title_review_input(**args, title_candidates=run.output, title_revision=1)
+    batch = prepare_title_review_batches(payload)[0]
+    idea = batch["context"]["topic_brief"]["ideas"][0]
+    assert len(idea["approved_claims"]) == 2
+    assert idea["approved_claims"][0]["text"].startswith("服装配色观察")
+    assert batch["items"][0]["evidence"]["claim_ids"]
+    assert batch["items"][0]["evidence"]["source_note_ids"]
+    assert "claim_ids" not in batch["items"][0]["fields"]
 
 
 def test_compact_title_review_promotes_existing_low_score_issue_to_blocking():

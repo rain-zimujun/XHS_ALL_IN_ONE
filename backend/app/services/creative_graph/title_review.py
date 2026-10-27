@@ -13,12 +13,12 @@ from backend.app.services.creative_graph.adaptive_batches import (
 
 
 TITLE_REVIEW_BATCH_SIZE = 5
-TITLE_REVIEW_VERSION = "title-review-adaptive-v2"
+TITLE_REVIEW_VERSION = "title-review-adaptive-v3"
 TITLE_REVIEW_AGENT = AgentSpec(stage="title", name="标题评委 Agent", temperature=0.2, system_prompt="""你是独立标题评委，只评价当前批次 items，不修改标题或上游选题。
 按 response_format 返回 JSON，每个 item_id 恰好一次；scores 的六项分数为 0～10 数字，对应 rubric，不添加标准。
 按标题实际表达评价点击吸引力、具体程度、读者收益、关键词与受众匹配、同组差异和自然度。
 结合 keyword、requirements、当前选题、目标受众和样本标题风格；要求出现的主题词应自然出现在标题里。
-对照 reader_promise、must_cover 和 boundaries 检查承诺；候选自述的 rationale 不是事实依据，不能用理由代替好标题。
+对照 reader_promise、must_cover 和 boundaries 检查承诺；若候选绑定了获批样本结论，需检查标题承诺是否能由对应结论及来源支撑。候选自述的 rationale 不是事实依据，不能用理由代替好标题。
 comment 用一句短话概括评分依据，preserve 简短写值得保留的点，comparison 简短比较本批候选的实际差异，不输出逐项长篇分析。
 低于 rubric.minimum 的每一项必须有对应 issue；blocking 标准低分必须标 blocking。不通过的标题必须给具体问题和修改指令。
 虚构数字、亲测、无法兑现的承诺或违反事实边界应标 blocking，即使分数高也不能抵消；不为保证获选项而抬高评分。
@@ -45,9 +45,9 @@ def prepare_title_review_batches(payload: dict, *, sample_batches: int = 1) -> l
         compact = {
             "keyword": context["keyword"], "requirements": context["requirements"],
             "title_max_length": context["title_max_length"],
-            "topic_brief": {"ideas": [{key: idea[key] for key in (
+            "topic_brief": {"ideas": [{**{key: idea[key] for key in (
                 "idea_id", "topic", "content_type", "reader_promise", "core_angle", "must_cover", "boundaries", "differentiator",
-            )}]},
+            )}, "approved_claims": context.get("approved_claims_by_idea", {}).get(idea["idea_id"], [])}]},
             "audience": {key: segment[key] for key in (
                 "audience_terms", "role_context", "primary_scenario", "attention_points",
             )},
@@ -71,9 +71,15 @@ def prepare_title_review_batches(payload: dict, *, sample_batches: int = 1) -> l
                     for item in items if item not in current
                 ][:4]
             batch_context = compact if not peer_summaries else {**compact, "peer_summaries": peer_summaries}
+            current_items = [{
+                **{key: value for key, value in item.items() if key != "fields"},
+                "fields": {key: value for key, value in item["fields"].items() if key not in {"claim_ids", "source_note_ids"}},
+                "evidence": {"claim_ids": item["fields"].get("claim_ids", []),
+                             "source_note_ids": item["fields"].get("source_note_ids", [])},
+            } for item in current]
             batches.append({
                 "kind": "title", "revision": payload["revision"], "context": batch_context,
-                "items": current, "sample_note_ids": [],
+                "items": current_items, "sample_note_ids": [],
                 "rubric": payload["rubric"], "pass_threshold": payload["pass_threshold"],
                 "policy_version": TITLE_REVIEW_VERSION,
                 "batch_policy": downstream_batch_policy(sample_batches, default_size=TITLE_REVIEW_BATCH_SIZE),

@@ -44,6 +44,10 @@ def production_context(role, payload):
         result["sample_note_ids"] = [n for n in payload["sample_note_ids"] if n in note_ids]
         result["topic_brief"] = {"ideas": [{k: v for k, v in i.items() if k != "evidence"} for i in ideas],
                                  "selection_limits": payload["topic_brief"]["selection_limits"]}
+        if role == "title":
+            claims_by_idea = payload.get("approved_claims_by_idea", {})
+            for idea in result["topic_brief"]["ideas"]:
+                idea["approved_claims"] = claims_by_idea.get(idea["idea_id"], [])
         result["audience_brief"] = _audience(payload["audience_brief"], {i["primary_segment_id"] for i in ideas})
         patterns = [p for p in sample["style_patterns"]
                     if role == "copy" or p["dimension"] == "title"]

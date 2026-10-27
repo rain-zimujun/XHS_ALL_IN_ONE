@@ -87,11 +87,20 @@ class GraphCompletion(WorkflowCompletion):
                         claim_for_note[note_id] for note_id in evidence["note_ids"] if note_id in claim_for_note
                     )) if evidence["basis"] != "user_requirement" else []
         elif wire_name == "TitleResponse":
+            claims_by_idea = {
+                idea["idea_id"]: idea.get("approved_claims", [])
+                for idea in prompt["input"]["topic_brief"]["ideas"]
+            }
             output = {
                 "ideas": {
                     idea["idea_id"]: {
                         "candidates": [
-                            {key: value for key, value in candidate.items() if key != "candidate_id"}
+                            {
+                                **{key: value for key, value in candidate.items() if key != "candidate_id"},
+                                "claim_ids": [claim["claim_id"] for claim in claims_by_idea[idea["idea_id"]][:1]],
+                                "source_note_ids": claims_by_idea[idea["idea_id"]][0]["note_ids"][:1]
+                                if claims_by_idea[idea["idea_id"]] else [],
+                            }
                             for candidate in idea["candidates"]
                         ]
                     }
@@ -135,6 +144,7 @@ def test_graph_executes_ten_roles_and_persists_serializable_global_state(count, 
     w = workflow(model, count, variants, on_graph_state=saved.append)
     result, metadata = w.run()
     assert len(result["ideas"]) == count
+    assert all("claim_ids" not in idea for idea in result["ideas"])
     assert all(len(i["variants"]) == variants for i in result["ideas"])
     assert metadata["workflow"] == "langgraph"
     assert len(model.calls) == metadata["request_count"] == 8 + 2 * count + 2 * count * variants

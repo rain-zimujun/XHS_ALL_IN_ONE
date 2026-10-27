@@ -219,6 +219,8 @@ class TopicReviewResponse(TypedDict):
 class TitleCandidate(TypedDict):
     candidate_id: TitleId
     title: Annotated[str, Field(min_length=1, max_length=40)]
+    claim_ids: Annotated[list[NoteId], Field(max_length=8)]
+    source_note_ids: Annotated[list[NoteId], Field(max_length=8)]
     angle: Text
     reader_value: Text
     promise: Text

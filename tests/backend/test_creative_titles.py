@@ -4,15 +4,29 @@ import json
 import pytest
 import requests
 
-from backend.app.services.creative_agents.title_generation import analyze_titles, prepare_title_input, run_title_generation
+from backend.app.schemas.creative_agents import TitleCandidates
+from backend.app.services.creative_agents.title_generation import analyze_titles, bind_title_ids, prepare_title_input, run_title_generation, validate_title_candidates
 from backend.app.services.creative_agents.topic_review import run_topic_review
 from backend.app.services.creative_analysis import CreativeError
-from backend.app.services.creative_orchestrator import AgentRunError
+from backend.app.services.creative_orchestrator import AgentRunError, AgentValidationError
 from test_creative_topic_review import FakeCompletion as TopicJudge, inputs as topic_inputs, model_db
 
 
-def inputs(count=1, candidate_count=5):
+def inputs(count=1, candidate_count=5, with_claims=False):
     args = topic_inputs(count)
+    if with_claims:
+        claims = []
+        for index, idea in enumerate(args["topic_brief"]["ideas"]):
+            source_ids = idea["source_note_ids"]
+            claim_ids = []
+            evidence = []
+            for note_index, note_id in enumerate(source_ids):
+                claim_id = f"claim_{index}_{note_index}"
+                claim_ids.append(claim_id)
+                claims.append({"claim_id": claim_id, "section": "topic_patterns", "text": f"服装配色观察 {index}-{note_index}", "note_ids": [note_id]})
+                evidence.append({"basis": "sample_pattern", "note_ids": [note_id], "claim_ids": [claim_id], "statement": "样本讨论服装配色。"})
+            idea["evidence"] = evidence
+        args["approved_claims"] = claims
     run, _ = run_topic_review(**args, complete=TopicJudge())
     return {**args, "topic_review": run.output.model_dump(mode="json"), "candidate_count": candidate_count}
 
@@ -24,6 +38,8 @@ def valid_titles(payload):
             "idea_id": idea["idea_id"],
             "candidates": [{
                 "candidate_id": f"title_{i}_{j}", "title": f"配色{i}，换个角度看{j}",
+                "claim_ids": [claim["claim_id"] for claim in payload.get("approved_claims_by_idea", {}).get(idea["idea_id"], [])[:1]],
+                "source_note_ids": payload.get("approved_claims_by_idea", {}).get(idea["idea_id"], [{}])[0].get("note_ids", [])[:1],
                 "angle": f"切入角度{j}", "reader_value": "获得具体配色参考。",
                 "promise": "提供配色观察。", "support_points": ["具体颜色与轮廓"],
                 "rationale": "以具体观察吸引目标读者。",
@@ -169,6 +185,26 @@ def test_title_length_budget_is_bound_to_input_fingerprint():
     original = prepare_title_input(**args)
     longer = prepare_title_input(**args, title_max_length=30)
     assert original["input_fingerprint"] != longer["input_fingerprint"]
+
+
+def test_title_candidate_sources_must_belong_to_their_cited_approved_claims():
+    prepared = prepare_title_input(**inputs(with_claims=True))
+    raw = valid_titles(prepared)
+    graph_output = {
+        "ideas": {idea["idea_id"]: {"candidates": [
+            {key: value for key, value in candidate.items() if key != "candidate_id"}
+            for candidate in raw["ideas"][index]["candidates"]
+        ]} for index, idea in enumerate(prepared["topic_brief"]["ideas"])},
+        "limitations": raw["limitations"],
+    }
+    adapted = bind_title_ids(graph_output, prepared)
+    adapted.update(topic_revision=prepared["topic_revision"], input_fingerprint=prepared["input_fingerprint"])
+    result = TitleCandidates.model_validate(adapted)
+    validate_title_candidates(result, prepared)
+    candidate = result.ideas[0].candidates[0]
+    candidate.source_note_ids = ["sample-1"]
+    with pytest.raises(AgentValidationError, match="来源必须来自其引用的获批 claim"):
+        validate_title_candidates(result, prepared)
 
 
 def test_joined_emoji_is_valid_title_text():
