@@ -794,6 +794,8 @@ class LangGraphWorkflow:
                 merge=lambda results: merge_image_batches(results, original, revision),
                 checkpoint=lambda text: self._checkpoint(pipeline, text),
                 revision=revision, prepare_revision=image_batch_revision,
+                max_workers=MAX_PARALLEL_BATCHES,
+                state_lock=self._checkpoint_lock,
             )
             validator(run.output)
             return run
@@ -809,6 +811,8 @@ class LangGraphWorkflow:
                 metadata=pipeline["stages"]["final_review"]["metadata"], prefix="final_review", version=FINAL_BATCH_VERSION,
                 validate=decide_review, merge=lambda results: merge_final_batches(results, original),
                 checkpoint=lambda text: self._checkpoint(pipeline, text),
+                max_workers=MAX_PARALLEL_BATCHES,
+                state_lock=self._checkpoint_lock,
             )
             validator(run.output)
             return run

@@ -1,5 +1,7 @@
 import copy
 import json
+from threading import Barrier, Lock
+from time import sleep
 from types import SimpleNamespace
 
 import pytest
@@ -11,6 +13,9 @@ from backend.app.services.creative_agents.image_planning import prepare_image_in
 from backend.app.services.creative_agents.reviewing import decide_review
 from backend.app.services.creative_analysis import CreativeError
 from backend.app.services.creative_graph.recovery import prepare_resume
+from backend.app.services.creative_graph.batch_runner import run_batches
+from backend.app.services.creative_graph import workflow as workflow_module
+from backend.app.services.creative_graph.adaptive_batches import MAX_PARALLEL_BATCHES
 from backend.app.services.creative_graph.visual_batches import (
     ImageBatchOutput, image_batch_revision, merge_image_batches, merge_final_batches,
     prepare_image_batches, prepare_final_batches,
@@ -118,7 +123,8 @@ def test_failed_visual_batch_resume_reuses_valid_results_and_skips_upstream(role
     saved["options"]["workflow"] = "langgraph"
     metadata = saved["pipeline"]["stages"][stage]["metadata"]
     cache = metadata[f"{prefix}_batches"]
-    assert len(cache["results"]) == 1
+    total_batches = 9
+    assert 1 <= len(cache["results"]) < total_batches
     if fault == "version":
         cache["version"] = "old"
     elif fault == "fingerprint":
@@ -136,13 +142,125 @@ def test_failed_visual_batch_resume_reuses_valid_results_and_skips_upstream(role
                                 complete=recovery, resume_state=restored, resume_role=resume_role)
     result, _ = resumed.run()
     calls = [c for c in recovery.wire_calls if c["response_format"]["json_schema"]["name"] == role]
-    assert [json.loads(c["user_prompt"])["input"]["batch"]["index"] for c in calls] == list(range(2 if fault is None else 1, 10))
+    discarded_cache = fault in ("version", "fingerprint", "shape")
+    valid_cached_batches = 0 if discarded_cache else len(cache["results"])
+    invalid_cached_batch = 1 if fault == "result" else 0
+    assert len(calls) == total_batches - valid_cached_batches + invalid_cached_batch
     assert len(result["ideas"]) == 3
     assert recovery.counts["CopyVariants"] == 0
     assert resumed.state["copy"] == saved["copy"]
     if stage == "final_review":
         assert recovery.counts["ImagePlans"] == 0
         assert resumed.state["image"] == saved["image"]
+
+
+def test_run_batches_executes_at_most_three_concurrently_and_merges_in_input_order():
+    class Output:
+        def __init__(self, value):
+            self.value = value
+
+        @classmethod
+        def model_validate(cls, value):
+            return value if isinstance(value, cls) else cls(value)
+
+        def model_dump(self, mode=None):
+            return self.value
+
+    entered = Barrier(3)
+    lock = Lock()
+    active = peak = 0
+
+    class Agent:
+        output_model = Output
+        spec = SimpleNamespace(stage="image", name="图片策划 Agent")
+
+        def invoke(self, batch, **kwargs):
+            nonlocal active, peak
+            with lock:
+                active += 1
+                peak = max(peak, active)
+            entered.wait(timeout=5)
+            if batch["order"] == 0:
+                sleep(0.02)
+            with lock:
+                active -= 1
+            return SimpleNamespace(output=Output(batch["order"]), attempts=())
+
+    batches = [{"order": i, "input_fingerprint": str(i)} for i in range(6)]
+    result = run_batches(
+        agent=Agent(), payload={"input_fingerprint": "payload"}, batches=batches,
+        metadata={}, prefix="image", version="test", validate=lambda *_: None,
+        merge=lambda values: values, checkpoint=lambda *_: None, max_workers=3,
+    )
+
+    assert peak == 3
+    assert [item.value for item in result.output] == list(range(6))
+
+
+def test_run_batches_resume_skips_every_successful_parallel_batch():
+    class Output:
+        def __init__(self, value):
+            self.value = value
+
+        @classmethod
+        def model_validate(cls, value):
+            return value if isinstance(value, cls) else cls(value)
+
+        def model_dump(self, mode=None):
+            return self.value
+
+    batches = [{"order": i, "input_fingerprint": str(i)} for i in range(6)]
+    cache_metadata = {}
+
+    class Agent:
+        output_model = Output
+        spec = SimpleNamespace(stage="image", name="图片策划 Agent")
+
+        def __init__(self, fail):
+            self.fail = fail
+            self.called = []
+
+        def invoke(self, batch, **kwargs):
+            self.called.append(batch["order"])
+            if self.fail and batch["order"] == 2:
+                raise RuntimeError("batch failed")
+            return SimpleNamespace(output=Output(batch["order"]), attempts=())
+
+    first = Agent(fail=True)
+    with pytest.raises(RuntimeError, match="batch failed"):
+        run_batches(
+            agent=first, payload={"input_fingerprint": "payload"}, batches=batches,
+            metadata=cache_metadata, prefix="image", version="test", validate=lambda *_: None,
+            merge=lambda values: values, checkpoint=lambda *_: None, max_workers=3,
+        )
+    cached = set(cache_metadata["image_batches"]["results"])
+    assert cached
+    assert "2" not in cached
+
+    resumed = Agent(fail=False)
+    result = run_batches(
+        agent=resumed, payload={"input_fingerprint": "payload"}, batches=batches,
+        metadata=cache_metadata, prefix="image", version="test", validate=lambda *_: None,
+        merge=lambda values: values, checkpoint=lambda *_: None, max_workers=3,
+    )
+
+    assert set(resumed.called) == {int(key) for key in {b["input_fingerprint"] for b in batches} - cached}
+    assert [item.value for item in result.output] == list(range(6))
+
+
+def test_image_and_final_review_nodes_use_shared_parallel_limit(monkeypatch):
+    configured = {}
+    original = workflow_module.run_batches
+
+    def capture_parallelism(**kwargs):
+        configured[kwargs["prefix"]] = kwargs["max_workers"]
+        return original(**kwargs)
+
+    monkeypatch.setattr(workflow_module, "run_batches", capture_parallelism)
+    result, _ = workflow(GraphCompletion()).run()
+
+    assert result
+    assert configured == {"image": MAX_PARALLEL_BATCHES, "final_review": MAX_PARALLEL_BATCHES}
 
 
 def test_image_revision_calls_only_target_variant_with_local_feedback_and_preserves_other_images():

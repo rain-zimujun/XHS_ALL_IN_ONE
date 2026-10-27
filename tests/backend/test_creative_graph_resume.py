@@ -46,7 +46,7 @@ def test_resume_starts_at_exact_agent_preserving_every_upstream_artifact(failed_
     assert result["ideas"]
     assert recovery.wire_calls[0]["response_format"]["json_schema"]["name"] == failed_role
     assert len(recovery.calls) == len(EXECUTION_ROLES) - EXECUTION_ROLES.index(failed_role)
-    assert metadata["request_count"] == 15  # one original failure + fourteen successes
+    assert metadata["request_count"] == saved["pipeline"]["request_count"] + len(recovery.calls)
     for key in ("sample_analysis", "sample_review", "audience", "topic", "topic_review", "title", "title_review", "copy", "copy_review", "image", "final_review"):
         if saved[key] is not None:
             assert resumed.state[key] == saved[key]
@@ -300,7 +300,7 @@ def test_resume_rejects_business_failures_and_missing_checkpoints(env, failure):
 
 
 @pytest.mark.parametrize("error_code", ["creative_time_exhausted", "creative_budget_exhausted"])
-def test_expired_window_resumes_at_fifth_final_batch_with_cumulative_request_limit(error_code):
+def test_expired_window_resumes_missing_parallel_final_batches_with_cumulative_request_limit(error_code):
     now, model = [0], GraphCompletion()
     def complete(**kwargs):
         raw = model(**kwargs)
@@ -320,11 +320,11 @@ def test_expired_window_resumes_at_fifth_final_batch_with_cumulative_request_lim
     pipeline = saved["pipeline"]
     metadata = pipeline["stages"]["final_review"]["metadata"]
     expected_budget = estimate_graph_request_budget(len(saved["sources"]), saved["options"])
-    assert metadata["final_review_completed_batches"] == 4
-    assert metadata["final_review_batch"]["index"] == 5
+    completed_batches = metadata["final_review_completed_batches"]
+    assert 1 <= completed_batches < 9
     assert metadata["budget_exhaustion"] == {
         "reason": "time", "elapsed_seconds": 1801, "max_seconds": 1800,
-        "request_count": 27, "max_requests": expected_budget,
+        "request_count": pipeline["request_count"], "max_requests": expected_budget,
     }
     if error_code == "creative_budget_exhausted":
         # Historical snapshots did not distinguish request and time limits.
@@ -352,10 +352,11 @@ def test_expired_window_resumes_at_fifth_final_batch_with_cumulative_request_lim
     result, meta = resumed.run()
     assert len(result["ideas"]) == 3
     assert resumed.budget.max_seconds == 90 * 60
-    assert meta["request_count"] == 32
+    assert meta["request_count"] == pipeline["request_count"] + len(recovery.wire_calls)
     assert resumed.budget.max_requests == expected_budget
-    assert len(recovery.wire_calls) == 5
-    assert [json.loads(c["user_prompt"])["input"]["batch"]["index"] for c in recovery.wire_calls] == [5, 6, 7, 8, 9]
+    assert len(recovery.wire_calls) == 9 - completed_batches
+    resumed_indices = [json.loads(c["user_prompt"])["input"]["batch"]["index"] for c in recovery.wire_calls]
+    assert len(set(resumed_indices)) == len(resumed_indices)
     assert all(c["response_format"]["json_schema"]["name"] == "FinalReviewResponse" for c in recovery.wire_calls)
     assert task.payload == before
 
@@ -370,17 +371,19 @@ def test_time_exhausted_task_api_exposes_resume_and_reuses_saved_final_batch(env
             now[0] = 90 * 60 + 1
         return raw
     install_client(complete)
-    original = collect_for_analysis(env, {"model_id": env.model_id, "workflow": "langgraph", "idea_count": 1, "variant_count": 2})
+    original = collect_for_analysis(env, {"model_id": env.model_id, "workflow": "langgraph", "idea_count": 3, "variant_count": 2})
     assert original["status"] == "failed" and original["error_type"] == "creative_time_exhausted"
     assert original["resume_available"] is True
-    assert original["payload"]["pipeline"]["stages"]["final_review"]["metadata"]["final_review_completed_batches"] == 1
+    completed_batches = original["payload"]["pipeline"]["stages"]["final_review"]["metadata"]["final_review_completed_batches"]
+    assert 1 <= completed_batches <= 3
     recovery = GraphCompletion()
     install_client(recovery)
     response = env.client.post(f"/api/xhs/creative/runs/{original['id']}/resume", headers=env.headers)
     assert response.status_code == 202, response.text
     child = env.client.get(f"/api/xhs/creative/runs/{response.json()['id']}", headers=env.headers).json()
     assert child["status"] == "completed"
-    assert child["payload"]["pipeline"]["request_count"] == 14
-    assert len(recovery.wire_calls) == 1
-    assert json.loads(recovery.wire_calls[0]["user_prompt"])["input"]["batch"]["index"] == 2
-    assert child["payload"]["pipeline"]["stages"]["final_review"]["metadata"]["final_review_reused_batches"] == 1
+    assert child["payload"]["pipeline"]["request_count"] == original["payload"]["pipeline"]["request_count"] + len(recovery.wire_calls)
+    assert len(recovery.wire_calls) == 6 - completed_batches
+    resumed_indices = [json.loads(call["user_prompt"])["input"]["batch"]["index"] for call in recovery.wire_calls]
+    assert len(set(resumed_indices)) == len(resumed_indices)
+    assert child["payload"]["pipeline"]["stages"]["final_review"]["metadata"]["final_review_reused_batches"] == completed_batches
