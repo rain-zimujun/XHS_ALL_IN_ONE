@@ -361,6 +361,36 @@ def test_topic_duplicate_source_reference_failure_is_resumable_only_for_exact_er
         prepare_resume(task)
 
 
+def test_topic_source_binding_failure_allows_mixed_known_errors_only():
+    model = GraphCompletion()
+    w = workflow(model, count=1, variants=2)
+    w.run()
+    saved = copy.deepcopy(w.state)
+    saved["result"] = None
+    saved["metadata"] = {}
+    saved["options"]["workflow"] = "langgraph"
+    pipeline = saved["pipeline"]
+    pipeline.update(status="failed", current_stage="topic", error_code="creative_handoff_invalid")
+    stage = pipeline["stages"]["topic"]
+    stage.update(status="failed")
+    stage["metadata"].update(failed_role="topic", failed_attempts=[
+        {"error": "note_id 必须属于本条 evidence 引用的获批 claim_id"},
+        {"error": "source_note_ids 必须与 evidence 的样本来源合集一致"},
+    ])
+    task = SimpleNamespace(status="failed", error_type="creative_handoff_invalid", payload={
+        "analysis": saved["options"], "search": saved["search"], "sources": saved["sources"], "graph_state": saved,
+    })
+
+    restored, role = prepare_resume(task)
+    assert role == "topic"
+    assert restored["sample_analysis"] == saved["sample_analysis"]
+    assert restored["audience"] == saved["audience"]
+
+    task.payload["graph_state"]["pipeline"]["stages"]["topic"]["metadata"]["failed_attempts"][-1]["error"] = "未知 ID"
+    with pytest.raises(CreativeError, match="没有可继续"):
+        prepare_resume(task)
+
+
 def test_topic_review_issue_quote_failure_is_resumable_only_for_exact_error():
     model = GraphCompletion()
     w = workflow(model, count=1, variants=2)
