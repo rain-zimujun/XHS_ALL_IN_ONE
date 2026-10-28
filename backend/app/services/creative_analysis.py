@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+import inspect
 import math
 
 import requests
@@ -15,6 +16,7 @@ from backend.app.models import ModelConfig
 from backend.app.schemas.creative import CreativeAnalysisOptions, CreativeAnalysisResult, COPY_TAG_MAX_COUNT, COPY_TAG_MIN_COUNT, MAX_COPY_BODY_CHARS
 from backend.app.services.ai_service import OpenAICompatibleTextClient
 from backend.app.services.creative_copy import has_editorial_leak, normalize_result_copy, validate_generated_tags
+from backend.app.services.creative_diagnostics import diagnostic_event, exception_details
 from backend.app.services.structured_output import json_schema_response_format
 
 AI_CONNECT_TIMEOUT_SECONDS = 10
@@ -61,7 +63,23 @@ def is_read_timeout(exc: Exception) -> bool:
 
 def request_analysis(client, **kwargs) -> str:
     try:
-        return client._complete(**kwargs, timeout=(AI_CONNECT_TIMEOUT_SECONDS, AI_READ_TIMEOUT_SECONDS))
+        # Normalize a caller-provided timeout before expansion. The workflow
+        # must retain its fixed connect/read budget without duplicate kwargs.
+        kwargs["timeout"] = (AI_CONNECT_TIMEOUT_SECONDS, AI_READ_TIMEOUT_SECONDS)
+        return client._complete(**kwargs)
+    except TypeError as exc:
+        try:
+            parameters = list(inspect.signature(client._complete).parameters)
+        except (TypeError, ValueError):
+            parameters = None
+        diagnostic_event(
+            "模型请求参数绑定失败", level="ERROR",
+            client_type=type(client).__name__,
+            supplied_argument_names=sorted(key for key in kwargs if isinstance(key, str) and key.isidentifier()),
+            accepted_argument_names=parameters,
+            **exception_details(exc),
+        )
+        raise
     except requests.ConnectTimeout as exc:
         raise CreativeError("连接模型服务超时（10 秒），请检查网络或中转服务。采集数据已保留。", "ai_connect_timeout", retryable=True) from exc
     except (requests.Timeout, requests.ConnectionError) as exc:

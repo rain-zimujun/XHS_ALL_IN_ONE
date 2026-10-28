@@ -49,6 +49,36 @@ def test_http_retry_classification_keeps_private_response_out_of_errors(status, 
     assert "private" not in str(caught.value)
 
 
+def test_request_analysis_overrides_caller_timeout_without_duplicate_keyword():
+    seen = {}
+
+    class Client:
+        def _complete(self, **kwargs):
+            seen.update(kwargs)
+            return "ok"
+
+    assert request_analysis(Client(), timeout=1, system_prompt="system") == "ok"
+    assert seen["timeout"] == (10, 180)
+    assert seen["system_prompt"] == "system"
+
+
+def test_request_analysis_binding_diagnostic_logs_argument_names_only():
+    from backend.app.services.creative_diagnostics import diagnostic_context
+    from test_creative_diagnostics import capture_events
+
+    class Client:
+        def _complete(self, *, expected):
+            return expected
+
+    with capture_events() as events, diagnostic_context(task_id=999, workflow="langgraph"):
+        with pytest.raises(TypeError):
+            request_analysis(Client(), unexpected="private-value")
+    event = next(item for item in events if item["event"] == "模型请求参数绑定失败")
+    assert event["supplied_argument_names"] == ["timeout", "unexpected"]
+    assert event["accepted_argument_names"] == ["expected"]
+    assert "private-value" not in str(event)
+
+
 def test_nontransient_and_business_errors_do_not_retry():
     calls = []
     def fail(**_):

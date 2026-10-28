@@ -187,7 +187,7 @@ def test_type_error_diagnostic_extracts_only_python_keyword_argument_name():
     from backend.app.services.creative_diagnostics import exception_details
 
     try:
-        raise TypeError("request failed for private body: got multiple values for keyword argument 'timeout'")
+        raise TypeError('request failed for private body: got multiple values for keyword argument "timeout"')
     except TypeError as exc:
         details = exception_details(exc)
     assert details["type_error_kind"] == "duplicate_keyword"

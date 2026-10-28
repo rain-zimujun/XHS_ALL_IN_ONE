@@ -205,12 +205,16 @@ def exception_details(exc):
     }
     if isinstance(exc, TypeError) and exc.args and isinstance(exc.args[0], str):
         message = exc.args[0]
-        duplicate = re.search(r"got multiple values for keyword argument '([A-Za-z_][A-Za-z0-9_]*)'", message)
-        unexpected = re.search(r"unexpected keyword argument '([A-Za-z_][A-Za-z0-9_]*)'", message)
+        duplicate = re.search(
+            r"multiple values for (?:keyword )?argument\s+(['\"])([A-Za-z_][A-Za-z0-9_]*)\1", message,
+        )
+        unexpected = re.search(
+            r"unexpected keyword argument\s+(['\"])([A-Za-z_][A-Za-z0-9_]*)\1", message,
+        )
         if duplicate:
             details["type_error_kind"] = "duplicate_keyword"
-            details["argument_name"] = duplicate.group(1)
+            details["argument_name"] = duplicate.group(2)
         elif unexpected:
             details["type_error_kind"] = "unexpected_keyword"
-            details["argument_name"] = unexpected.group(1)
+            details["argument_name"] = unexpected.group(2)
     return details
