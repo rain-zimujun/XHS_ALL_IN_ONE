@@ -23,6 +23,10 @@ SAMPLE_REVIEW_MARKERS = (
     "评审来源必须来自该结论已绑定",
     "判为有依据时必须至少给出一个有效来源",
 )
+SAMPLE_QUOTE_FAILURE_MARKERS = (
+    "observations.quote 必须来自对应样本标题或已提供正文片段",
+    "evidence.quote 必须来自对应标题或正文片段",
+)
 AUDIENCE_COVERAGE_MARKER = "segments 分组校验失败；缺少受众词="
 AUDIENCE_REJECTED_TERMS_MARKER = "未知受众词="
 TOPIC_DUPLICATE_SOURCE_MARKERS = (
@@ -89,6 +93,15 @@ def prepare_resume(task):
                 any(marker in str(attempt.get("error", "")) for marker in SAMPLE_REVIEW_MARKERS)
                 for attempt in attempts
             )
+            sample_failures = item["metadata"].get("failed_attempts", [])
+            sample_quote_failure = (
+                stage == "sample_analysis"
+                and item["metadata"].get("failed_role") == "sample_analysis"
+                and isinstance(sample_failures, list) and bool(sample_failures)
+                and all(any(marker in str(attempt.get("error", ""))
+                            for marker in SAMPLE_QUOTE_FAILURE_MARKERS)
+                        for attempt in sample_failures)
+            )
             audience_failures = item["metadata"].get("failed_attempts", [])
             audience_coverage_failure = (
                 item["metadata"].get("failed_role") == "audience"
@@ -127,7 +140,7 @@ def prepare_resume(task):
                         for attempt in topic_failures[-2:])
             )
             compatible_handoff = (legacy_tag_failure or targeted_revision_failure
-                                  or sample_review_failure or audience_coverage_failure
+                                  or sample_review_failure or sample_quote_failure or audience_coverage_failure
                                   or topic_duplicate_source_failure or topic_issue_quote_failure)
             compatible_handoff = compatible_handoff or topic_source_binding_failure
             compatible_handoff = compatible_handoff or topic_revision_no_progress_failure

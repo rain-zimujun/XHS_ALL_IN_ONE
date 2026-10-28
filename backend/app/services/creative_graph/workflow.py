@@ -423,6 +423,7 @@ class LangGraphWorkflow:
                 # classifier must not reuse a previous batch silently.
                 fingerprint_payload = {key: value for key, value in batch.items() if key != "input_fingerprint"}
                 fingerprint_payload["relevance_filter_version"] = FILTER_VERSION
+                fingerprint_payload["sample_prompt_version"] = sample_analysis.SAMPLE_PROMPT_VERSION
                 batch["input_fingerprint"] = sample_analysis.content_fingerprint(fingerprint_payload)
         if len(batches) == 1:
             return self._producer(s, "sample_analysis", payload, lambda r: sample_analysis.validate_sample_evidence(r, payload))
@@ -536,6 +537,7 @@ class LangGraphWorkflow:
             if "input_fingerprint" in batch:
                 fingerprint_payload = {key: value for key, value in batch.items() if key != "input_fingerprint"}
                 fingerprint_payload["relevance_filter_version"] = FILTER_VERSION
+                fingerprint_payload["sample_prompt_version"] = sample_analysis.SAMPLE_PROMPT_VERSION
                 batch["input_fingerprint"] = sample_analysis.content_fingerprint(fingerprint_payload)
         stage = self.active_pipeline["stages"]["sample_analysis"]
         metadata = stage["metadata"]

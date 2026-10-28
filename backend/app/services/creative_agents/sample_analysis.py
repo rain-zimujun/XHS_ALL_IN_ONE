@@ -21,9 +21,9 @@ from backend.app.services.creative_diagnostics import quote_mismatch_details
 from backend.app.services.creative_agents.title_generation import content_fingerprint
 
 
-SAMPLE_PROMPT_VERSION = "sample-analysis-v2"
+SAMPLE_PROMPT_VERSION = "sample-analysis-v3"
 SAMPLE_SCHEMA_VERSION = 1
-SAMPLE_BATCH_CACHE_VERSION = "sample-analysis-by-batch-v3"
+SAMPLE_BATCH_CACHE_VERSION = "sample-analysis-by-batch-v4"
 BODY_CHAR_BUDGET = 24000
 MAX_BODY_CHARS_PER_NOTE = 1800
 # Keep each request small enough for the configured relay's response window.

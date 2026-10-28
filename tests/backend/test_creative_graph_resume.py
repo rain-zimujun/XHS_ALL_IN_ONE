@@ -173,6 +173,36 @@ def test_old_snapshot_without_role_still_resumes_title_judge():
     assert role == "title_review"
 
 
+@pytest.mark.parametrize("failure", [
+    "observations[0].quote：observations.quote 必须来自对应样本标题或已提供正文片段",
+    "topic_patterns[0].evidence[0].quote：evidence.quote 必须来自对应标题或正文片段",
+])
+def test_sample_source_quote_failure_can_resume_sample_analysis_only(failure):
+    saved = copy.deepcopy(workflow(GraphCompletion(), count=1, variants=2).state)
+    saved["options"]["workflow"] = "langgraph"
+    pipeline = saved["pipeline"]
+    pipeline.update(status="failed", current_stage="sample_analysis", error_code="creative_handoff_invalid")
+    stage = pipeline["stages"]["sample_analysis"]
+    stage.update(status="failed", error=failure)
+    stage["metadata"].update(failed_role="sample_analysis", failed_attempts=[
+        {"attempt": 1, "error": failure}, {"attempt": 2, "error": failure},
+    ])
+    task = SimpleNamespace(status="failed", error_type="creative_handoff_invalid", payload={
+        "analysis": saved["options"], "search": saved["search"], "sources": saved["sources"], "graph_state": saved,
+    })
+
+    restored, role = prepare_resume(task)
+
+    assert role == "sample_analysis"
+    assert restored["sample_analysis"] is None
+    assert restored["pipeline"]["stages"]["sample_analysis"]["status"] == "pending"
+
+    unrelated = copy.deepcopy(task)
+    unrelated.payload["graph_state"]["pipeline"]["stages"]["sample_analysis"]["metadata"]["failed_attempts"][-1]["error"] = "任意来源或数量错误"
+    with pytest.raises(CreativeError, match="没有可继续"):
+        prepare_resume(unrelated)
+
+
 def test_legacy_snapshot_without_sample_review_is_migrated_and_reviewed_before_audience():
     model = GraphCompletion()
     completed = workflow(model, count=1, variants=2)
