@@ -123,6 +123,8 @@ LangGraph 在模型响应解析后从当前状态绑定 `revision` 和 `input_fi
 
 第一步使用手写 `AudienceGroupingResponse(TypedDict)`，只让模型生成受众分组的语义内容，不要求返回用户词总表或分组 ID。程序校验每组受众词和证据来源，反馈具体缺少的受众词与错误字段；全部覆盖后按组顺序分配 `segment_1`、`segment_2` 等 ID，并原样回填用户受众词。
 
+样本证据中的 `note_id` 与获批 `claim_id` 绑定由程序负责：模型选择来源 note 后，适配器从获批 claim 注册表反查并覆盖 claim 列表，避免模型在两个合法 ID 集合中自行错配。若某个 note 不属于任何获批 claim，生成的空 claim 仍会被本地交接校验拒绝；不因修复引用错配而放宽证据门槛。`user_requirement` 的 claim 列表仍强制为空。
+
 第二步在构建 Agent 时明确 `response_format=AudienceNeedsResponse`。该类及嵌套类均继承 `TypedDict`，按本次合法 ID 特化引用字段的 `Literal`，真实请求的 `response_format.json_schema.schema` 包含合法 ID 枚举（单 ID 时为 `const`）和 `uniqueItems: true`。本地 TypeAdapter 同时检查合法值与唯一性，不能仅依赖模型服务执行 Schema。模型只写共性需求、形式建议、摘要和限制；程序合并回既有 `AudienceBrief` 后继续执行来源、受众覆盖和上下游检查，Schema 不替代这些业务校验。
 
 每步仍最多两次结构/交接尝试。第一次出错时，逐项检查并保留合格分组、需求、建议和顶层文字，把错误字段、缺失词、收到的错误 ID、合法 ID 和待补数量反馈给第二次调用。修复请求只需返回替换/新增的列表项；无需补充的列表可返回空列表，合格部分由程序合并，顶层已通过文字保持不变。最终需求与建议仍至少一项，且不能通过删掉坏项目来跳过应补数量。若模型把八个分组名额用在过细的分组上，只释放补齐全部用户受众所必需的尾部分组名额，并告知需要重新合并的词。

@@ -152,6 +152,25 @@ def _missing(groups, payload):
     return [term for term in payload["audience_terms"] if term not in covered]
 
 
+def _bind_group_claim_sources(group, payload):
+    """Bind claim IDs from the selected notes instead of trusting model pairing."""
+    result = deepcopy(group)
+    claim_by_note = {}
+    for claim in payload.get("approved_claims", []):
+        for note_id in claim.get("note_ids", []):
+            claim_by_note.setdefault(note_id, []).append(claim["claim_id"])
+    for evidence in result.get("evidence", []):
+        if evidence.get("basis") == "sample_evidence":
+            evidence["claim_ids"] = list(dict.fromkeys(
+                claim_id
+                for note_id in evidence.get("note_ids", [])
+                for claim_id in claim_by_note.get(note_id, [])
+            ))[:8]
+        elif evidence.get("basis") == "user_requirement":
+            evidence["claim_ids"] = []
+    return result
+
+
 def _need_items(raw, model, payload, ids, field):
     accepted, errors = [], []
     for index, item in enumerate(raw if isinstance(raw, list) else []):
@@ -219,7 +238,9 @@ def run_audience_steps(agent, payload, metadata, checkpoint, validator):
             agent.model, replace(agent.spec, name="读者需求 Agent · 受众分组", system_prompt=GROUP_PROMPT),
             response_format=grouping_type,
             output_model=RootModel[grouping_type],
-            output_adapter=lambda value: {"segments": groups + [g for g in value["segments"] if g not in groups]},
+            output_adapter=lambda value: {"segments": groups + [
+                _bind_group_claim_sources(g, payload) for g in value["segments"] if g not in groups
+            ]},
         )
         request = payload if not groups else group_repair(None, "补齐未覆盖受众词")
         run = grouping.invoke(request, validate_output=validate_groups, on_progress=checkpoint, repair_output=group_repair)

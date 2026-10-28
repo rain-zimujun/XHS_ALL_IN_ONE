@@ -93,6 +93,32 @@ def test_audience_evidence_binds_claim_ids_and_note_ids_in_both_actual_schemas()
     assert evidence.claim_ids == ["claim_001_001", "claim_001_002"]
 
 
+def test_audience_grouping_rebinds_model_mismatched_claim_ids_from_note_ids():
+    p = payload()
+    p["approved_claims"] = [
+        {"claim_id": "claim_001_001", "section": "observations", "text": "配色灵感", "note_ids": ["sample-0"]},
+        {"claim_id": "claim_001_002", "section": "observations", "text": "轮廓灵感", "note_ids": ["sample-1"]},
+    ]
+    p["approved_claim_ids"] = [claim["claim_id"] for claim in p["approved_claims"]]
+
+    def transform(name, _payload, output, _count):
+        if name == "AudienceGroupingResponse":
+            for group in output["segments"]:
+                for evidence in group["evidence"]:
+                    if evidence["basis"] == "sample_evidence":
+                        evidence["note_ids"] = ["sample-0"]
+                        evidence["claim_ids"] = ["claim_001_002"]
+        return output
+
+    result = run(Completion(transform), p=p).output
+
+    for group in result.segments:
+        for evidence in group.evidence:
+            if evidence.basis == "sample_evidence":
+                assert evidence.note_ids == ["sample-0"]
+                assert evidence.claim_ids == ["claim_001_001"]
+
+
 def test_audience_validation_rejects_claims_that_do_not_cover_the_cited_note():
     from backend.app.schemas.creative_agents import AudienceBrief
     from backend.app.services.creative_orchestrator import AgentValidationError
