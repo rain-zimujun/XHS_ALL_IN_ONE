@@ -78,14 +78,17 @@ def validate_sample_review(result: SampleReviewResponse, payload: dict[str, Any]
         raise AgentValidationError("样本评审必须逐条覆盖本批全部程序 claim_id，不能重复、遗漏或添加")
     for decision in decisions:
         claim = claims[decision.claim_id]
+        if not decision.supported:
+            # Rejected claims never enter the approved registry, so their
+            # model-supplied source IDs are semantically inert and can be
+            # normalized locally instead of triggering a redundant retry.
+            decision.note_ids = []
         allowed = set(claim["candidate_note_ids"])
         cited = decision.note_ids
         if len(cited) != len(set(cited)) or not set(cited) <= allowed:
             raise AgentValidationError(f"{decision.claim_id} 的评审来源必须来自该结论已绑定的来源 note_id")
         if decision.supported and not cited:
             raise AgentValidationError(f"{decision.claim_id} 判为有依据时必须至少给出一个有效来源 note_id")
-        if not decision.supported and cited:
-            raise AgentValidationError(f"{decision.claim_id} 判为无依据时 note_ids 必须为空")
 
 
 def approved_claim_registry(result: SampleReviewResponse, payload: dict[str, Any]) -> list[dict[str, Any]]:

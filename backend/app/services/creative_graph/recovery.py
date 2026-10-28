@@ -22,6 +22,7 @@ SAMPLE_REVIEW_MARKERS = (
     "样本评审必须逐条覆盖",
     "评审来源必须来自该结论已绑定",
     "判为有依据时必须至少给出一个有效来源",
+    "判为无依据时 note_ids 必须为空",
 )
 SAMPLE_QUOTE_FAILURE_MARKERS = (
     "observations.quote 必须来自对应样本标题或已提供正文片段",

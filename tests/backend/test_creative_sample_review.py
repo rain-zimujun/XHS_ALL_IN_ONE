@@ -124,6 +124,25 @@ def test_semantic_rejection_is_a_valid_decision_and_is_excluded_from_registry():
     assert all(claim["claim_id"] != decisions[0]["claim_id"] for claim in registry)
 
 
+def test_rejected_claim_source_ids_are_normalized_without_weakening_supported_sources():
+    payload, analysis = prepared()
+    review_payload = prepare_sample_review_input(analysis, payload)
+    decisions = [{"claim_id": claim["claim_id"], "supported": True,
+                  "note_ids": claim["candidate_note_ids"][:1], "reason": "有对应样本支持。"}
+                 for claim in review_payload["claims"]]
+    rejected_id = decisions[0]["claim_id"]
+    decisions[0].update(supported=False, note_ids=["model-invented-source-id"])
+    response = SampleReviewResponse(decisions=decisions)
+
+    validate_sample_review(response, review_payload)
+
+    assert response.decisions[0].claim_id == rejected_id
+    assert response.decisions[0].note_ids == []
+    decisions[1].update(supported=True, note_ids=["model-invented-source-id"])
+    with pytest.raises(AgentValidationError, match="评审来源必须来自"):
+        validate_sample_review(SampleReviewResponse(decisions=decisions), review_payload)
+
+
 def test_claim_source_ids_are_locally_bound_to_the_batch():
     payload, analysis = prepared()
     broken = analysis.model_copy(deep=True)
