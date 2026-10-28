@@ -13,6 +13,7 @@ from backend.app.schemas.creative_agents import AudienceBrief, SampleAnalysis, T
 from backend.app.services.creative_agents.topic_selection import (
     TOPIC_PROMPT_VERSION, analyze_topics, ensure_topic_revision_progress,
     preserve_unselected_topic_ideas, prepare_topic_input, run_topic_selection,
+    topic_revision_briefs,
 )
 from backend.app.services.creative_analysis import CreativeError
 from backend.app.services.creative_orchestrator import AgentRunError, AgentValidationError
@@ -224,6 +225,29 @@ def test_topic_quality_revision_must_change_a_target_idea_content_field():
     revised = copy.deepcopy(previous)
     revised["ideas"][0]["reader_promise"] = "从雾白与深蓝的配色组合中，获得一组服装视觉灵感。"
     ensure_topic_revision_progress(previous, revised, ["idea_1"])
+
+
+def test_topic_quality_revision_must_change_each_field_named_by_review():
+    previous = valid_output(prepare_topic_input("AI 服装", REQUIREMENTS, 1, sample_analysis(), audience_brief()))
+    feedback = {"reviews": [{"judgement": {
+        "idea_id": "idea_1",
+        "scores": [{"criterion": "reader_value", "score": 4, "comment": "读者价值不清"}],
+        "issues": [
+            {"criterion": "reader_value", "field": "reader_promise", "problem": "承诺模糊", "revision_instruction": "明确读者收益"},
+            {"criterion": "fit", "field": "source_note_ids", "problem": "样本匹配不足", "revision_instruction": "按证据收窄选题"},
+        ],
+        "preserve": ["保持AI服装主题"],
+    }}]}
+    revised = copy.deepcopy(previous)
+    revised["ideas"][0]["reader_promise"] = "读者可从样本中的提示词结构获得服装视觉表达参考。"
+    with pytest.raises(AgentValidationError, match="必改字段未变化=evidence"):
+        ensure_topic_revision_progress(previous, revised, ["idea_1"], feedback)
+    revised["ideas"][0]["evidence"][0]["statement"] = "样本展示了提示词结构及服装视觉表达，可作为构图参考。"
+    ensure_topic_revision_progress(previous, revised, ["idea_1"], feedback)
+
+    briefs = topic_revision_briefs(feedback, ["idea_1"])
+    assert briefs[0]["scores_below_minimum"][0]["minimum"] == 6
+    assert [issue["field"] for issue in briefs[0]["must_fix"]] == ["reader_promise", "source_note_ids"]
 
 
 def test_topic_quality_revision_restores_passed_non_targets_and_only_requires_target_progress():

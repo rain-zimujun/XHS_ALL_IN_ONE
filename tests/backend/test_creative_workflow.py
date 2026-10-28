@@ -50,6 +50,7 @@ class WorkflowCompletion:
                     output["ideas"][i] = copy.deepcopy(next(x for x in old["ideas"] if x["idea_id"] == idea["idea_id"]))
                     if idea["idea_id"] in ids:
                         output["ideas"][i]["core_angle"] += "（已明确细节）"
+                        output["ideas"][i]["reader_promise"] += "，聚焦样本支持的表达要点"
             elif schema in ("TitleCandidates", "CopyVariants"):
                 collection, key, text_field = ("candidates", "candidate_id", "title") if schema == "TitleCandidates" else ("variants", "variant_id", "body")
                 previous = {v[key]: v for g in old["ideas"] for v in g[collection]}

@@ -17,6 +17,7 @@ from backend.app.schemas.creative import CreativeAnalysisOptions
 from backend.app.schemas.creative_agents import AudienceBrief, SampleAnalysis, TopicBrief
 from backend.app.services.creative_agents.reader_needs import validate_audience_brief
 from backend.app.services.creative_analysis import CreativeError, owned_text_model, request_analysis
+from backend.app.services.creative_quality import rubric_for
 from backend.app.services.creative_orchestrator import AgentRun, AgentSpec, AgentValidationError, run_agent
 
 
@@ -24,6 +25,11 @@ TOPIC_PROMPT_VERSION = "topic-selection-v2"
 TOPIC_SCHEMA_VERSION = 2
 
 TOPIC_REVISION_FIELDS = ("topic", "reader_promise", "core_angle", "must_cover", "differentiator", "boundaries")
+TOPIC_REVISION_FIELD_MAP = {
+    "topic": {"topic"}, "reader_promise": {"reader_promise"}, "core_angle": {"core_angle"},
+    "must_cover": {"must_cover"}, "differentiator": {"differentiator"}, "boundaries": {"boundaries"},
+    "evidence": {"evidence"}, "source_note_ids": {"evidence"}, "primary_segment_id": {"primary_segment_id"},
+}
 
 TOPIC_SYSTEM_PROMPT = """你是选题 Agent，只负责决定这一批内容具体写什么，不写最终标题、正文、标签、配图或生图提示词。
 严格返回符合 output_schema 的 JSON 对象，不返回 Markdown、其他字段或额外说明。
@@ -99,14 +105,52 @@ def bind_topic_idea_ids(value: dict[str, Any], previous: dict[str, Any] | None =
     return result
 
 
-def ensure_topic_revision_progress(previous: dict[str, Any], proposed: dict[str, Any], target_ids: list[str]) -> None:
-    """Reject a targeted topic revision that leaves every requested field unchanged."""
+def topic_revision_briefs(feedback: dict[str, Any], target_ids: list[str]) -> list[dict[str, Any]]:
+    """Project judge output into concise, idea-specific repair instructions."""
+    targets = set(target_ids)
+    criteria = {item.key: item for item in rubric_for("topic")}
+    briefs = []
+    for decision in feedback.get("reviews", []):
+        judgement = decision.get("judgement", {})
+        idea_id = judgement.get("idea_id")
+        if idea_id not in targets:
+            continue
+        low_scores = []
+        for score in judgement.get("scores", []):
+            criterion = criteria.get(score.get("criterion"))
+            if criterion and score.get("score", 10) < criterion.minimum:
+                low_scores.append({"criterion": criterion.key, "score": score["score"],
+                                   "minimum": criterion.minimum, "comment": score.get("comment", "")})
+        issues = [{key: issue[key] for key in ("criterion", "field", "problem", "revision_instruction")}
+                  for issue in judgement.get("issues", [])]
+        briefs.append({"idea_id": idea_id, "scores_below_minimum": low_scores,
+                       "must_fix": issues, "preserve": judgement.get("preserve", [])})
+    return briefs
+
+
+def ensure_topic_revision_progress(previous: dict[str, Any], proposed: dict[str, Any], target_ids: list[str],
+                                   feedback: dict[str, Any] | None = None) -> None:
+    """Reject revisions that fail to change the fields identified by the judge."""
     old = {idea["idea_id"]: idea for idea in previous.get("ideas", [])}
     new = {idea["idea_id"]: idea for idea in proposed.get("ideas", [])}
     if not target_ids or not set(target_ids).issubset(old) or set(old) != set(new):
         raise AgentValidationError("选题返工范围与已有 idea_id 不一致")
+    required_by_id = {}
+    for brief in topic_revision_briefs(feedback or {}, target_ids):
+        required_by_id[brief["idea_id"]] = {
+            field for issue in brief["must_fix"]
+            for field in TOPIC_REVISION_FIELD_MAP.get(issue["field"], set())
+        }
     for idea_id in target_ids:
-        if not any(old[idea_id].get(field) != new[idea_id].get(field) for field in TOPIC_REVISION_FIELDS):
+        required = required_by_id.get(idea_id, set())
+        changed = {field for field in (*TOPIC_REVISION_FIELDS, "evidence", "primary_segment_id")
+                   if old[idea_id].get(field) != new[idea_id].get(field)}
+        missing = required - changed
+        if missing:
+            raise AgentValidationError(
+                f"选题 {idea_id} 未落实评审意见：必改字段未变化={'、'.join(sorted(missing))}"
+            )
+        if not required and not changed:
             raise AgentValidationError(f"选题 {idea_id} 未落实评审意见：目标内容字段没有任何变化")
 
 

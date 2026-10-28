@@ -391,6 +391,39 @@ def test_topic_source_binding_failure_allows_mixed_known_errors_only():
         prepare_resume(task)
 
 
+@pytest.mark.parametrize("error_type", ["creative_handoff_invalid", "creative_schema_invalid"])
+def test_topic_revision_no_progress_failure_resumes_same_quality_round_only(error_type):
+    model = GraphCompletion()
+    w = workflow(model, count=1, variants=2)
+    w.run()
+    saved = copy.deepcopy(w.state)
+    saved["result"] = None
+    saved["metadata"] = {}
+    saved["options"]["workflow"] = "langgraph"
+    saved["revision_plan"]["topic"] = {"target_ids": ["idea_1"], "direct": True, "feedback": {
+        "reviews": [{"judgement": {"idea_id": "idea_1", "scores": [], "issues": [], "preserve": []}}],
+    }}
+    pipeline = saved["pipeline"]
+    pipeline.update(status="failed", current_stage="topic", error_code="creative_handoff_invalid")
+    stage = pipeline["stages"]["topic"]
+    stage.update(status="failed", quality_revisions=2)
+    stage["metadata"].update(failed_role="topic", failed_attempts=[
+        {"error": "选题 idea_1 未落实评审意见：目标内容字段没有任何变化"},
+        {"error": "选题 idea_1 未落实评审意见：必改字段未变化=reader_promise、must_cover"},
+    ])
+    task = SimpleNamespace(status="failed", error_type=error_type, payload={
+        "analysis": saved["options"], "search": saved["search"], "sources": saved["sources"], "graph_state": saved,
+    })
+
+    restored, role = prepare_resume(task)
+    assert role == "topic"
+    assert restored["pipeline"]["stages"]["topic"]["quality_revisions"] == 2
+
+    task.payload["graph_state"]["pipeline"]["stages"]["topic"]["metadata"]["failed_attempts"][-1]["error"] = "任意其他错误"
+    with pytest.raises(CreativeError, match="没有可继续"):
+        prepare_resume(task)
+
+
 def test_topic_review_issue_quote_failure_is_resumable_only_for_exact_error():
     model = GraphCompletion()
     w = workflow(model, count=1, variants=2)

@@ -34,6 +34,10 @@ TOPIC_SOURCE_BINDING_MARKERS = (
     "note_id 必须属于本条 evidence 引用的获批 claim_id",
     "source_note_ids 必须与 evidence 的样本来源合集一致",
 )
+TOPIC_REVISION_NO_PROGRESS_MARKERS = (
+    "未落实评审意见：目标内容字段没有任何变化",
+    "未落实评审意见：必改字段未变化=",
+)
 TOPIC_ISSUE_QUOTE_MARKER = "问题 quote 必须逐字出现在当前选题的对应 field 中"
 SINGLE_ROLES = {"sample_analysis", "sample_review", "audience", "image", "final_review"}
 ALL_ROLES = SINGLE_ROLES | {"topic", "topic_review", "title", "title_review", "copy", "copy_review"}
@@ -109,6 +113,13 @@ def prepare_resume(task):
                 and all(str(attempt.get("error", "")) in TOPIC_SOURCE_BINDING_MARKERS
                         for attempt in topic_failures[-2:])
             )
+            topic_revision_no_progress_failure = (
+                item["metadata"].get("failed_role") == "topic"
+                and stage == "topic" and bool(state.get("revision_plan", {}).get("topic"))
+                and isinstance(topic_failures, list) and len(topic_failures) >= 2
+                and all(any(marker in str(attempt.get("error", "")) for marker in TOPIC_REVISION_NO_PROGRESS_MARKERS)
+                        for attempt in topic_failures[-2:])
+            )
             topic_issue_quote_failure = (
                 item["metadata"].get("failed_role") == "topic_review"
                 and isinstance(topic_failures, list) and len(topic_failures) >= 2
@@ -119,7 +130,11 @@ def prepare_resume(task):
                                   or sample_review_failure or audience_coverage_failure
                                   or topic_duplicate_source_failure or topic_issue_quote_failure)
             compatible_handoff = compatible_handoff or topic_source_binding_failure
-            if task.error_type != "creative_handoff_invalid" or not compatible_handoff:
+            compatible_handoff = compatible_handoff or topic_revision_no_progress_failure
+            compatible_legacy_topic_revision = (
+                topic_revision_no_progress_failure and task.error_type == "creative_schema_invalid"
+            )
+            if (task.error_type != "creative_handoff_invalid" and not compatible_legacy_topic_revision) or not compatible_handoff:
                 raise ValueError("not a compatible model failure")
         role = item["metadata"].get("failed_role")
         if role is None and stage == "sample_analysis":
