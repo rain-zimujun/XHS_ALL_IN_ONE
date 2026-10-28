@@ -33,6 +33,7 @@ class ApprovedSampleClaim(TypedDict):
     text: str
     note_ids: list[str]
     review_reason: str
+    evidence: list[dict[str, str]]
 
 
 class SampleReviewSummary(TypedDict):

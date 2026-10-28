@@ -95,7 +95,8 @@ def base_inputs(s):
 
 def topic_inputs(s):
     approved_claims = [
-        {key: claim[key] for key in ("claim_id", "section", "text", "note_ids")}
+        {key: claim[key] for key in ("claim_id", "section", "text", "note_ids", "evidence")
+         if key in claim}
         for claim in s["sample_review"].get("approved_claims", [])
     ]
     return dict(**base_inputs(s), topic_brief=s["topic"],
@@ -718,7 +719,7 @@ class LangGraphWorkflow:
                                                      s["sample_review"]["approved_analysis"],
                                                      approved_note_ids=s["sample_review"]["approved_note_ids"])
         approved_claims = [
-            {key: claim[key] for key in ("claim_id", "section", "text", "note_ids")}
+            {key: claim[key] for key in ("claim_id", "section", "text", "note_ids", "review_reason")}
             for claim in s["sample_review"].get("approved_claims", [])
         ]
         payload["approved_claims"] = approved_claims
@@ -733,10 +734,7 @@ class LangGraphWorkflow:
         return {"audience": output, "pipeline": pipeline, "revision_plan": s["revision_plan"]}
 
     def topic_node(self, s: CreativeGraphState) -> TopicUpdate:
-        approved_claims = [
-            {key: claim[key] for key in ("claim_id", "section", "text", "note_ids")}
-            for claim in s["sample_review"].get("approved_claims", [])
-        ]
+        approved_claims = s["sample_review"].get("approved_claims", [])
         payload = topic_selection.prepare_topic_input(**base_inputs(s), approved_claims=approved_claims)
         return self._producer(s, "topic", payload, lambda r: topic_selection.validate_topic_brief(r, payload))
 

@@ -94,10 +94,8 @@ class StructuredAgent:
             # current ideas and only claims cited by the target ideas so the
             # model can focus on the judge's field-level instructions.
             target_ids = set(revision["target_ids"])
-            target_ideas = [idea for idea in revision.get("previous_output", {}).get("ideas", [])
-                            if idea.get("idea_id") in target_ids]
-            target_claim_ids = {claim_id for idea in revision.get("previous_output", {}).get("ideas", [])
-                                if idea.get("idea_id") in target_ids
+            previous_ideas = revision.get("previous_output", {}).get("ideas", [])
+            target_claim_ids = {claim_id for idea in previous_ideas if idea.get("idea_id") in target_ids
                                 for evidence in idea.get("evidence", [])
                                 for claim_id in evidence.get("claim_ids", [])}
             all_claims = projected.get("approved_claims", [])
@@ -108,14 +106,15 @@ class StructuredAgent:
             }
             if audience_brief:
                 projected["audience_brief"] = audience_brief
-            projected["topic_brief"] = {"ideas": target_ideas,
+            projected["topic_brief"] = {"ideas": previous_ideas,
                                          "selection_limits": revision.get("previous_output", {}).get("selection_limits", [])}
             projected["approved_claims"] = [claim for claim in all_claims
                                              if claim.get("claim_id") in target_claim_ids]
             projected["approved_claim_ids"] = [claim["claim_id"] for claim in projected["approved_claims"]]
             projected["revision_briefs"] = revision.get("revision_briefs", [])
             projected["repair_rules"] = (
-                "只处理 target_ids；逐条修改 revision_briefs 指定 field；证据不足时收窄承诺。"
+                "只处理 target_ids；逐条修改 revision_briefs 指定 field；approved_claims.evidence 是通过评审的原文摘录，"
+                "具体步骤只能依据这些摘录；证据不足时收窄承诺。"
             )
         envelope = {"input": projected}
         if self.include_prompt_schema:
@@ -128,6 +127,7 @@ class StructuredAgent:
                     "revision_briefs": revision.get("revision_briefs", []),
                     "previous_target_ideas": [idea for idea in revision.get("previous_output", {}).get("ideas", [])
                                                if idea.get("idea_id") in set(revision["target_ids"])],
+                    "previous_ideas": revision.get("previous_output", {}).get("ideas", []),
                     "rules": revision["rules"],
                 }
             envelope["quality_revision"] = quality_revision

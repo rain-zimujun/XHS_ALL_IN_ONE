@@ -36,7 +36,10 @@ def test_producer_context_allowlist_removes_quotes_raw_material_and_unused_field
     payload["sources"] = [{"content": "绝不发给后续模型的完整采集正文"}]
     payload["unused_future_field"] = "不要默认传递将来新增的状态字段"
     compact = production_context(role, payload)
-    assert not {"quote", "body_excerpt", "sources", "unused_future_field", "evidence"} & all_keys(compact)
+    assert not {"body_excerpt", "sources", "unused_future_field"} & all_keys(compact)
+    assert "quote" not in all_keys(compact["sample_analysis"])
+    assert all(set(claim) <= {"claim_id", "section", "text", "note_ids", "review_reason", "evidence"}
+               for claim in compact.get("approved_claims", []))
     assert len(json.dumps(compact, ensure_ascii=False)) < len(json.dumps(original, ensure_ascii=False))
     assert payload["sample_analysis"] == original["sample_analysis"]
     assert compact["keyword"] == payload["keyword"]
@@ -70,12 +73,19 @@ def test_full_graph_sends_compact_production_inputs_native_schema_and_keeps_evid
         payload = prompt["input"]
         if role in ("TopicResponse", "TitleResponse", "CopyResponse"):
             assert "output_schema" not in prompt
-            assert "quote" not in all_keys(payload)
             assert "sources" not in all_keys(payload)
             assert call["response_format"]["json_schema"]["schema"]["properties"]
             if role == "TopicResponse":
                 assert payload["approved_claims"]
                 assert payload["approved_claim_ids"] == [claim["claim_id"] for claim in payload["approved_claims"]]
+                approved_quotes = {item["quote"] for claim in payload["approved_claims"]
+                                   for item in claim.get("evidence", [])}
+                assert approved_quotes
+            else:
+                assert "quote" not in all_keys(payload["sample_analysis"])
+                approved_claims = payload.get("approved_claims_by_idea", {})
+                assert all(len(claim.get("evidence", [])) <= 2
+                           for claims in approved_claims.values() for claim in claims)
         elif role in ("TopicReviewResponse", "CopyReviewResponse", "FinalReviewResponse"):
             assert "output_schema" not in prompt
             context = payload.get("context", payload)

@@ -37,9 +37,13 @@ class GraphCompletion(WorkflowCompletion):
         wire_name = kwargs["response_format"]["json_schema"]["name"]
         if wire_name == "TopicResponse" and "quality_revision" in prompt:
             ideas = []
-            for idea in prompt["quality_revision"]["previous_target_ideas"]:
-                ideas.append({key: value for key, value in idea.items()
-                              if key not in {"idea_id", "source_note_ids"}})
+            target_ids = set(prompt["quality_revision"]["target_ids"])
+            for idea in prompt["quality_revision"]["previous_ideas"]:
+                revised = {key: value for key, value in idea.items()
+                           if key not in {"idea_id", "source_note_ids"}}
+                if idea["idea_id"] in target_ids:
+                    revised["reader_promise"] = f"{revised['reader_promise']}（返工后更具体）"
+                ideas.append(revised)
             return json.dumps({"summary": "返工测试", "ideas": ideas, "selection_limits": ["测试限制"]}, ensure_ascii=False)
         if wire_name == "SampleReviewResponse":
             role = "sample_review"
@@ -193,7 +197,6 @@ def test_topic_response_schema_and_adapter_prevent_duplicate_source_references()
             if kwargs["response_format"]["json_schema"]["name"] == "TopicResponse":
                 output = json.loads(raw)
                 idea = output["ideas"][0]
-                idea["source_note_ids"].append(idea["source_note_ids"][0])
                 for evidence in idea["evidence"]:
                     if evidence["note_ids"]:
                         evidence["note_ids"].append(evidence["note_ids"][0])
@@ -210,7 +213,7 @@ def test_topic_response_schema_and_adapter_prevent_duplicate_source_references()
     evidence = schema["$defs"]["BoundTopicEvidence"]["properties"]
     assert evidence["note_ids"]["uniqueItems"] is True
     assert evidence["claim_ids"]["uniqueItems"] is True
-    assert schema["$defs"]["BoundTopicIdea"]["properties"]["source_note_ids"]["uniqueItems"] is True
+    assert "source_note_ids" not in schema["$defs"]["BoundTopicIdea"]["properties"]
     assert len(result["ideas"]) == 1
 
 
@@ -500,7 +503,7 @@ def test_conditional_review_edge_returns_to_producer_and_only_revises_failed_ite
     w = workflow(model, 3, 3)
     result, _ = w.run()
     assert len(result["ideas"]) == 3
-    assert len(model.calls) == (34 if stage == "TopicReviewResponse" else 36)
+    assert len(model.calls) == (33 if stage == "TopicReviewResponse" else 36)
     producer = {"TopicReviewResponse": "topic", "title_review": "title", "copy_review": "copy"}[stage]
     item = w.state["pipeline"]["stages"][producer]
     assert item["quality_revisions"] == 1
@@ -779,8 +782,8 @@ def test_changed_title_selection_rebinds_copy_and_image_groups():
 
 def test_topic_revision_uses_compact_target_only_context():
     model = GraphCompletion(fail_stage="TopicReviewResponse")
-    with pytest.raises(CreativeError):
-        workflow(model, count=1, variants=2).run()
+    result, _ = workflow(model, count=1, variants=2).run()
+    assert result
     revision_calls = []
     for call in model.wire_calls:
         if call["response_format"]["json_schema"]["name"] != "TopicResponse":
@@ -788,19 +791,19 @@ def test_topic_revision_uses_compact_target_only_context():
         envelope, _ = json.JSONDecoder().raw_decode(call["user_prompt"])
         if "quality_revision" in envelope:
             revision_calls.append(call)
-    assert len(revision_calls) == 2
+    assert len(revision_calls) == 1
     for call in revision_calls:
         envelope, _ = json.JSONDecoder().raw_decode(call["user_prompt"])
-        assert len(call["user_prompt"]) < 4200
+        assert len(call["user_prompt"]) < 5000
         assert envelope["input"]["topic_brief"]["ideas"][0]["idea_id"] == "idea_1"
         assert "sample_analysis" not in envelope["input"]
         assert envelope["input"]["audience_brief"]["segments"]
         assert len(envelope["input"]["revision_briefs"]) == 1
-    second_envelope, _ = json.JSONDecoder().raw_decode(revision_calls[1]["user_prompt"])
-    assert "本次针对以下未变化字段至少修复一项" in revision_calls[1]["user_prompt"]
-    assert "获批结论" in revision_calls[1]["user_prompt"]
-    assert "捏造步骤、案例或效果" in revision_calls[1]["user_prompt"]
-    assert "至少引用两个不同的获批样本 note_id" in revision_calls[1]["user_prompt"]
+    envelope, _ = json.JSONDecoder().raw_decode(revision_calls[0]["user_prompt"])
+    assert "通过评审的原文摘录" in revision_calls[0]["user_prompt"]
+    assert "证据不足时收窄承诺" in revision_calls[0]["user_prompt"]
+    assert envelope["input"]["approved_claims"]
+    assert all(len(claim.get("evidence", [])) <= 2 for claim in envelope["input"]["approved_claims"])
 
 
 def test_graph_has_visible_conditional_edges_and_node_write_scope_is_enforced():

@@ -131,11 +131,13 @@ def test_prepare_topic_input_preserves_requested_count_without_mutating_briefs()
 
 def test_topic_evidence_must_bind_approved_claims_to_their_source_notes():
     claims = [
-        {"claim_id": "claim_001_001", "section": "topic_patterns", "text": "配色是常见切入点。", "note_ids": ["sample-0", "sample-1"]},
+        {"claim_id": "claim_001_001", "section": "topic_patterns", "text": "配色是常见切入点。", "note_ids": ["sample-0", "sample-1"],
+         "evidence": [{"note_id": "sample-0", "field": "body", "quote": "样本中的具体配色片段"}]},
         {"claim_id": "claim_001_002", "section": "style_patterns", "text": "短句描述具体颜色。", "note_ids": ["sample-0"]},
     ]
     payload = prepare_topic_input("AI 服装", REQUIREMENTS, 1, sample_analysis(), audience_brief(), claims)
     assert payload["approved_claim_ids"] == ["claim_001_001"]
+    assert payload["approved_claims"][0]["evidence"] == claims[0]["evidence"]
     result = valid_output(payload)
     result["ideas"][0]["evidence"][0]["claim_ids"] = ["claim_001_001"]
     topic = TopicBrief.model_validate(result)

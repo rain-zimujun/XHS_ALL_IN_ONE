@@ -79,6 +79,12 @@ def test_approved_registry_preserves_program_claim_ids_and_judged_sources():
                for i, item in enumerate(registry))
     assert all(set(item["note_ids"]) <= set(review_payload["claims"][i]["candidate_note_ids"])
                for i, item in enumerate(registry))
+    assert all({evidence["note_id"] for evidence in item["evidence"]} <= set(item["note_ids"])
+               for item in registry)
+    assert all(len(item["evidence"]) <= 2 for item in registry)
+    assert all(len(evidence["quote"]) <= 180 for item in registry for evidence in item["evidence"])
+    assert all(set(item["evidence"][0]) == {"note_id", "field", "quote"}
+               for item in registry if item["evidence"])
 
 
 @pytest.mark.parametrize("mutation", ["missing", "duplicate", "unknown", "source"])

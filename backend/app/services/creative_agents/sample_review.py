@@ -100,6 +100,11 @@ def approved_claim_registry(result: SampleReviewResponse, payload: dict[str, Any
             "text": claim["text"],
             "note_ids": list(decisions[claim["claim_id"]].note_ids),
             "review_reason": decisions[claim["claim_id"]].reason,
+            "evidence": [
+                {key: item[key] for key in ("note_id", "field", "quote")}
+                for item in claim["evidence"]
+                if item["note_id"] in decisions[claim["claim_id"]].note_ids
+            ][:2],
         }
         for claim in payload["claims"]
         if decisions[claim["claim_id"]].supported
