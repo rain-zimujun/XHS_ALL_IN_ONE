@@ -88,11 +88,46 @@ class StructuredAgent:
             # request must bind a fresh TypedDict contract for this payload.
             runnable = self.model.with_structured_output(response_type, method="json_schema", strict=True,
                                                          temperature=self.spec.temperature)
-        envelope = {"input": self.input_projection(payload) if self.input_projection else payload}
+        projected = self.input_projection(payload) if self.input_projection else payload
+        if revision and self.spec.stage == "topic":
+            # Quality repair does not need the full M3/M4 briefs. Keep the
+            # current ideas and only claims cited by the target ideas so the
+            # model can focus on the judge's field-level instructions.
+            target_ids = set(revision["target_ids"])
+            target_ideas = [idea for idea in revision.get("previous_output", {}).get("ideas", [])
+                            if idea.get("idea_id") in target_ids]
+            target_claim_ids = {claim_id for idea in revision.get("previous_output", {}).get("ideas", [])
+                                if idea.get("idea_id") in target_ids
+                                for evidence in idea.get("evidence", [])
+                                for claim_id in evidence.get("claim_ids", [])}
+            all_claims = projected.get("approved_claims", [])
+            projected = {
+                key: projected[key] for key in ("keyword", "requirements", "requested_idea_count", "audience_segment_ids")
+                if key in projected
+            }
+            projected["topic_brief"] = {"ideas": target_ideas,
+                                         "selection_limits": revision.get("previous_output", {}).get("selection_limits", [])}
+            projected["approved_claims"] = [claim for claim in all_claims
+                                             if claim.get("claim_id") in target_claim_ids]
+            projected["approved_claim_ids"] = [claim["claim_id"] for claim in projected["approved_claims"]]
+            projected["revision_briefs"] = revision.get("revision_briefs", [])
+            projected["repair_rules"] = (
+                "只处理 target_ids；逐条修改 revision_briefs 指定 field；证据不足时收窄承诺。"
+            )
+        envelope = {"input": projected}
         if self.include_prompt_schema:
             envelope["output_schema"] = parameter["json_schema"]["schema"]
         if revision:
-            envelope["quality_revision"] = revision
+            quality_revision = revision
+            if self.spec.stage == "topic":
+                quality_revision = {
+                    "stage": revision["stage"], "target_ids": revision["target_ids"],
+                    "revision_briefs": revision.get("revision_briefs", []),
+                    "previous_target_ideas": [idea for idea in revision.get("previous_output", {}).get("ideas", [])
+                                               if idea.get("idea_id") in set(revision["target_ids"])],
+                    "rules": revision["rules"],
+                }
+            envelope["quality_revision"] = quality_revision
         prompt = json.dumps(envelope, ensure_ascii=False)
         repair, traces = "", []
         for attempt in range(1, self.spec.max_attempts + 1):

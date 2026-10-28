@@ -35,6 +35,12 @@ class GraphCompletion(WorkflowCompletion):
         self.wire_calls.append(copy.deepcopy(kwargs))
         prompt, end = json.JSONDecoder().raw_decode(kwargs["user_prompt"])
         wire_name = kwargs["response_format"]["json_schema"]["name"]
+        if wire_name == "TopicResponse" and "quality_revision" in prompt:
+            ideas = []
+            for idea in prompt["quality_revision"]["previous_target_ideas"]:
+                ideas.append({key: value for key, value in idea.items()
+                              if key not in {"idea_id", "source_note_ids"}})
+            return json.dumps({"summary": "返工测试", "ideas": ideas, "selection_limits": ["测试限制"]}, ensure_ascii=False)
         if wire_name == "SampleReviewResponse":
             role = "sample_review"
             self.calls.append((role, prompt, kwargs))
@@ -769,6 +775,27 @@ def test_changed_title_selection_rebinds_copy_and_image_groups():
     assert result["ideas"][0]["candidate_id"] == "title_0_1"
     assert w.state["copy"]["ideas"][0]["candidate_id"] == "title_0_1"
     assert w.state["image"]["variants"][0]["candidate_id"] == "title_0_1"
+
+
+def test_topic_revision_uses_compact_target_only_context():
+    model = GraphCompletion(fail_stage="TopicReviewResponse")
+    with pytest.raises(CreativeError):
+        workflow(model, count=1, variants=2).run()
+    revision_calls = []
+    for call in model.wire_calls:
+        if call["response_format"]["json_schema"]["name"] != "TopicResponse":
+            continue
+        envelope, _ = json.JSONDecoder().raw_decode(call["user_prompt"])
+        if "quality_revision" in envelope:
+            revision_calls.append(call)
+    assert len(revision_calls) == 2
+    for call in revision_calls:
+        envelope, _ = json.JSONDecoder().raw_decode(call["user_prompt"])
+        assert len(call["user_prompt"]) < 3000
+        assert envelope["input"]["topic_brief"]["ideas"][0]["idea_id"] == "idea_1"
+        assert "sample_analysis" not in envelope["input"]
+        assert "audience_brief" not in envelope["input"]
+        assert len(envelope["input"]["revision_briefs"]) == 1
 
 
 def test_graph_has_visible_conditional_edges_and_node_write_scope_is_enforced():
