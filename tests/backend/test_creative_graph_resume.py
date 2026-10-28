@@ -272,6 +272,61 @@ def test_title_revision_scope_failure_is_resumable_but_other_handoff_failures_ar
         prepare_resume(rejected)
 
 
+def test_audience_coverage_failure_resumes_without_repeating_sample_stages():
+    model = GraphCompletion()
+    def incomplete_audience(**kwargs):
+        raw = model(**kwargs)
+        if kwargs["response_format"]["json_schema"]["name"] == "AudienceGroupingResponse":
+            value = json.loads(raw)
+            value["segments"][-1]["audience_terms"] = value["segments"][-1]["audience_terms"][:-1]
+            return json.dumps(value, ensure_ascii=False)
+        return raw
+
+    original = workflow(incomplete_audience, count=1, variants=2)
+    with pytest.raises(CreativeError):
+        original.run()
+    saved = copy.deepcopy(original.state)
+    saved["options"]["workflow"] = "langgraph"
+    task = SimpleNamespace(status="failed", error_type="creative_handoff_invalid", payload={
+        "analysis": saved["options"], "search": saved["search"], "sources": saved["sources"], "graph_state": saved,
+    })
+
+    restored, role = prepare_resume(task)
+    recovery_model = GraphCompletion()
+    resumed = LangGraphWorkflow(search=restored["search"], sources=restored["sources"], options=restored["options"],
+                                complete=recovery_model, resume_state=restored, resume_role=role)
+    result, _ = resumed.run()
+
+    assert role == "audience"
+    assert result["ideas"]
+    assert recovery_model.calls[0][2]["response_format"]["json_schema"]["name"] == "AudienceNeedsResponse"
+    assert recovery_model.counts["sample_analysis"] == 0
+    assert recovery_model.counts["sample_review"] == 0
+    assert "分组归属属于技术性补齐" in " ".join(resumed.state["audience"]["limitations"])
+
+
+def test_resume_rejects_audience_handoff_failure_with_source_errors():
+    model = GraphCompletion()
+    w = workflow(model, count=1, variants=2)
+    w.run()
+    saved = copy.deepcopy(w.state)
+    saved["options"]["workflow"] = "langgraph"
+    pipeline = saved["pipeline"]
+    pipeline.update(status="failed", current_stage="audience", error_code="creative_handoff_invalid")
+    stage = pipeline["stages"]["audience"]
+    stage.update(status="failed", error="读者分组引用来源失败")
+    stage["metadata"].update(failed_role="audience", failed_attempts=[
+        {"error": "segments 分组校验失败；缺少受众词=['AI']；错误=[来源引用失败]；最多8组"},
+        {"error": "segments 分组校验失败；缺少受众词=['AI']；错误=[来源引用失败]；最多8组"},
+    ])
+    task = SimpleNamespace(status="failed", error_type="creative_handoff_invalid", payload={
+        "analysis": saved["options"], "search": saved["search"], "sources": saved["sources"], "graph_state": saved,
+    })
+
+    with pytest.raises(CreativeError, match="没有可继续"):
+        prepare_resume(task)
+
+
 @pytest.mark.parametrize("failure", ["schema", "handoff", "quality", "legacy", "incomplete"])
 def test_resume_rejects_business_failures_and_missing_checkpoints(env, failure):
     model = GraphCompletion(fail_stage="final_review" if failure == "quality" else None, always=True)

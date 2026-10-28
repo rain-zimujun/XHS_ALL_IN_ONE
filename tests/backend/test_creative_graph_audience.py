@@ -1,4 +1,5 @@
 import copy
+import hashlib
 import json
 
 import pytest
@@ -6,7 +7,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from backend.app.services.creative_agents.reader_needs import prepare_audience_input, validate_audience_brief
 from backend.app.services.creative_graph.agents import GraphOutputError, build_agents
-from backend.app.services.creative_graph.audience import needs_response, run_audience_steps
+from backend.app.services.creative_graph.audience import AUDIENCE_STEPS_VERSION, needs_response, run_audience_steps
 from backend.app.services.creative_graph.model import CompatibleChatModel, response_parameter
 from test_creative_reader_needs import AUDIENCE, REQUIREMENTS, sample_analysis, valid_output
 from test_structured_output import assert_strict_contract
@@ -181,6 +182,56 @@ def test_coverage_repair_names_missing_term_and_only_appends_new_group():
     assert len(result.segments) == 3
     assert result.segments[0].model_dump(exclude={"segment_id"}) == {k: v for k, v in original[0].items() if k != "segment_id"}
     assert result.segments[-1].audience_terms == ["后期从业者"]
+
+
+def test_exhausted_coverage_only_failure_fills_missing_terms_in_valid_groups_locally():
+    p = payload()
+    valid_groups = valid_output(p)["segments"]
+    groups = [{key: value for key, value in group.items() if key != "segment_id"} for group in valid_groups]
+    groups[0]["audience_terms"] = ["电商", "服装行业"]
+    groups[1]["audience_terms"] = ["AI", "时尚行业"]
+    fingerprint = hashlib.sha256(json.dumps(p, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    metadata = {
+        "failed_attempts": [
+            {"error": "segments 分组校验失败；缺少受众词=['营销行业', '美工', '后期从业者']；错误=[]；最多8组"},
+            {"error": "segments 分组校验失败；缺少受众词=['营销行业', '美工', '后期从业者']；错误=[]；最多8组"},
+        ],
+        "audience_steps": {"version": AUDIENCE_STEPS_VERSION, "fingerprint": fingerprint, "groups": groups},
+    }
+    model = Completion()
+
+    result = run(model, metadata, p).output
+
+    assert [call[0] for call in model.calls] == ["AudienceNeedsResponse"]
+    assert {term for segment in result.segments for term in segment.audience_terms} == set(p["audience_terms"])
+    assert "营销行业" in result.segments[0].audience_terms
+    assert "美工" in result.segments[1].audience_terms
+    assert "后期从业者" in result.segments[0].audience_terms
+    assert any("分组归属属于技术性补齐" in item for item in result.limitations)
+    assert metadata["audience_steps"]["locally_completed_terms"] == ["营销行业", "美工", "后期从业者"]
+
+
+def test_local_coverage_completion_is_not_used_for_other_grouping_errors():
+    p = payload()
+    groups = [{key: value for key, value in group.items() if key != "segment_id"}
+              for group in valid_output(p)["segments"]]
+    groups[0]["audience_terms"] = ["电商", "服装行业"]
+    groups[1]["audience_terms"] = ["AI", "时尚行业"]
+    fingerprint = hashlib.sha256(json.dumps(p, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    metadata = {
+        "failed_attempts": [
+            {"error": "segments 分组校验失败；缺少受众词=['营销行业']；错误=[来源引用失败]；最多8组"},
+            {"error": "segments 分组校验失败；缺少受众词=['营销行业']；错误=[来源引用失败]；最多8组"},
+        ],
+        "audience_steps": {"version": AUDIENCE_STEPS_VERSION, "fingerprint": fingerprint, "groups": groups},
+    }
+    model = Completion()
+
+    result = run(model, metadata, p).output
+
+    assert [call[0] for call in model.calls] == ["AudienceGroupingResponse", "AudienceNeedsResponse"]
+    assert {term for segment in result.segments for term in segment.audience_terms} == set(p["audience_terms"])
+    assert "locally_completed_terms" not in metadata["audience_steps"]
 
 
 @pytest.mark.parametrize("fault", ["unknown", "duplicate", "evidence"])

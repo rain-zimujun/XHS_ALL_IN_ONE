@@ -171,6 +171,33 @@ def _bind_group_claim_sources(group, payload):
     return result
 
 
+def _coverage_failures_exhausted(metadata):
+    failures = metadata.get("failed_attempts", [])
+    if not isinstance(failures, list) or len(failures) < 2:
+        return False
+    recent = failures[-2:]
+    return all(
+        isinstance(item, dict)
+        and "segments 分组校验失败；缺少受众词=" in str(item.get("error", ""))
+        and "；错误=[]；最多8组" in str(item.get("error", ""))
+        for item in recent
+    )
+
+
+def _complete_coverage_locally(groups, payload):
+    """Fill omitted user terms in existing, already-validated groups only."""
+    missing = _missing(groups, payload)
+    capacities = [4 - len(group["audience_terms"]) for group in groups]
+    if not groups or sum(capacities) < len(missing):
+        return []
+    for term in missing:
+        candidates = [index for index, capacity in enumerate(capacities) if capacity > 0]
+        index = min(candidates, key=lambda candidate: (len(groups[candidate]["audience_terms"]), candidate))
+        groups[index]["audience_terms"].append(term)
+        capacities[index] -= 1
+    return missing
+
+
 def _need_items(raw, model, payload, ids, field):
     accepted, errors = [], []
     for index, item in enumerate(raw if isinstance(raw, list) else []):
@@ -206,6 +233,21 @@ def run_audience_steps(agent, payload, metadata, checkpoint, validator):
     groups, group_errors = _groups(cache.get("groups", []), payload)
     if len(groups) > 8:
         groups = []
+    locally_completed_terms = list(cache.get("locally_completed_terms", []))
+
+    if (_missing(groups, payload) and not group_errors
+            and _coverage_failures_exhausted(metadata)):
+        locally_completed_terms = _complete_coverage_locally(groups, payload)
+        if locally_completed_terms:
+            cache["groups"] = deepcopy(groups)
+            cache["locally_completed_terms"] = locally_completed_terms
+            cache["local_completion_disclosure"] = (
+                "模型两次未覆盖全部用户受众词，程序已将遗漏词并入已有分组以保证完整覆盖；"
+                "分组归属属于技术性补齐，建议人工复核。"
+            )
+            diagnostic_event("受众覆盖本地补齐", stage="audience", agent=agent.spec.name,
+                             terms=locally_completed_terms, group_count=len(groups), model_requests=0)
+            checkpoint("读者需求 · 程序补齐遗漏受众词，分组归属待人工复核")
 
     def group_repair(raw, message):
         nonlocal groups
@@ -290,6 +332,12 @@ def run_audience_steps(agent, payload, metadata, checkpoint, validator):
         for field in fields:
             if len(value[field]) < target_counts[field]:
                 raise AgentValidationError(f"{field} 仍缺少修复项目：至少 {target_counts[field]} 项，当前 {len(value[field])} 项")
+        disclosure = cache.get("local_completion_disclosure")
+        if disclosure:
+            limitations = list(value["limitations"])
+            if disclosure not in limitations:
+                limitations = limitations[:7] + [disclosure]
+            value = {**value, "limitations": limitations}
         result = legacy.AudienceBrief.model_validate({**value, "segments": segments, "requested_audience_terms": payload["audience_terms"]})
         validator(result)
         return result
