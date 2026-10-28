@@ -130,7 +130,7 @@ def topic_revision_briefs(feedback: dict[str, Any], target_ids: list[str]) -> li
 
 def ensure_topic_revision_progress(previous: dict[str, Any], proposed: dict[str, Any], target_ids: list[str],
                                    feedback: dict[str, Any] | None = None) -> None:
-    """Reject revisions that fail to change the fields identified by the judge."""
+    """Require a substantive repair on a failed target before judge re-review."""
     old = {idea["idea_id"]: idea for idea in previous.get("ideas", [])}
     new = {idea["idea_id"]: idea for idea in proposed.get("ideas", [])}
     if not target_ids or not set(target_ids).issubset(old) or set(old) != set(new):
@@ -145,10 +145,9 @@ def ensure_topic_revision_progress(previous: dict[str, Any], proposed: dict[str,
         required = required_by_id.get(idea_id, set())
         changed = {field for field in (*TOPIC_REVISION_FIELDS, "evidence", "primary_segment_id")
                    if old[idea_id].get(field) != new[idea_id].get(field)}
-        missing = required - changed
-        if missing:
+        if required and not (required & changed):
             raise AgentValidationError(
-                f"选题 {idea_id} 未落实评审意见：必改字段未变化={'、'.join(sorted(missing))}"
+                f"选题 {idea_id} 未落实评审意见：必改字段未变化={'、'.join(sorted(required))}；至少实质修改其中一项后交评委重新评分"
             )
         if not required and not changed:
             raise AgentValidationError(f"选题 {idea_id} 未落实评审意见：目标内容字段没有任何变化")

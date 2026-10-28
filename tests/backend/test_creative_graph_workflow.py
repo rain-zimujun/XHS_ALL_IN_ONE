@@ -797,7 +797,7 @@ def test_topic_revision_uses_compact_target_only_context():
         assert envelope["input"]["audience_brief"]["segments"]
         assert len(envelope["input"]["revision_briefs"]) == 1
     second_envelope, _ = json.JSONDecoder().raw_decode(revision_calls[1]["user_prompt"])
-    assert "本次只修复以下未变化字段" in revision_calls[1]["user_prompt"]
+    assert "本次针对以下未变化字段至少修复一项" in revision_calls[1]["user_prompt"]
     assert "获批结论" in revision_calls[1]["user_prompt"]
     assert "捏造步骤、案例或效果" in revision_calls[1]["user_prompt"]
 

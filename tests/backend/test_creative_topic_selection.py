@@ -227,7 +227,7 @@ def test_topic_quality_revision_must_change_a_target_idea_content_field():
     ensure_topic_revision_progress(previous, revised, ["idea_1"])
 
 
-def test_topic_quality_revision_must_change_each_field_named_by_review():
+def test_topic_quality_revision_must_change_at_least_one_field_named_by_review():
     previous = valid_output(prepare_topic_input("AI 服装", REQUIREMENTS, 1, sample_analysis(), audience_brief()))
     feedback = {"reviews": [{"judgement": {
         "idea_id": "idea_1",
@@ -240,10 +240,11 @@ def test_topic_quality_revision_must_change_each_field_named_by_review():
     }}]}
     revised = copy.deepcopy(previous)
     revised["ideas"][0]["reader_promise"] = "读者可从样本中的提示词结构获得服装视觉表达参考。"
-    with pytest.raises(AgentValidationError, match="必改字段未变化=evidence"):
-        ensure_topic_revision_progress(previous, revised, ["idea_1"], feedback)
-    revised["ideas"][0]["evidence"][0]["statement"] = "样本展示了提示词结构及服装视觉表达，可作为构图参考。"
     ensure_topic_revision_progress(previous, revised, ["idea_1"], feedback)
+
+    unchanged = copy.deepcopy(previous)
+    with pytest.raises(AgentValidationError, match="至少实质修改其中一项"):
+        ensure_topic_revision_progress(previous, unchanged, ["idea_1"], feedback)
 
     briefs = topic_revision_briefs(feedback, ["idea_1"])
     assert briefs[0]["scores_below_minimum"][0]["minimum"] == 6

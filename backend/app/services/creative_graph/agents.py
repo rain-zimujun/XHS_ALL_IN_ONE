@@ -239,7 +239,7 @@ class StructuredAgent:
                         "differentiator": "调整 differentiator，差异点限于获批结论可支持的内容。",
                         "boundaries": "在 boundaries 标出样本未提供完整步骤或实际案例，不把它们当作文章承诺。",
                     }
-                    repair += "本次只修复以下未变化字段：" + "；".join(
+                    repair += "本次针对以下未变化字段至少修复一项：" + "；".join(
                         field_guidance[field] for field in field_names if field in field_guidance
                     )
                     if claim_evidence:
