@@ -271,6 +271,8 @@ LangGraph 样本数超过 3 时，`prepare_sample_batches` 将来源均分为 2�
 
 选题生成的动态 TypedDict 同样将 `evidence.note_ids`、`evidence.claim_ids` 和 `source_note_ids` 限定为本次输入 ID，并在原生 JSON Schema 声明唯一项。对于仍返回的重复 ID，程序只稳定去重；随后仍要求至少两个不同 note，且 `source_note_ids` 与所有 evidence 来源集合一致。不会通过去重推断、补入或替换证据。
 
+当旧运行快照因为上述精确重复 ID 错误连续两次失败，可从 topic 节点接续以使用新的唯一性 Schema 与稳定去重适配器。恢复白名单不接纳来源错配、未知 ID、证据数量不足或其他 topic 业务失败。
+
 标题评委的精简批次携带当前选题的获批结论和候选 claim/source 绑定，便于对照标题承诺是否有支持；内部 ID 放在 evidence 而非可评分 fields，评委仍只对文案字段评分。标题评审批次版本升为 `title-review-adaptive-v3`，输入指纹改变时旧评审批次不会被错误复用。没有获批注册表的旧式输入使用空引用列表；已绑定的输入则不允许候选空引用或越权引用。
 
 本地关系检查不能判断标题语义是否真的由获批结论推出，这部分仍由标题评委审核；动态 Schema 也不保证所有兼容模型服务都会接受这些 ID 枚举，真实模型的响应和标题可用度仍需用户试用验收。

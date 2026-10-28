@@ -24,6 +24,11 @@ SAMPLE_REVIEW_MARKERS = (
     "判为有依据时必须至少给出一个有效来源",
 )
 AUDIENCE_COVERAGE_MARKER = "segments 分组校验失败；缺少受众词="
+TOPIC_DUPLICATE_SOURCE_MARKERS = (
+    "同一条 evidence.note_ids 不可重复",
+    "同一条 evidence.claim_ids 不可重复",
+    "source_note_ids 不可重复",
+)
 SINGLE_ROLES = {"sample_analysis", "sample_review", "audience", "image", "final_review"}
 ALL_ROLES = SINGLE_ROLES | {"topic", "topic_review", "title", "title_review", "copy", "copy_review"}
 
@@ -84,8 +89,16 @@ def prepare_resume(task):
                     for attempt in audience_failures[-2:]
                 )
             )
+            topic_failures = item["metadata"].get("failed_attempts", [])
+            topic_duplicate_source_failure = (
+                item["metadata"].get("failed_role") == "topic"
+                and isinstance(topic_failures, list) and len(topic_failures) >= 2
+                and all(str(attempt.get("error", "")) in TOPIC_DUPLICATE_SOURCE_MARKERS
+                        for attempt in topic_failures[-2:])
+            )
             compatible_handoff = (legacy_tag_failure or targeted_revision_failure
-                                  or sample_review_failure or audience_coverage_failure)
+                                  or sample_review_failure or audience_coverage_failure
+                                  or topic_duplicate_source_failure)
             if task.error_type != "creative_handoff_invalid" or not compatible_handoff:
                 raise ValueError("not a compatible model failure")
         role = item["metadata"].get("failed_role")

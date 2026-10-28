@@ -162,6 +162,8 @@ def test_old_snapshot_without_role_still_resumes_title_judge():
     with pytest.raises(CreativeError):
         w.run()
     saved = copy.deepcopy(w.state)
+    saved["result"] = None
+    saved["metadata"] = {}
     saved["options"]["workflow"] = "langgraph"
     saved["pipeline"]["stages"]["title"]["metadata"].pop("failed_role")
     task = SimpleNamespace(status="failed", error_type="ai_http_error", payload={
@@ -323,6 +325,38 @@ def test_resume_rejects_audience_handoff_failure_with_source_errors():
         "analysis": saved["options"], "search": saved["search"], "sources": saved["sources"], "graph_state": saved,
     })
 
+    with pytest.raises(CreativeError, match="没有可继续"):
+        prepare_resume(task)
+
+
+@pytest.mark.parametrize("failure", [
+    "同一条 evidence.note_ids 不可重复",
+    "同一条 evidence.claim_ids 不可重复",
+    "source_note_ids 不可重复",
+])
+def test_topic_duplicate_source_reference_failure_is_resumable_only_for_exact_error(failure):
+    model = GraphCompletion()
+    w = workflow(model, count=1, variants=2)
+    w.run()
+    saved = copy.deepcopy(w.state)
+    saved["result"] = None
+    saved["metadata"] = {}
+    saved["options"]["workflow"] = "langgraph"
+    pipeline = saved["pipeline"]
+    pipeline.update(status="failed", current_stage="topic", error_code="creative_handoff_invalid")
+    stage = pipeline["stages"]["topic"]
+    stage.update(status="failed", error=failure)
+    stage["metadata"].update(failed_role="topic", failed_attempts=[{"error": failure}, {"error": failure}])
+    task = SimpleNamespace(status="failed", error_type="creative_handoff_invalid", payload={
+        "analysis": saved["options"], "search": saved["search"], "sources": saved["sources"], "graph_state": saved,
+    })
+
+    restored, role = prepare_resume(task)
+
+    assert role == "topic"
+    assert restored["pipeline"]["stages"]["topic"]["status"] == "pending"
+
+    task.payload["graph_state"]["pipeline"]["stages"]["topic"]["metadata"]["failed_attempts"][-1]["error"] = "另一个来源错误"
     with pytest.raises(CreativeError, match="没有可继续"):
         prepare_resume(task)
 
