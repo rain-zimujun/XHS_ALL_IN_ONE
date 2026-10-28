@@ -136,13 +136,18 @@ class StructuredAgent:
                     ensure_title_revision_progress(revision["previous_output"], adapted, revision["target_ids"])
                 if revision and self.spec.stage == "topic":
                     from backend.app.services.creative_agents.topic_selection import (
+                        bind_topic_idea_ids,
                         ensure_topic_revision_progress,
                         preserve_unselected_topic_ideas,
                     )
+                    adapted = bind_topic_idea_ids(adapted, revision["previous_output"])
                     adapted = preserve_unselected_topic_ideas(
                         revision["previous_output"], adapted, revision["target_ids"],
                     )
                     ensure_topic_revision_progress(revision["previous_output"], adapted, revision["target_ids"])
+                elif self.spec.stage == "topic" and self.spec.name == "选题 Agent":
+                    from backend.app.services.creative_agents.topic_selection import bind_topic_idea_ids
+                    adapted = bind_topic_idea_ids(adapted)
                 if self.spec.stage == "copy":
                     from backend.app.services.creative_copy import normalize_result_copy
                     adapted = normalize_result_copy(adapted)
@@ -151,7 +156,8 @@ class StructuredAgent:
                 validate_output(result)
                 if revision:
                     from backend.app.services.creative_agents.revision import ensure_targeted_revision
-                    revision_value = result.model_dump(mode="json") if self.payload_output_adapter else value
+                    revision_value = (result.model_dump(mode="json")
+                                      if self.payload_output_adapter or self.spec.stage == "topic" else value)
                     ensure_targeted_revision(self.spec.stage, revision["previous_output"], revision_value, revision["target_ids"])
                 traces.append(AgentAttemptTrace(attempt, round((monotonic() - started) * 1000), "completed"))
                 diagnostic_event("模型调用及校验完成", **context, duration_ms=traces[-1].duration_ms)

@@ -327,6 +327,40 @@ def test_topic_reference_errors_get_one_bounded_repair(kind):
     assert "校验" in complete.calls[1]["user_prompt"]
 
 
+def test_topic_source_note_ids_are_derived_from_evidence():
+    from backend.app.services.creative_agents.topic_selection import normalize_topic_reference_lists
+
+    output = valid_output(prepare_topic_input("AI 服装", REQUIREMENTS, 3, sample_analysis(), audience_brief()))
+    output["ideas"][0]["source_note_ids"] = ["sample-0", "sample-3"]
+    normalized = normalize_topic_reference_lists(output)
+    expected = list(dict.fromkeys(output["ideas"][0]["evidence"][0]["note_ids"]))
+    assert normalized["ideas"][0]["source_note_ids"] == expected
+
+
+def test_topic_idea_ids_are_program_bound_and_stable_during_revision():
+    from backend.app.services.creative_agents.topic_selection import bind_topic_idea_ids
+
+    output = valid_output(prepare_topic_input("AI 服装", REQUIREMENTS, 3, sample_analysis(), audience_brief()))
+    for idea in output["ideas"]:
+        idea.pop("idea_id")
+    initial = bind_topic_idea_ids(output)
+    assert [idea["idea_id"] for idea in initial["ideas"]] == ["idea_1", "idea_2", "idea_3"]
+    revised = bind_topic_idea_ids(output, initial)
+    assert [idea["idea_id"] for idea in revised["ideas"]] == ["idea_1", "idea_2", "idea_3"]
+
+
+def test_langgraph_topic_schema_does_not_request_derived_source_note_ids():
+    from backend.app.services.creative_graph.source_schema import topic_response_type
+    from backend.app.services.creative_graph.model import response_parameter
+
+    payload = prepare_topic_input("AI 服装", REQUIREMENTS, 1, sample_analysis(), audience_brief())
+    schema = response_parameter(topic_response_type(payload))["json_schema"]["schema"]
+    idea_schema = schema["$defs"]["BoundTopicIdea"]
+    assert "idea_id" not in idea_schema["properties"]
+    assert "source_note_ids" not in idea_schema["properties"]
+    assert "evidence" in idea_schema["properties"]
+
+
 def test_source_counts_use_unique_union_across_evidence_entries():
     def transform(result, _call):
         result["ideas"][0]["evidence"] = [

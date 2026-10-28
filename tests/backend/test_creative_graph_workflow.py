@@ -81,6 +81,8 @@ class GraphCompletion(WorkflowCompletion):
             claims = prompt["input"].get("approved_claims", [])
             claim_for_note = {note_id: claim["claim_id"] for claim in claims for note_id in claim["note_ids"]}
             for idea in output["ideas"]:
+                idea.pop("idea_id", None)
+                idea.pop("source_note_ids", None)
                 idea["primary_segment_id"] = prompt["input"]["audience_brief"]["segments"][0]["segment_id"]
                 for evidence in idea["evidence"]:
                     evidence["claim_ids"] = list(dict.fromkeys(

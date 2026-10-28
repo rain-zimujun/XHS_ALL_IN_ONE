@@ -57,7 +57,7 @@ def _drop_empty_claim_ids(value):
 
 
 def normalize_topic_reference_lists(value):
-    """Remove repeated IDs from model lists; do not add or repair source links."""
+    """Normalize model references and derive each idea's source set from evidence."""
     result = copy.deepcopy(value)
 
     def visit(item):
@@ -72,6 +72,30 @@ def normalize_topic_reference_lists(value):
                 visit(nested)
 
     visit(result)
+    for idea in result.get("ideas", []):
+        if not isinstance(idea, dict):
+            continue
+        evidence_ids = []
+        for evidence in idea.get("evidence", []):
+            if isinstance(evidence, dict) and evidence.get("basis") != "user_requirement":
+                evidence_ids.extend(evidence.get("note_ids", []))
+        idea["source_note_ids"] = list(dict.fromkeys(evidence_ids))
+    return result
+
+
+def bind_topic_idea_ids(value: dict[str, Any], previous: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Bind stable idea IDs in order; IDs are state-owned, never model-owned."""
+    result = copy.deepcopy(value)
+    ideas = result.get("ideas")
+    if not isinstance(ideas, list):
+        raise AgentValidationError("ideas 必须是选题列表")
+    previous_ids = [idea.get("idea_id") for idea in (previous or {}).get("ideas", [])]
+    if previous is not None and len(previous_ids) != len(ideas):
+        raise AgentValidationError("选题返工不得改变已有选题数量")
+    for index, idea in enumerate(ideas):
+        if not isinstance(idea, dict):
+            raise AgentValidationError("idea 必须是对象")
+        idea["idea_id"] = previous_ids[index] if previous is not None else f"idea_{index + 1}"
     return result
 
 

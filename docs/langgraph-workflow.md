@@ -271,6 +271,8 @@ LangGraph 样本数超过 3 时，`prepare_sample_batches` 将来源均分为 2�
 
 选题生成的动态 TypedDict 同样将 `evidence.note_ids`、`evidence.claim_ids` 和 `source_note_ids` 限定为本次输入 ID，并在原生 JSON Schema 声明唯一项。对于仍返回的重复 ID，程序只稳定去重；随后仍要求至少两个不同 note，且 `source_note_ids` 与所有 evidence 来源集合一致。不会通过去重推断、补入或替换证据。
 
+选题 TypedDict 不要求模型输出程序所有的 `idea_id` 或派生字段 `source_note_ids`。初次生成时程序按列表顺序分配稳定 ID；质量返工按返工前保存稿的顺序重新绑定 ID，然后恢复所有非目标选题。响应接收时，程序还会从非 `user_requirement` 的 evidence.note_ids 稳定重建 `source_note_ids`。来源不足、未知 note、claim 与 note 错配仍由本地校验拒绝，程序不会为 evidence 不足的选题补造来源。
+
 当旧运行快照因为上述精确重复 ID 错误连续两次失败，可从 topic 节点接续以使用新的唯一性 Schema 与稳定去重适配器。恢复白名单不接纳来源错配、未知 ID、证据数量不足或其他 topic 业务失败。
 
 选题评委问题的 `quote` 由接收适配器按模型选定的 `idea_id` 与 `field` 绑定到当前选题字段中的确切文本，再进行本地校验；评委仍负责分数、问题语义和修订意见。若旧快照因“问题 quote 必须逐字出现在当前选题的对应 field 中”连续两次失败，可从 `topic_review` 接续；其他评分、来源和问题校验不因此跳过或放宽。

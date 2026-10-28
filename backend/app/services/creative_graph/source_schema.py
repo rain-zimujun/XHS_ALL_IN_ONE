@@ -54,15 +54,12 @@ def topic_response_type(payload: dict) -> type:
         "statement": responses.Text,
     })
     idea = _strict("BoundTopicIdea", {
-        "idea_id": responses.IdeaId,
         "primary_segment_id": segment_type,
         "topic": Annotated[str, Field(min_length=1, max_length=120)],
         "content_type": responses.ContentType,
         "reader_promise": responses.Text,
         "core_angle": responses.Text,
         "must_cover": Annotated[list[responses.Text], Field(min_length=1, max_length=8)],
-        "source_note_ids": Annotated[list[literal_values(payload["sample_note_ids"], "样本 note_id")],
-                                      Field(min_length=2, max_length=8, json_schema_extra={"uniqueItems": True})],
         "evidence": Annotated[list[evidence], Field(min_length=1, max_length=5)],
         "boundaries": Annotated[list[responses.Text], Field(min_length=1, max_length=6)],
         "differentiator": responses.Text,
