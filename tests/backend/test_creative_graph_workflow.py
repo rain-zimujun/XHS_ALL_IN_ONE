@@ -206,6 +206,34 @@ def test_topic_response_schema_and_adapter_prevent_duplicate_source_references()
     assert len(result["ideas"]) == 1
 
 
+def test_topic_review_adapter_binds_issue_quotes_to_the_current_idea_field():
+    class InvalidIssueQuote(GraphCompletion):
+        def __call__(self, **kwargs):
+            raw = super().__call__(**kwargs)
+            if kwargs["response_format"]["json_schema"]["name"] == "TopicReviewResponse":
+                output = json.loads(raw)
+                output["reviews"][0]["issues"] = [{
+                    "criterion": "reader_value", "severity": "blocking", "field": "reader_promise",
+                    "quote": "这是来自样本、并非选题字段的引用。", "problem": "读者价值表达需要更具体。",
+                    "revision_instruction": "明确读者能获得的内容。", "note_ids": [], "related_idea_ids": [],
+                }]
+                output["reviews"][0]["scores"][0]["score"] = 5
+                return json.dumps(output, ensure_ascii=False)
+            return raw
+
+    model = InvalidIssueQuote()
+    w = workflow(model, count=1, variants=2)
+
+    with pytest.raises(CreativeError):
+        w.run()
+
+    judgement = w.state["topic_review"]["reviews"][0]["judgement"]
+    issue = judgement["issues"][0]
+    idea = w.state["topic"]["ideas"][0]
+    assert issue["quote"] == idea["reader_promise"][:180]
+    assert "来自样本" not in issue["quote"]
+
+
 def test_graph_routes_sample_preprocessing_to_its_dedicated_model_only():
     creative_model, preprocess_model = GraphCompletion(), GraphCompletion()
     w = workflow(creative_model, count=1, variants=2, preprocess_complete=preprocess_model)

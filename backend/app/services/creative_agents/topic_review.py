@@ -119,6 +119,21 @@ def _field_texts(value: Any) -> list[str]:
     return []
 
 
+def bind_topic_issue_quotes(value: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Bind issue quotes to exact text from the selected current topic field."""
+    result = json.loads(json.dumps(value, ensure_ascii=False))
+    ideas = {idea["idea_id"]: idea for idea in payload["topic_brief"]["ideas"]}
+    for review in result.get("reviews", []):
+        idea = ideas.get(review.get("idea_id"))
+        if not idea:
+            continue
+        for issue in review.get("issues", []):
+            texts = _field_texts(idea.get(issue.get("field")))
+            if texts:
+                issue["quote"] = texts[0][:180]
+    return result
+
+
 def _validate_refs(refs: list[str], known: set[str]) -> None:
     if len(refs) != len(set(refs)) or not set(refs).issubset(known):
         raise AgentValidationError("评审引用了未知或重复的来源/关联选题 ID")

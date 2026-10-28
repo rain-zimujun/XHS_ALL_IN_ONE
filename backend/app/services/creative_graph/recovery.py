@@ -29,6 +29,7 @@ TOPIC_DUPLICATE_SOURCE_MARKERS = (
     "同一条 evidence.claim_ids 不可重复",
     "source_note_ids 不可重复",
 )
+TOPIC_ISSUE_QUOTE_MARKER = "问题 quote 必须逐字出现在当前选题的对应 field 中"
 SINGLE_ROLES = {"sample_analysis", "sample_review", "audience", "image", "final_review"}
 ALL_ROLES = SINGLE_ROLES | {"topic", "topic_review", "title", "title_review", "copy", "copy_review"}
 
@@ -96,9 +97,15 @@ def prepare_resume(task):
                 and all(str(attempt.get("error", "")) in TOPIC_DUPLICATE_SOURCE_MARKERS
                         for attempt in topic_failures[-2:])
             )
+            topic_issue_quote_failure = (
+                item["metadata"].get("failed_role") == "topic_review"
+                and isinstance(topic_failures, list) and len(topic_failures) >= 2
+                and all(str(attempt.get("error", "")) == TOPIC_ISSUE_QUOTE_MARKER
+                        for attempt in topic_failures[-2:])
+            )
             compatible_handoff = (legacy_tag_failure or targeted_revision_failure
                                   or sample_review_failure or audience_coverage_failure
-                                  or topic_duplicate_source_failure)
+                                  or topic_duplicate_source_failure or topic_issue_quote_failure)
             if task.error_type != "creative_handoff_invalid" or not compatible_handoff:
                 raise ValueError("not a compatible model failure")
         role = item["metadata"].get("failed_role")

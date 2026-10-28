@@ -361,6 +361,36 @@ def test_topic_duplicate_source_reference_failure_is_resumable_only_for_exact_er
         prepare_resume(task)
 
 
+def test_topic_review_issue_quote_failure_is_resumable_only_for_exact_error():
+    model = GraphCompletion()
+    w = workflow(model, count=1, variants=2)
+    w.run()
+    saved = copy.deepcopy(w.state)
+    saved["result"] = None
+    saved["metadata"] = {}
+    saved["options"]["workflow"] = "langgraph"
+    pipeline = saved["pipeline"]
+    pipeline.update(status="failed", current_stage="topic", error_code="creative_handoff_invalid")
+    stage = pipeline["stages"]["topic"]
+    stage.update(status="failed", error="问题 quote 必须逐字出现在当前选题的对应 field 中")
+    stage["metadata"].update(failed_role="topic_review", failed_attempts=[
+        {"error": "问题 quote 必须逐字出现在当前选题的对应 field 中"},
+        {"error": "问题 quote 必须逐字出现在当前选题的对应 field 中"},
+    ])
+    task = SimpleNamespace(status="failed", error_type="creative_handoff_invalid", payload={
+        "analysis": saved["options"], "search": saved["search"], "sources": saved["sources"], "graph_state": saved,
+    })
+
+    restored, role = prepare_resume(task)
+
+    assert role == "topic_review"
+    assert restored["pipeline"]["stages"]["topic"]["status"] == "pending"
+
+    task.payload["graph_state"]["pipeline"]["stages"]["topic"]["metadata"]["failed_attempts"][-1]["error"] = "其他 topic 错误"
+    with pytest.raises(CreativeError, match="没有可继续"):
+        prepare_resume(task)
+
+
 @pytest.mark.parametrize("failure", ["schema", "handoff", "quality", "legacy", "incomplete"])
 def test_resume_rejects_business_failures_and_missing_checkpoints(env, failure):
     model = GraphCompletion(fail_stage="final_review" if failure == "quality" else None, always=True)

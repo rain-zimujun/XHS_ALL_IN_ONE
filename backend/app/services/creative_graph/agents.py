@@ -19,6 +19,7 @@ from backend.app.services.creative_agents.title_generation import (
     TITLE_AGENT, bind_title_ids, preserve_unselected_title_candidates, title_response_type,
 )
 from backend.app.services.creative_graph.title_review import TITLE_REVIEW_AGENT, expand_title_review
+from backend.app.services.creative_agents.topic_review import bind_topic_issue_quotes
 from backend.app.services.creative_agents.copy_generation import COPY_AGENT
 from backend.app.services.creative_graph.copy_review import COPY_REVIEW_AGENT
 from backend.app.services.creative_graph.visual_batches import IMAGE_AGENT, FINAL_REVIEW_AGENT, ImageBatchOutput
@@ -192,7 +193,7 @@ def build_agents(model: CompatibleChatModel) -> dict[str, StructuredAgent]:
         "sample_review": StructuredAgent(model, SAMPLE_REVIEW_AGENT, response_format=responses.SampleReviewResponse, output_model=legacy.SampleReviewResponse, response_format_factory=sample_review_response_type),
         "audience": StructuredAgent(model, AUDIENCE_AGENT, response_format=responses.AudienceResponse, output_model=legacy.AudienceBrief),
         "topic": StructuredAgent(model, production_spec(TOPIC_AGENT), response_format=responses.TopicResponse, output_model=legacy.TopicBrief, output_adapter=normalize_topic_reference_lists, include_prompt_schema=False, input_projection=partial(production_context, "topic"), response_format_factory=topic_response_type),
-        "topic_review": StructuredAgent(model, TOPIC_REVIEW_AGENT, response_format=responses.TopicReviewResponse, output_model=legacy.TopicReviewResponse, state_fields=("topic_revision", "input_fingerprint"), include_prompt_schema=False, response_format_factory=topic_review_response_type),
+        "topic_review": StructuredAgent(model, TOPIC_REVIEW_AGENT, response_format=responses.TopicReviewResponse, output_model=legacy.TopicReviewResponse, state_fields=("topic_revision", "input_fingerprint"), include_prompt_schema=False, response_format_factory=topic_review_response_type, payload_output_adapter=bind_topic_issue_quotes),
         "title": StructuredAgent(model, production_spec(langgraph_title_spec()), response_format=responses.TitleResponse, output_model=legacy.TitleCandidates, state_fields=("topic_revision", "input_fingerprint"), include_prompt_schema=False, input_projection=partial(production_context, "title"), response_format_factory=title_response_type, payload_output_adapter=bind_title_ids),
         "title_review": StructuredAgent(model, TITLE_REVIEW_AGENT, response_format=responses.TitleReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False, response_format_factory=title_review_response_type, payload_output_adapter=expand_title_review),
         "copy": StructuredAgent(model, production_spec(COPY_AGENT), response_format=responses.CopyResponse, output_model=legacy.CopyVariants, state_fields=("input_fingerprint",), include_prompt_schema=False, input_projection=partial(production_context, "copy"), response_format_factory=copy_response_type),
