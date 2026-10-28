@@ -218,6 +218,31 @@ class StructuredAgent:
                 diagnostic_event("输出校验失败", level="WARNING", **context, duration_ms=traces[-1].duration_ms,
                                  error_code=kind, reason=message, will_retry=attempt < self.spec.max_attempts)
                 repair = f"\n上一次输出未通过校验（{kind}），请按同一 Schema 返回完整对象。修正原因：{message}\n"
+                if self.spec.stage == "topic" and revision and "必改字段未变化=" in message:
+                    missing_fields = message.split("必改字段未变化=", 1)[1].split("；", 1)[0]
+                    field_names = [field.strip() for field in missing_fields.replace("、", ",").split(",") if field.strip()]
+                    claims = projected.get("approved_claims", [])
+                    claim_evidence = [
+                        {"claim_id": claim.get("claim_id"), "text": claim.get("text", "")}
+                        for claim in claims if claim.get("text")
+                    ]
+                    field_guidance = {
+                        "reader_promise": "重写 reader_promise，只承诺这些结论能直接支持的内容；没有步骤或案例证据时，不得承诺步骤或案例。",
+                        "must_cover": "重写 must_cover，删除无获批结论支撑的步骤/案例要求，只保留样本明确提到的提示词、流程或技巧。",
+                        "evidence": "重写 evidence.statement，并只保留能直接支持该选题的 claim_ids 与对应 note_ids；不要用宽泛结论证明未出现的细节。",
+                        "topic": "收窄 topic 到获批结论实际覆盖的主题，不扩展成资料未支持的教程或案例。",
+                        "core_angle": "调整 core_angle，使角度与获批结论直接对应，不加入未出现的步骤或效果。",
+                        "differentiator": "调整 differentiator，差异点限于获批结论可支持的内容。",
+                        "boundaries": "在 boundaries 标出样本未提供完整步骤或实际案例，不把它们当作文章承诺。",
+                    }
+                    repair += "本次只修复以下未变化字段：" + "；".join(
+                        field_guidance[field] for field in field_names if field in field_guidance
+                    )
+                    if claim_evidence:
+                        repair += "\n本目标选题可用的获批结论（仅作证据边界，不是要求全部引用）：" + json.dumps(
+                            claim_evidence, ensure_ascii=False,
+                        )
+                    repair += "\n若获批结论不足以支撑原选题承诺，必须收窄选题内容；不得为了满足评审而捏造步骤、案例或效果。\n"
                 if self.spec.stage == "sample_analysis" and quote_detail:
                     repair += (
                         "引文规则再强调一次：每个 quote 必须从当前输入提供的同一个标题或正文片段中连续复制，"

@@ -796,6 +796,10 @@ def test_topic_revision_uses_compact_target_only_context():
         assert "sample_analysis" not in envelope["input"]
         assert "audience_brief" not in envelope["input"]
         assert len(envelope["input"]["revision_briefs"]) == 1
+    second_envelope, _ = json.JSONDecoder().raw_decode(revision_calls[1]["user_prompt"])
+    assert "本次只修复以下未变化字段" in revision_calls[1]["user_prompt"]
+    assert "获批结论" in revision_calls[1]["user_prompt"]
+    assert "捏造步骤、案例或效果" in revision_calls[1]["user_prompt"]
 
 
 def test_graph_has_visible_conditional_edges_and_node_write_scope_is_enforced():
