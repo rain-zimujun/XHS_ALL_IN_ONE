@@ -229,6 +229,32 @@ def test_sample_rejected_claim_reference_failure_can_resume_sample_review_only()
     assert restored["pipeline"]["stages"]["sample_analysis"]["status"] == "pending"
 
 
+def test_audience_claim_source_binding_failure_can_resume_audience_only():
+    completed = workflow(GraphCompletion(), count=1, variants=2)
+    completed.run()
+    saved = copy.deepcopy(completed.state)
+    saved["result"] = None
+    saved["metadata"] = {}
+    saved["options"]["workflow"] = "langgraph"
+    pipeline = saved["pipeline"]
+    pipeline.update(status="failed", current_stage="audience", error_code="creative_handoff_invalid")
+    stage = pipeline["stages"]["audience"]
+    failure = "segments 分组校验失败；缺少受众词=[]；错误=[{'field': 'segments[0]', 'reason': 'note_id 必须属于本条 evidence 引用的获批 claim_id'}]；最多8组"
+    stage.update(status="failed", error=failure)
+    stage["metadata"].update(failed_role="audience", failed_attempts=[
+        {"attempt": 1, "error": failure}, {"attempt": 2, "error": failure},
+    ])
+    task = SimpleNamespace(status="failed", error_type="creative_handoff_invalid", payload={
+        "analysis": saved["options"], "search": saved["search"], "sources": saved["sources"], "graph_state": saved,
+    })
+
+    restored, role = prepare_resume(task)
+
+    assert role == "audience"
+    assert restored["sample_analysis"] is not None
+    assert restored["sample_review"] is not None
+
+
 def test_legacy_snapshot_without_sample_review_is_migrated_and_reviewed_before_audience():
     model = GraphCompletion()
     completed = workflow(model, count=1, variants=2)

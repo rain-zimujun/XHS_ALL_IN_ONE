@@ -30,6 +30,7 @@ SAMPLE_QUOTE_FAILURE_MARKERS = (
 )
 AUDIENCE_COVERAGE_MARKER = "segments 分组校验失败；缺少受众词="
 AUDIENCE_REJECTED_TERMS_MARKER = "未知受众词="
+AUDIENCE_CLAIM_BINDING_MARKER = "note_id 必须属于本条 evidence 引用的获批 claim_id"
 TOPIC_DUPLICATE_SOURCE_MARKERS = (
     "同一条 evidence.note_ids 不可重复",
     "同一条 evidence.claim_ids 不可重复",
@@ -114,6 +115,15 @@ def prepare_resume(task):
                     for attempt in audience_failures[-2:]
                 )
             )
+            audience_claim_binding_failure = (
+                stage == "audience"
+                and item["metadata"].get("failed_role") == "audience"
+                and isinstance(audience_failures, list) and len(audience_failures) >= 2
+                and all(
+                    AUDIENCE_CLAIM_BINDING_MARKER in str(attempt.get("error", ""))
+                    for attempt in audience_failures[-2:]
+                )
+            )
             topic_failures = item["metadata"].get("failed_attempts", [])
             topic_duplicate_source_failure = (
                 item["metadata"].get("failed_role") == "topic"
@@ -142,6 +152,7 @@ def prepare_resume(task):
             )
             compatible_handoff = (legacy_tag_failure or targeted_revision_failure
                                   or sample_review_failure or sample_quote_failure or audience_coverage_failure
+                                  or audience_claim_binding_failure
                                   or topic_duplicate_source_failure or topic_issue_quote_failure)
             compatible_handoff = compatible_handoff or topic_source_binding_failure
             compatible_handoff = compatible_handoff or topic_revision_no_progress_failure

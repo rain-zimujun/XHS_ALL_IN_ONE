@@ -141,6 +141,27 @@ def test_audience_grouping_rebinds_model_mismatched_claim_ids_from_note_ids():
                 assert evidence.claim_ids == ["claim_001_001"]
 
 
+def test_audience_group_binding_selects_a_source_claim_without_truncating_note_coverage():
+    p = payload()
+    p["approved_claims"] = [
+        {"claim_id": f"claim_{index:03d}", "section": "observations", "text": f"claim {index}",
+         "note_ids": [f"sample-{index % 3}"]}
+        for index in range(1, 16)
+    ]
+    p["approved_claim_ids"] = [claim["claim_id"] for claim in p["approved_claims"]]
+
+    result = run(Completion(), p=p).output
+
+    for group in result.segments:
+        for evidence in group.evidence:
+            if evidence.basis == "sample_evidence":
+                assert set(evidence.note_ids) == {
+                    note_id for claim_id in evidence.claim_ids
+                    for claim in p["approved_claims"] if claim["claim_id"] == claim_id
+                    for note_id in claim["note_ids"]
+                }
+
+
 def test_audience_validation_rejects_claims_that_do_not_cover_the_cited_note():
     from backend.app.schemas.creative_agents import AudienceBrief
     from backend.app.services.creative_orchestrator import AgentValidationError

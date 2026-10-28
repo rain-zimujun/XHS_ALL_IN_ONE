@@ -24,7 +24,7 @@ from backend.app.services.creative_graph.model import response_parameter
 from backend.app.services.creative_graph.source_schema import source_note_ids_type, literal_values
 
 
-AUDIENCE_STEPS_VERSION = 2
+AUDIENCE_STEPS_VERSION = 3
 MAX_REPAIR_ITEMS = 3
 GROUP_PROMPT = """你是读者需求 Agent 的受众分组角色，只输出 response_format 中的 segments。
 受众词只能从 audience_terms 原样选择，不得添加、改写或在同组重复；不要输出或编造 segment_id。
@@ -163,9 +163,9 @@ def _bind_group_claim_sources(group, payload):
     for evidence in result.get("evidence", []):
         if evidence.get("basis") == "sample_evidence":
             evidence["claim_ids"] = list(dict.fromkeys(
-                claim_id
+                claim_by_note[note_id][0]
                 for note_id in evidence.get("note_ids", [])
-                for claim_id in claim_by_note.get(note_id, [])
+                if claim_by_note.get(note_id)
             ))[:8]
         elif evidence.get("basis") == "user_requirement":
             evidence["claim_ids"] = []
@@ -263,7 +263,9 @@ def run_audience_steps(agent, payload, metadata, checkpoint, validator):
 
     def group_repair(raw, message):
         nonlocal groups
-        fresh, errors = _groups(raw.get("segments", []) if isinstance(raw, dict) else [], payload)
+        raw_groups = raw.get("segments", []) if isinstance(raw, dict) else []
+        bound_groups = [_bind_group_claim_sources(group, payload) for group in raw_groups]
+        fresh, errors = _groups(bound_groups, payload)
         for group in fresh:
             if group not in groups and len(groups) < 8:
                 groups.append(group)
