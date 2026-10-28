@@ -22,13 +22,13 @@ from backend.app.services.creative_copy import has_editorial_leak
 from backend.app.services.creative_orchestrator import AgentRun, AgentSpec, AgentValidationError, run_agent
 
 
-TITLE_PROMPT_VERSION = "title-generation-v2"
+TITLE_PROMPT_VERSION = "title-generation-v3"
 TITLE_SYSTEM_PROMPT = """你是标题 Agent，只为已通过评审的选题生成候选标题，不选优、不写正文和配图。
 只返回符合 output_schema 的 JSON；原样回填 topic_revision 和 input_fingerprint。
 逐一覆盖 topic_brief.ideas，每个 idea_id 恰好一次，每项严格生成 candidate_count 个候选，全批 candidate_id 唯一。
 每个候选 title 是可直接复制的单行纯标题，不含“标题：”、说明、评分、标签或待填写占位符。
 title 不超过 title_max_length 个 Unicode 字符（含空格标点）。这是程序统一长度预算，不代表平台精确计数。
-同一选题至少使用三种表达角度，比如具体观察、场景、问题、反差、读者价值；不同候选不能只替换同义词或标点。
+同一选题的候选按顺序采用不同表达路径：具体场景、问题切入、细节观察、清单/方法收益、反差或读者选择；候选不足五个时仍至少使用三种路径。不得让多个候选都套用同一关键词清单结构，也不能只替换同义词或标点。
 具体对象、清楚场景和有内容支撑的价值优先；灵感分享不强迫变成赚钱教程，不堆叠抽象形容词和夸张营销词。
 angle、reader_value、promise、support_points、rationale 分别记录表达角度、读者价值、标题承诺、正文支撑要点和简短理由，不能混进 title。
 遵守已通过选题的 reader_promise、must_cover、boundaries，不能扩大承诺或偷换主要读者。

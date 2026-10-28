@@ -11,6 +11,8 @@ from backend.app.services.creative_analysis import CreativeError
 from backend.app.services.creative_agents.revision import PipelineCancelled
 from backend.app.services.creative_graph.state import SampleUpdate
 from backend.app.services.creative_graph.recovery import prepare_resume
+from backend.app.services.creative_graph.agents import langgraph_title_spec
+from backend.app.services.creative_agents.title_generation import TITLE_PROMPT_VERSION
 from backend.app.services.creative_graph.workflow import LangGraphWorkflow, estimate_graph_request_budget, title_revision_briefs
 from backend.app.services.creative_pipeline import validate_pipeline_state
 from test_creative_sample_agent import SEARCH, sources
@@ -444,6 +446,14 @@ def test_title_revision_briefs_bind_scores_and_actionable_issues_to_each_candida
                       "problem": "“姿势换”搭配不自然。", "revision_instruction": "改成语义完整的自然短句。"}],
         "preserve": ["保留AI服装Lookbook主题。"],
     }]
+
+
+def test_title_prompt_assigns_distinct_candidate_angles_and_avoids_repeated_revision_templates():
+    prompt = langgraph_title_spec().system_prompt
+    assert TITLE_PROMPT_VERSION == "title-generation-v3"
+    assert "具体场景、问题切入、细节观察、清单/方法收益" in prompt
+    assert "不得让多个候选都套用同一关键词清单结构" in prompt
+    assert "不得继续让所有标题重复“首轮/四项/清单”等同一模板" in prompt
 
 
 @pytest.mark.parametrize("cache_fault", [None, "version", "fingerprint", "review"])
