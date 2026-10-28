@@ -178,6 +178,34 @@ def test_graph_executes_ten_roles_and_persists_serializable_global_state(count, 
     assert "fixture-private" not in json.dumps(w.state)
 
 
+def test_topic_response_schema_and_adapter_prevent_duplicate_source_references():
+    class DuplicateTopicSources(GraphCompletion):
+        def __call__(self, **kwargs):
+            raw = super().__call__(**kwargs)
+            if kwargs["response_format"]["json_schema"]["name"] == "TopicResponse":
+                output = json.loads(raw)
+                idea = output["ideas"][0]
+                idea["source_note_ids"].append(idea["source_note_ids"][0])
+                for evidence in idea["evidence"]:
+                    if evidence["note_ids"]:
+                        evidence["note_ids"].append(evidence["note_ids"][0])
+                        if evidence["claim_ids"]:
+                            evidence["claim_ids"].append(evidence["claim_ids"][0])
+                return json.dumps(output, ensure_ascii=False)
+            return raw
+
+    model = DuplicateTopicSources()
+    result = workflow(model, count=1, variants=2).run()[0]
+
+    call = next(item for item in model.wire_calls if item["response_format"]["json_schema"]["name"] == "TopicResponse")
+    schema = call["response_format"]["json_schema"]["schema"]
+    evidence = schema["$defs"]["BoundTopicEvidence"]["properties"]
+    assert evidence["note_ids"]["uniqueItems"] is True
+    assert evidence["claim_ids"]["uniqueItems"] is True
+    assert schema["$defs"]["BoundTopicIdea"]["properties"]["source_note_ids"]["uniqueItems"] is True
+    assert len(result["ideas"]) == 1
+
+
 def test_graph_routes_sample_preprocessing_to_its_dedicated_model_only():
     creative_model, preprocess_model = GraphCompletion(), GraphCompletion()
     w = workflow(creative_model, count=1, variants=2, preprocess_complete=preprocess_model)

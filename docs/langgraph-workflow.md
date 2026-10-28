@@ -269,6 +269,8 @@ LangGraph 样本数超过 3 时，`prepare_sample_batches` 将来源均分为 2�
 
 标题生成输入从当前选题 evidence 中读取已获批 `claim_id`，并构造选题专属的 claim/source 注册表。标题 Agent 只收到这些精简结论与来源，不接收原始采集正文、全量样本或评委长解释。每个候选返回 `claim_ids` 和 `source_note_ids`；动态 TypedDict Schema 将两个数组限制为当前选题允许的 ID，程序生成 `candidate_id`，并在本地检查引用非空、无重复、claim 合法以及来源必须属于该候选所引 claim。内部引用保存在图状态，不进入最终可复制标题。
 
+选题生成的动态 TypedDict 同样将 `evidence.note_ids`、`evidence.claim_ids` 和 `source_note_ids` 限定为本次输入 ID，并在原生 JSON Schema 声明唯一项。对于仍返回的重复 ID，程序只稳定去重；随后仍要求至少两个不同 note，且 `source_note_ids` 与所有 evidence 来源集合一致。不会通过去重推断、补入或替换证据。
+
 标题评委的精简批次携带当前选题的获批结论和候选 claim/source 绑定，便于对照标题承诺是否有支持；内部 ID 放在 evidence 而非可评分 fields，评委仍只对文案字段评分。标题评审批次版本升为 `title-review-adaptive-v3`，输入指纹改变时旧评审批次不会被错误复用。没有获批注册表的旧式输入使用空引用列表；已绑定的输入则不允许候选空引用或越权引用。
 
 本地关系检查不能判断标题语义是否真的由获批结论推出，这部分仍由标题评委审核；动态 Schema 也不保证所有兼容模型服务都会接受这些 ID 枚举，真实模型的响应和标题可用度仍需用户试用验收。

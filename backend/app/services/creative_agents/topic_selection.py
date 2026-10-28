@@ -6,6 +6,7 @@ primary audience segment, evidence sources and explicit unsupported claims.
 """
 from __future__ import annotations
 
+import copy
 from functools import partial
 from typing import Any, Callable, Literal
 
@@ -53,6 +54,25 @@ def _drop_empty_claim_ids(value):
     return value
 
 
+def normalize_topic_reference_lists(value):
+    """Remove repeated IDs from model lists; do not add or repair source links."""
+    result = copy.deepcopy(value)
+
+    def visit(item):
+        if isinstance(item, dict):
+            for key, nested in item.items():
+                if key in {"note_ids", "claim_ids", "source_note_ids"} and isinstance(nested, list):
+                    item[key] = list(dict.fromkeys(nested))
+                else:
+                    visit(nested)
+        elif isinstance(item, list):
+            for nested in item:
+                visit(nested)
+
+    visit(result)
+    return result
+
+
 class TopicBriefInput(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
 
@@ -75,7 +95,8 @@ def prepare_topic_input(
     """Recheck upstream structure/references, not source quotes or semantic truth."""
     try:
         # A model instance may have been mutated since its original validation.
-        sample = sample_analysis.model_dump(mode="json") if isinstance(sample_analysis, SampleAnalysis) else sample_analysis
+        sample = (SampleAnalysis.model_validate(sample_analysis.model_dump(mode="json")).model_dump(mode="json")
+                  if isinstance(sample_analysis, SampleAnalysis) else sample_analysis)
         if not isinstance(sample, dict) or any(not isinstance(sample.get(key), list) for key in (
             "observations", "topic_patterns", "style_patterns", "value_patterns", "avoid_patterns",
         )):

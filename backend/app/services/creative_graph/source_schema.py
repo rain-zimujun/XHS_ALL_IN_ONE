@@ -41,7 +41,8 @@ def _strict(name: str, annotations: dict) -> type:
 def topic_response_type(payload: dict) -> type:
     """Bind topic evidence and audience references to the current state."""
     segment_type = literal_values(payload["audience_segment_ids"], "受众分组")
-    note_type = source_note_ids_type(payload["sample_note_ids"], max_length=8)
+    note_type = Annotated[list[literal_values(payload["sample_note_ids"], "样本 note_id")],
+                          Field(max_length=8, json_schema_extra={"uniqueItems": True})]
     claim_ids = payload.get("approved_claim_ids", [])
     claim_type = (Annotated[list[literal_values(claim_ids, "获批 claim_id")],
                            Field(max_length=8, json_schema_extra={"uniqueItems": True})]
@@ -60,7 +61,8 @@ def topic_response_type(payload: dict) -> type:
         "reader_promise": responses.Text,
         "core_angle": responses.Text,
         "must_cover": Annotated[list[responses.Text], Field(min_length=1, max_length=8)],
-        "source_note_ids": Annotated[list[literal_values(payload["sample_note_ids"], "样本 note_id")], Field(min_length=2, max_length=8)],
+        "source_note_ids": Annotated[list[literal_values(payload["sample_note_ids"], "样本 note_id")],
+                                      Field(min_length=2, max_length=8, json_schema_extra={"uniqueItems": True})],
         "evidence": Annotated[list[evidence], Field(min_length=1, max_length=5)],
         "boundaries": Annotated[list[responses.Text], Field(min_length=1, max_length=6)],
         "differentiator": responses.Text,
