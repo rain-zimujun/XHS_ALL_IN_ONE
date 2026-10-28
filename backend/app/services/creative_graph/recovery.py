@@ -24,6 +24,7 @@ SAMPLE_REVIEW_MARKERS = (
     "判为有依据时必须至少给出一个有效来源",
 )
 AUDIENCE_COVERAGE_MARKER = "segments 分组校验失败；缺少受众词="
+AUDIENCE_REJECTED_TERMS_MARKER = "未知受众词="
 TOPIC_DUPLICATE_SOURCE_MARKERS = (
     "同一条 evidence.note_ids 不可重复",
     "同一条 evidence.claim_ids 不可重复",
@@ -86,7 +87,8 @@ def prepare_resume(task):
                 and isinstance(audience_failures, list) and len(audience_failures) >= 2
                 and all(
                     AUDIENCE_COVERAGE_MARKER in str(attempt.get("error", ""))
-                    and "；错误=[]；最多8组" in str(attempt.get("error", ""))
+                    and ("；错误=[]；最多8组" in str(attempt.get("error", ""))
+                         or AUDIENCE_REJECTED_TERMS_MARKER in str(attempt.get("error", "")))
                     for attempt in audience_failures[-2:]
                 )
             )

@@ -7,7 +7,10 @@ from pydantic import TypeAdapter, ValidationError
 
 from backend.app.services.creative_agents.reader_needs import prepare_audience_input, validate_audience_brief
 from backend.app.services.creative_graph.agents import GraphOutputError, build_agents
-from backend.app.services.creative_graph.audience import AUDIENCE_STEPS_VERSION, needs_response, run_audience_steps
+from backend.app.services.creative_graph.audience import (
+    AUDIENCE_STEPS_VERSION, _complete_coverage_locally, _coverage_failures_exhausted,
+    needs_response, run_audience_steps,
+)
 from backend.app.services.creative_graph.model import CompatibleChatModel, response_parameter
 from test_creative_reader_needs import AUDIENCE, REQUIREMENTS, sample_analysis, valid_output
 from test_structured_output import assert_strict_contract
@@ -73,6 +76,24 @@ def test_two_calls_assign_ids_and_pass_enum_unique_items_in_actual_request():
         assert refs["items"]["enum"] == ["segment_1", "segment_2"]
         assert refs["uniqueItems"] is True
     assert metadata["audience_steps"]["groups"]
+
+
+def test_repeated_coverage_failure_with_rejected_aliases_can_fill_only_valid_groups():
+    p = payload()
+    valid_groups = [{key: value for key, value in segment.items() if key != "segment_id"}
+                    for segment in valid_output(p)["segments"]]
+    missing = [term for term in p["audience_terms"] if term not in {
+        term for group in valid_groups for term in group["audience_terms"]
+    }]
+    errors = "[{'field': 'segments[1]', 'reason': \"未知受众词=['AI视觉从业者']，同组受众词不得重复\"}]"
+    metadata = {"failed_attempts": [
+        {"error": f"segments 分组校验失败；缺少受众词={missing}；错误={errors}；最多8组"},
+        {"error": f"segments 分组校验失败；缺少受众词={missing}；错误=[]；最多8组"},
+    ]}
+
+    assert _coverage_failures_exhausted(metadata)
+    assert _complete_coverage_locally(valid_groups, p) == missing
+    assert {term for group in valid_groups for term in group["audience_terms"]} == set(p["audience_terms"])
 
 
 def test_audience_evidence_binds_claim_ids_and_note_ids_in_both_actual_schemas():

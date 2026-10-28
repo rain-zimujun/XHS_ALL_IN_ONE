@@ -6,6 +6,7 @@ compatible with existing tasks.
 """
 import hashlib
 import json
+import ast
 from copy import deepcopy
 from dataclasses import replace
 from typing import Annotated, Literal
@@ -176,12 +177,23 @@ def _coverage_failures_exhausted(metadata):
     if not isinstance(failures, list) or len(failures) < 2:
         return False
     recent = failures[-2:]
-    return all(
-        isinstance(item, dict)
-        and "segments 分组校验失败；缺少受众词=" in str(item.get("error", ""))
-        and "；错误=[]；最多8组" in str(item.get("error", ""))
-        for item in recent
-    )
+    for item in recent:
+        error = str(item.get("error", "")) if isinstance(item, dict) else ""
+        prefix = "segments 分组校验失败；缺少受众词="
+        marker = "；错误="
+        if not error.startswith(prefix) or marker not in error or not error.endswith("；最多8组"):
+            return False
+        try:
+            rejected = ast.literal_eval(error.split(marker, 1)[1].removesuffix("；最多8组"))
+        except (SyntaxError, ValueError):
+            return False
+        if not isinstance(rejected, list) or any(
+            not isinstance(entry, dict)
+            or not str(entry.get("reason", "")).startswith(("未知受众词=", "同组受众词不得重复"))
+            for entry in rejected
+        ):
+            return False
+    return True
 
 
 def _complete_coverage_locally(groups, payload):
