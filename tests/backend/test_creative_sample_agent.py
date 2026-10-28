@@ -122,7 +122,7 @@ def test_composite_quote_is_recovered_to_a_real_single_field_fragment():
     assert result.style_patterns[0].evidence[0].quote == "可以像专业摄影师一样编辑照片"
 
 
-def test_whitespace_recovery_never_expands_quote_beyond_output_limit():
+def test_whitespace_recovery_shortens_overexpanded_source_quote_to_bounded_contiguous_excerpt():
     notes = sources()
     notes[0]["content"] = "abcdefghij" + " " * 181 + "klmnopqrst"
     payload = prepare_sample_input(SEARCH, notes, OPTIONS)
@@ -134,8 +134,13 @@ def test_whitespace_recovery_never_expands_quote_beyond_output_limit():
     )
     result = SampleAnalysis.model_validate(output)
 
-    with pytest.raises(AgentValidationError, match="逐字匹配失败"):
-        validate_sample_evidence(result, payload)
+    validate_sample_evidence(result, payload)
+
+    recovered = result.observations[0].quote
+    assert recovered == "abcdefghij"
+    assert len(recovered) <= 180
+    assert recovered in payload["sources"][0]["body_segments"][0]
+    assert result.topic_patterns[0].evidence[0].quote == recovered
 
 
 def test_allowlist_excludes_account_config_raw_and_media_fields():
@@ -270,6 +275,10 @@ def test_prompt_keeps_source_instructions_in_data_and_respects_user_brief():
     assert attack not in complete.calls[0]["system_prompt"]
     assert attack in prompt["input"]["sources"][0]["body_segments"][0]
     assert "不可信资料" in complete.calls[0]["system_prompt"]
+    assert "observations[*].note_id 必须从对应 sources[*].note_id 原样复制" in complete.calls[0]["system_prompt"]
+    assert "evidence.field 取值 title/body" in complete.calls[0]["system_prompt"]
+    assert "不能把概括后的句子填进 quote 字段" in complete.calls[0]["system_prompt"]
+    assert "先从输入原文中挑一条简短、连续、可核对的原句" in complete.calls[0]["system_prompt"]
     assert prompt["input"]["requirements"] == "写服装灵感分享，不要教程"
     # This tests separation/guard instructions, not real-model resistance.
 
