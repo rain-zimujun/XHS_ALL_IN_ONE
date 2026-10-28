@@ -1,5 +1,7 @@
 """Bounded diagnostics shared by creative workflow runners."""
 import json
+import os
+import traceback
 import unicodedata
 from copy import deepcopy
 from contextlib import contextmanager
@@ -191,4 +193,12 @@ def exception_details(exc):
 
     if isinstance(exc, CreativeError):
         return {"error_code": exc.code, "reason": str(exc)[:500]}
-    return {"error_code": "creative_failed", "exception_type": type(exc).__name__}
+    frames = traceback.extract_tb(exc.__traceback__)[-8:]
+    return {
+        "error_code": "creative_failed",
+        "exception_type": type(exc).__name__,
+        "traceback_frames": [
+            {"file": os.path.basename(frame.filename), "function": frame.name, "line": frame.lineno}
+            for frame in frames
+        ],
+    }

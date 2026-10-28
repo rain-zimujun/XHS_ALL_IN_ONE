@@ -172,6 +172,15 @@ def test_transport_failure_logged_once_without_exception_message_or_retry():
     assert failure["will_retry"] is False
     assert len(calls) == 1
     assert "private" not in json.dumps(events)
+    from backend.app.services.creative_diagnostics import exception_details
+    try:
+        raise RuntimeError("Authorization: Bearer private-key; private-response")
+    except RuntimeError as exc:
+        details = exception_details(exc)
+    assert details["traceback_frames"]
+    assert all(set(frame) == {"file", "function", "line"} for frame in details["traceback_frames"])
+    assert "private-key" not in json.dumps(details)
+    assert "private-response" not in json.dumps(details)
 
 
 def test_diagnostic_context_is_restored_after_failure():
