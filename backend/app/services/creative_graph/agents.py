@@ -247,6 +247,10 @@ class StructuredAgent:
                             claim_evidence, ensure_ascii=False,
                         )
                     repair += "\n若获批结论不足以支撑原选题承诺，必须收窄选题内容；不得为了满足评审而捏造步骤、案例或效果。\n"
+                    repair += (
+                        "每个目标 idea 的 evidence 必须至少引用两个不同的获批样本 note_id，"
+                        "每条 evidence 的 note_ids 必须与对应 claim 匹配且不重复；source_note_ids 由程序从 evidence 派生。\n"
+                    )
                 if self.spec.stage == "topic" and "too_short" in message:
                     repair += (
                         "\n选题结构修复要求：每个目标 idea 的 evidence 至少引用两个不同的获批样本 note_id；"

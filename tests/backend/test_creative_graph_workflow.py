@@ -791,7 +791,7 @@ def test_topic_revision_uses_compact_target_only_context():
     assert len(revision_calls) == 2
     for call in revision_calls:
         envelope, _ = json.JSONDecoder().raw_decode(call["user_prompt"])
-        assert len(call["user_prompt"]) < 4000
+        assert len(call["user_prompt"]) < 4200
         assert envelope["input"]["topic_brief"]["ideas"][0]["idea_id"] == "idea_1"
         assert "sample_analysis" not in envelope["input"]
         assert envelope["input"]["audience_brief"]["segments"]
@@ -800,6 +800,7 @@ def test_topic_revision_uses_compact_target_only_context():
     assert "本次针对以下未变化字段至少修复一项" in revision_calls[1]["user_prompt"]
     assert "获批结论" in revision_calls[1]["user_prompt"]
     assert "捏造步骤、案例或效果" in revision_calls[1]["user_prompt"]
+    assert "至少引用两个不同的获批样本 note_id" in revision_calls[1]["user_prompt"]
 
 
 def test_graph_has_visible_conditional_edges_and_node_write_scope_is_enforced():
