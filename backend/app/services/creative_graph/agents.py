@@ -101,10 +101,13 @@ class StructuredAgent:
                                 for evidence in idea.get("evidence", [])
                                 for claim_id in evidence.get("claim_ids", [])}
             all_claims = projected.get("approved_claims", [])
+            audience_brief = projected.get("audience_brief")
             projected = {
                 key: projected[key] for key in ("keyword", "requirements", "requested_idea_count", "audience_segment_ids")
                 if key in projected
             }
+            if audience_brief:
+                projected["audience_brief"] = audience_brief
             projected["topic_brief"] = {"ideas": target_ideas,
                                          "selection_limits": revision.get("previous_output", {}).get("selection_limits", [])}
             projected["approved_claims"] = [claim for claim in all_claims

@@ -791,10 +791,10 @@ def test_topic_revision_uses_compact_target_only_context():
     assert len(revision_calls) == 2
     for call in revision_calls:
         envelope, _ = json.JSONDecoder().raw_decode(call["user_prompt"])
-        assert len(call["user_prompt"]) < 3000
+        assert len(call["user_prompt"]) < 4000
         assert envelope["input"]["topic_brief"]["ideas"][0]["idea_id"] == "idea_1"
         assert "sample_analysis" not in envelope["input"]
-        assert "audience_brief" not in envelope["input"]
+        assert envelope["input"]["audience_brief"]["segments"]
         assert len(envelope["input"]["revision_briefs"]) == 1
     second_envelope, _ = json.JSONDecoder().raw_decode(revision_calls[1]["user_prompt"])
     assert "本次只修复以下未变化字段" in revision_calls[1]["user_prompt"]
