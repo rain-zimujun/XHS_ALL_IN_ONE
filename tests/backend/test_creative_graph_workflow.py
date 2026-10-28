@@ -490,7 +490,7 @@ def test_budget_and_timeout_stop_without_further_requests_and_preserve_global_ou
     assert "secret-transport-details" not in json.dumps(w.state)
 
 
-def test_sample_analysis_serializes_batches_and_resume_reuses_completed_batches():
+def test_parallel_sample_analysis_persists_completed_batches_and_resume_retries_only_the_failure():
     notes = sources(7)
     peers_saved = Event()
     def fail_second_batch(**kwargs):
@@ -504,7 +504,7 @@ def test_sample_analysis_serializes_batches_and_resume_reuses_completed_batches(
     model = GraphCompletion()
     def save_checkpoint(state):
         cached = state["pipeline"]["stages"]["sample_analysis"]["metadata"].get("sample_analysis_batches", {}).get("results", {})
-        if len(cached) >= 1:
+        if len(cached) >= 2:
             peers_saved.set()
 
     original = LangGraphWorkflow(search=SEARCH, sources=notes,
@@ -515,8 +515,8 @@ def test_sample_analysis_serializes_batches_and_resume_reuses_completed_batches(
     saved = copy.deepcopy(original.state)
     metadata = saved["pipeline"]["stages"]["sample_analysis"]["metadata"]
     assert metadata["sample_batch_count"] == 3
-    assert metadata["sample_completed_batches"] == 1
-    assert len(metadata["sample_analysis_batches"]["results"]) == 1
+    assert metadata["sample_completed_batches"] == 2
+    assert len(metadata["sample_analysis_batches"]["results"]) == 2
     task = SimpleNamespace(status="failed", error_type="ai_http_error", payload={
         "analysis": saved["options"], "search": saved["search"], "sources": saved["sources"], "graph_state": saved,
     })
@@ -528,13 +528,13 @@ def test_sample_analysis_serializes_batches_and_resume_reuses_completed_batches(
     assert len(result["ideas"]) == 1
     sample = resumed.state["pipeline"]["stages"]["sample_analysis"]["metadata"]
     assert sample["sample_completed_batches"] == 3
-    assert sample["sample_reused_batches"] == 1
+    assert sample["sample_reused_batches"] == 2
     sample_calls = [call for call in resumed_model.wire_calls
                     if call["response_format"]["json_schema"]["name"] == "SampleAnalysisResponse"]
-    assert len(sample_calls) == 2
-    assert [json.loads(call["user_prompt"])["input"]["batch"]["index"] for call in sample_calls] == [2, 3]
+    assert len(sample_calls) == 1
+    assert [json.loads(call["user_prompt"])["input"]["batch"]["index"] for call in sample_calls] == [2]
     # The split sample run also uses one-object title/copy reviews downstream.
-    assert pipeline_metadata["request_count"] == 25
+    assert pipeline_metadata["request_count"] == 24
 
 
 def test_failed_sample_review_resumes_only_unreviewed_batch():

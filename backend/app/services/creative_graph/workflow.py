@@ -58,7 +58,6 @@ from backend.app.services.creative_orchestrator import AgentRun, AgentValidation
 
 
 PRODUCTION_ORDER = ("topic", "title", "copy", "image")
-MAX_PARALLEL_SAMPLE_ANALYSIS = 1
 REVIEW_FIELD = {"topic": "topic_review", "title": "title_review", "copy": "copy_review", "final_review": "final_review"}
 DISCLAIMER = "基于本批文字样本，未分析原图；模型评分未经人工校准，不保证事实或流量。发布前请核实原创性、事实及素材授权。"
 # At most 47 first-pass requests (5 topics x 3 variants); keep bounded room
@@ -469,7 +468,7 @@ class LangGraphWorkflow:
             if pending:
                 futures = {}
                 first_error = None
-                with ThreadPoolExecutor(max_workers=MAX_PARALLEL_SAMPLE_ANALYSIS, thread_name_prefix="creative-sample") as executor:
+                with ThreadPoolExecutor(max_workers=MAX_PARALLEL_BATCHES, thread_name_prefix="creative-sample") as executor:
                     for index, batch in pending:
                         context = copy_context()
                         future = executor.submit(context.run, process, index, batch)
