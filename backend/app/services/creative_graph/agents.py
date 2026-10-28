@@ -233,6 +233,7 @@ class StructuredAgent:
                         "reader_promise": "重写 reader_promise，只承诺这些结论能直接支持的内容；没有步骤或案例证据时，不得承诺步骤或案例。",
                         "must_cover": "重写 must_cover，删除无获批结论支撑的步骤/案例要求，只保留样本明确提到的提示词、流程或技巧。",
                         "evidence": "重写 evidence.statement，并只保留能直接支持该选题的 claim_ids 与对应 note_ids；不要用宽泛结论证明未出现的细节。",
+                        "primary_segment_id": "根据 input.audience_brief.segments 的 audience_terms、primary_scenario 和 value_opportunities，选择最适合该选题的合法 segment_id；若目前归属不匹配，必须更换。",
                         "topic": "收窄 topic 到获批结论实际覆盖的主题，不扩展成资料未支持的教程或案例。",
                         "core_angle": "调整 core_angle，使角度与获批结论直接对应，不加入未出现的步骤或效果。",
                         "differentiator": "调整 differentiator，差异点限于获批结论可支持的内容。",
