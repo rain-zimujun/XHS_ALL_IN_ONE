@@ -11,7 +11,8 @@ from backend.app.core.security import encrypt_text
 from backend.app.models import ModelConfig, User
 from backend.app.schemas.creative_agents import AudienceBrief, SampleAnalysis, TopicBrief
 from backend.app.services.creative_agents.topic_selection import (
-    TOPIC_PROMPT_VERSION, analyze_topics, prepare_topic_input, run_topic_selection,
+    TOPIC_PROMPT_VERSION, analyze_topics, ensure_topic_revision_progress,
+    preserve_unselected_topic_ideas, prepare_topic_input, run_topic_selection,
 )
 from backend.app.services.creative_analysis import CreativeError
 from backend.app.services.creative_orchestrator import AgentRunError, AgentValidationError
@@ -212,6 +213,28 @@ def test_topic_input_rejects_duplicate_observation_ids():
     sample["observations"][1]["note_id"] = sample["observations"][0]["note_id"]
     with pytest.raises(CreativeError, match="选题输入无效"):
         prepare_topic_input("AI 服装", REQUIREMENTS, 1, sample, audience_brief())
+
+
+def test_topic_quality_revision_must_change_a_target_idea_content_field():
+    previous = valid_output(prepare_topic_input("AI 服装", REQUIREMENTS, 1, sample_analysis(), audience_brief()))
+    same = copy.deepcopy(previous)
+    with pytest.raises(AgentValidationError, match="目标内容字段没有任何变化"):
+        ensure_topic_revision_progress(previous, same, ["idea_1"])
+
+    revised = copy.deepcopy(previous)
+    revised["ideas"][0]["reader_promise"] = "从雾白与深蓝的配色组合中，获得一组服装视觉灵感。"
+    ensure_topic_revision_progress(previous, revised, ["idea_1"])
+
+
+def test_topic_quality_revision_restores_passed_non_targets_and_only_requires_target_progress():
+    previous = valid_output(prepare_topic_input("AI 服装", REQUIREMENTS, 3, sample_analysis(), audience_brief()))
+    proposed = copy.deepcopy(previous)
+    proposed["ideas"][0]["reader_promise"] = "评审未通过的目标选题已改写，提供可执行的搭配思路。"
+    proposed["ideas"][1]["topic"] = "模型擅自改动的已通过选题"
+    revised = preserve_unselected_topic_ideas(previous, proposed, ["idea_1"])
+
+    assert revised["ideas"][1] == previous["ideas"][1]
+    ensure_topic_revision_progress(previous, revised, ["idea_1"])
 
 
 @pytest.mark.parametrize("kind", ["sample", "audience"])

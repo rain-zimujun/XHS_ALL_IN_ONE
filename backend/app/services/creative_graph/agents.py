@@ -134,6 +134,15 @@ class StructuredAgent:
                     )
                     from backend.app.services.creative_agents.title_generation import ensure_title_revision_progress
                     ensure_title_revision_progress(revision["previous_output"], adapted, revision["target_ids"])
+                if revision and self.spec.stage == "topic":
+                    from backend.app.services.creative_agents.topic_selection import (
+                        ensure_topic_revision_progress,
+                        preserve_unselected_topic_ideas,
+                    )
+                    adapted = preserve_unselected_topic_ideas(
+                        revision["previous_output"], adapted, revision["target_ids"],
+                    )
+                    ensure_topic_revision_progress(revision["previous_output"], adapted, revision["target_ids"])
                 if self.spec.stage == "copy":
                     from backend.app.services.creative_copy import normalize_result_copy
                     adapted = normalize_result_copy(adapted)
@@ -212,6 +221,13 @@ sample_analysis 中 patterns 的 finding 是归纳结论、note_ids 是对应来
 按原生 response_format 返回，不需要用户消息里的重复 Schema。"""
     if spec.stage == "copy":
         prompt += "\n每版正文都要填写 claim_ids 和 source_note_ids，只能引用当前选题随附的获批结论及其来源；每个来源必须属于至少一个所引 claim。正文承诺应能由这些结论或选题中的用户要求支持。\n"
+    if spec.stage == "topic":
+        prompt += """
+如果输入包含 quality_revision，必须进入选题质量返工模式：逐条阅读 review_feedback 中目标 idea 的所有 blocking 问题、低分项、problem、revision_instruction 和 preserve。
+只修改 target_ids 指定的 idea；必须实质修改被指出的 topic、reader_promise、core_angle、must_cover、differentiator 或 boundaries 字段，逐条落实修改意见，不能把原稿原样返回或只换同义词。
+将用户受众、获批样本结论和内容形式一起考虑：承诺必须是本篇内容确实能交付的读者价值，不能因反馈要求“具体”而无依据地承诺高级提示词、额外案例、步骤、效果或调研；样本不足时应收窄承诺和范围，而不是增加事实。
+preserve 是要求保留的优点，不代表原字段必须保持不变。返回完整结构，程序会校验目标内容确有修改并恢复非目标内容。
+"""
     return replace(spec, system_prompt=prompt)
 
 

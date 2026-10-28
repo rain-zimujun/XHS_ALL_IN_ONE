@@ -23,6 +23,8 @@ from backend.app.services.creative_orchestrator import AgentRun, AgentSpec, Agen
 TOPIC_PROMPT_VERSION = "topic-selection-v2"
 TOPIC_SCHEMA_VERSION = 2
 
+TOPIC_REVISION_FIELDS = ("topic", "reader_promise", "core_angle", "must_cover", "differentiator", "boundaries")
+
 TOPIC_SYSTEM_PROMPT = """你是选题 Agent，只负责决定这一批内容具体写什么，不写最终标题、正文、标签、配图或生图提示词。
 严格返回符合 output_schema 的 JSON 对象，不返回 Markdown、其他字段或额外说明。
 requested_idea_count 是用户选择的最终选题数量，ideas 必须严格等于这个数量；不能擅自增减或用同一主题换同义词凑数。
@@ -71,6 +73,31 @@ def normalize_topic_reference_lists(value):
 
     visit(result)
     return result
+
+
+def ensure_topic_revision_progress(previous: dict[str, Any], proposed: dict[str, Any], target_ids: list[str]) -> None:
+    """Reject a targeted topic revision that leaves every requested field unchanged."""
+    old = {idea["idea_id"]: idea for idea in previous.get("ideas", [])}
+    new = {idea["idea_id"]: idea for idea in proposed.get("ideas", [])}
+    if not target_ids or not set(target_ids).issubset(old) or set(old) != set(new):
+        raise AgentValidationError("选题返工范围与已有 idea_id 不一致")
+    for idea_id in target_ids:
+        if not any(old[idea_id].get(field) != new[idea_id].get(field) for field in TOPIC_REVISION_FIELDS):
+            raise AgentValidationError(f"选题 {idea_id} 未落实评审意见：目标内容字段没有任何变化")
+
+
+def preserve_unselected_topic_ideas(previous: dict[str, Any], proposed: dict[str, Any], target_ids: list[str]) -> dict[str, Any]:
+    """Restore passing ideas verbatim; only failed target ideas may be revised."""
+    old = {idea["idea_id"]: idea for idea in previous.get("ideas", [])}
+    new = copy.deepcopy(proposed)
+    ideas = new.get("ideas")
+    if not isinstance(ideas, list) or not set(target_ids).issubset(old):
+        raise AgentValidationError("选题返工范围与已有 idea_id 不一致")
+    for index, idea in enumerate(ideas):
+        idea_id = idea.get("idea_id") if isinstance(idea, dict) else None
+        if idea_id in old and idea_id not in target_ids:
+            ideas[index] = copy.deepcopy(old[idea_id])
+    return new
 
 
 class TopicBriefInput(BaseModel):
