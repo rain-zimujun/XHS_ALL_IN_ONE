@@ -82,7 +82,9 @@ def estimate_graph_request_budget(source_count: int, options: dict) -> int:
     else:
         title_review_calls = idea_count * ceil(candidate_count / 5)
         copy_review_calls = idea_count
-    first_pass = (sample_batches * 2 + 2 + 2 + 1 + title_review_calls + 1
+    audience_terms = reader_needs.split_audience_terms(options.get("audience") or "内容创作者")
+    audience_calls = 1 + min(8, len(audience_terms))
+    first_pass = (sample_batches * 2 + audience_calls + 2 + 1 + title_review_calls + 1
                   + copy_review_calls + idea_count * variant_count * 2)
     return min(MAX_GRAPH_REQUESTS, max(MIN_GRAPH_REQUESTS, first_pass * GRAPH_REQUEST_HEADROOM_MULTIPLIER))
 

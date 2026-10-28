@@ -66,11 +66,19 @@ class GraphCompletion(WorkflowCompletion):
         if wire_name == "AudienceGroupingResponse":
             output = {"segments": [{k: v for k, v in group.items() if k != "segment_id"} for group in output["segments"]]}
         elif wire_name == "AudienceNeedsResponse":
-            mapping = {group["segment_id"]: prompt["input"]["segments"][i]["segment_id"] for i, group in enumerate(output["segments"])}
+            batch_index = prompt["input"].get("batch", {}).get("index", 1) - 1
+            selected = output["segments"][min(batch_index, len(output["segments"]) - 1)]
+            selected_id = prompt["input"]["segments"][0]["segment_id"]
             for item in output["shared_needs"]:
-                item["applies_to_segment_ids"] = [mapping[ref] for ref in item["applies_to_segment_ids"]]
+                item["applies_to_segment_ids"] = [selected_id]
+                if not prompt["input"]["sample_note_ids"]:
+                    item["confidence"] = "evidence"
+                    item["evidence"] = [{"basis": "user_requirement", "note_ids": [], "claim_ids": [],
+                                         "statement": "该需求仅来自用户提供的受众与创作要求。"}]
             for item in output["format_recommendations"]:
-                item["for_segment_ids"] = [mapping[ref] for ref in item["for_segment_ids"]]
+                item["for_segment_ids"] = [selected_id]
+            output["shared_needs"] = output["shared_needs"][:1]
+            output["format_recommendations"] = output["format_recommendations"][:1]
             for key in ("segments", "requested_audience_terms"):
                 output.pop(key)
         if wire_name in {"AudienceGroupingResponse", "AudienceNeedsResponse"}:
@@ -173,7 +181,7 @@ def test_graph_executes_ten_roles_and_persists_serializable_global_state(count, 
                for call in final_calls)
     assert all(len(i["variants"]) == variants for i in result["ideas"])
     assert metadata["workflow"] == "langgraph"
-    assert len(model.calls) == metadata["request_count"] == 8 + 2 * count + 2 * count * variants
+    assert len(model.calls) == metadata["request_count"] == 9 + 2 * count + 2 * count * variants
     assert w.state["sample_review"]["status"] == "passed"
     approved_claims = w.state["sample_review"]["approved_claims"]
     assert len(approved_claims) == w.state["sample_review"]["claim_count"] - w.state["sample_review"]["rejected_claim_count"]
@@ -373,7 +381,7 @@ def test_graph_full_chain_normalizes_title_review_blocking_severity_without_retr
     assert len(result["ideas"]) == 1
     assert all(len(idea["variants"]) == 2 for idea in result["ideas"])
     assert model.counts["title_review"] == 1
-    assert metadata["request_count"] == 14
+    assert metadata["request_count"] == 15
 
 
 def test_graph_title_revision_restores_approved_candidates_changed_by_model():
@@ -503,7 +511,7 @@ def test_conditional_review_edge_returns_to_producer_and_only_revises_failed_ite
     w = workflow(model, 3, 3)
     result, _ = w.run()
     assert len(result["ideas"]) == 3
-    assert len(model.calls) == (33 if stage == "TopicReviewResponse" else 36)
+    assert len(model.calls) == (34 if stage == "TopicReviewResponse" else 37)
     producer = {"TopicReviewResponse": "topic", "title_review": "title", "copy_review": "copy"}[stage]
     item = w.state["pipeline"]["stages"][producer]
     assert item["quality_revisions"] == 1
@@ -541,11 +549,11 @@ def test_exhausted_review_cycle_stops_with_drafts_and_no_final_result(stage, own
 
 def test_budget_and_timeout_stop_without_further_requests_and_preserve_global_outputs():
     model = GraphCompletion()
-    w = workflow(model, max_requests=4)
+    w = workflow(model, max_requests=5)
     with pytest.raises(CreativeError) as caught:
         w.run()
     assert caught.value.code == "creative_budget_exhausted"
-    assert len(model.calls) == w.state["pipeline"]["request_count"] == 4
+    assert len(model.calls) == w.state["pipeline"]["request_count"] == 5
     assert w.state["audience"] and w.state["topic"] is None and w.state["result"] is None
     model = GraphCompletion(timeout_stage="CopyVariants")
     w = workflow(model)
@@ -601,7 +609,7 @@ def test_parallel_sample_analysis_persists_completed_batches_and_resume_retries_
     assert len(sample_calls) == 1
     assert [json.loads(call["user_prompt"])["input"]["batch"]["index"] for call in sample_calls] == [2]
     # The split sample run also uses one-object title/copy reviews downstream.
-    assert pipeline_metadata["request_count"] == 24
+    assert pipeline_metadata["request_count"] == 25
 
 
 def test_failed_sample_review_resumes_only_unreviewed_batch():
@@ -770,8 +778,13 @@ def test_changed_title_selection_rebinds_copy_and_image_groups():
     model = GraphCompletion(fail_stage="final_review", final_owner="title")
     def complete(**kwargs):
         output = json.loads(model(**kwargs))
-        if model.calls[-1][0] == "title_review" and model.counts["title_review"] == 4:
-            output["reviews"][1]["scores"] = {key: 9.0 for key in output["reviews"][1]["scores"]}
+        envelope, _ = json.JSONDecoder().raw_decode(kwargs["user_prompt"])
+        if (kwargs["response_format"]["json_schema"]["name"] == "TitleReviewResponse"
+                and envelope["input"]["revision"] > 1):
+            selected = next((review for review in output["reviews"]
+                             if review["item_id"] == "title_0_1"), None)
+            if selected:
+                selected["scores"] = {key: 9.0 for key in selected["scores"]}
         return json.dumps(output)
     w = workflow(complete, 3, 2)
     result, _ = w.run()

@@ -45,7 +45,10 @@ def test_resume_starts_at_exact_agent_preserving_every_upstream_artifact(failed_
     result, metadata = resumed.run()
     assert result["ideas"]
     assert recovery.wire_calls[0]["response_format"]["json_schema"]["name"] == failed_role
-    assert len(recovery.calls) == len(EXECUTION_ROLES) - EXECUTION_ROLES.index(failed_role)
+    expected_calls = len(EXECUTION_ROLES) - EXECUTION_ROLES.index(failed_role)
+    if EXECUTION_ROLES.index(failed_role) <= EXECUTION_ROLES.index("AudienceNeedsResponse"):
+        expected_calls += 1  # Reader-needs analysis now runs once per audience group.
+    assert len(recovery.calls) == expected_calls
     assert metadata["request_count"] == saved["pipeline"]["request_count"] + len(recovery.calls)
     for key in ("sample_analysis", "sample_review", "audience", "topic", "topic_review", "title", "title_review", "copy", "copy_review", "image", "final_review"):
         if saved[key] is not None:
@@ -75,7 +78,7 @@ def test_resume_api_preserves_original_and_is_idempotent_with_ownership(env):
     assert child["parent_task_id"] == original["id"]
     assert child["payload"]["resume"]["role"] == "title_review"
     assert child["payload"]["sources"] == original["payload"]["sources"]
-    assert child["payload"]["pipeline"]["request_count"] == 18
+    assert child["payload"]["pipeline"]["request_count"] == 19
     assert child["payload"]["graph_state"]["pipeline"] == child["payload"]["pipeline"]
     assert len(recovery.calls) == 7
     assert recovery.wire_calls[0]["response_format"]["json_schema"]["name"] == "TitleReviewResponse"
@@ -116,8 +119,8 @@ def test_transient_failure_recovers_in_place_without_repeating_upstream(env):
     install_client(complete)
     result = collect_for_analysis(env, {"model_id": env.model_id, "workflow": "langgraph", "idea_count": 1, "variant_count": 2})
     assert result["status"] == "completed"
-    assert result["payload"]["pipeline"]["request_count"] == 17
-    assert len(model.calls) == 14
+    assert result["payload"]["pipeline"]["request_count"] == 18
+    assert len(model.calls) == 15
     stage = result["payload"]["pipeline"]["stages"]["title"]
     assert len(stage["metadata"]["network_attempts"]) == 3
     assert stage["history"][-1]["metadata"]["request_count"] == 4
@@ -295,7 +298,7 @@ def test_restart_interrupted_snapshot_resumes_exact_incomplete_batch():
     saved["options"]["workflow"] = "langgraph"
     saved["pipeline"].update(status="failed", current_stage="title", error_code="creative_interrupted")
     saved["pipeline"]["request_count"] = 40
-    saved["pipeline"]["max_requests"] = 72
+    saved["pipeline"]["max_requests"] = estimate_graph_request_budget(len(saved["sources"]), saved["options"])
     stage = saved["pipeline"]["stages"]["title"]
     stage.update(status="failed", output=saved["title"])
     stage["metadata"].update(failed_role="title_review")
@@ -311,8 +314,10 @@ def test_restart_interrupted_snapshot_resumes_exact_incomplete_batch():
     with pytest.raises(CreativeError, match="没有可继续"):
         prepare_resume(broken)
     broken = copy.deepcopy(task)
-    broken.payload["graph_state"]["pipeline"]["request_count"] = 128
+    broken.payload["graph_state"]["pipeline"]["max_requests"] = 512
+    broken.payload["graph_state"]["pipeline"]["request_count"] = 512
     broken.payload["pipeline"]["request_count"] = broken.payload["graph_state"]["pipeline"]["request_count"]
+    broken.payload["pipeline"]["max_requests"] = 512
     with pytest.raises(CreativeError, match="没有可继续"):
         prepare_resume(broken)
 
