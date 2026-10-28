@@ -183,6 +183,18 @@ def test_transport_failure_logged_once_without_exception_message_or_retry():
     assert "private-response" not in json.dumps(details)
 
 
+def test_type_error_diagnostic_extracts_only_python_keyword_argument_name():
+    from backend.app.services.creative_diagnostics import exception_details
+
+    try:
+        raise TypeError("request failed for private body: got multiple values for keyword argument 'timeout'")
+    except TypeError as exc:
+        details = exception_details(exc)
+    assert details["type_error_kind"] == "duplicate_keyword"
+    assert details["argument_name"] == "timeout"
+    assert "private body" not in json.dumps(details)
+
+
 def test_diagnostic_context_is_restored_after_failure():
     with capture_events() as events:
         with pytest.raises(RuntimeError), diagnostic_context(task_id=99, workflow="langgraph"):

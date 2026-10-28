@@ -1,6 +1,7 @@
 """Bounded diagnostics shared by creative workflow runners."""
 import json
 import os
+import re
 import traceback
 import unicodedata
 from copy import deepcopy
@@ -194,7 +195,7 @@ def exception_details(exc):
     if isinstance(exc, CreativeError):
         return {"error_code": exc.code, "reason": str(exc)[:500]}
     frames = traceback.extract_tb(exc.__traceback__)[-8:]
-    return {
+    details = {
         "error_code": "creative_failed",
         "exception_type": type(exc).__name__,
         "traceback_frames": [
@@ -202,3 +203,14 @@ def exception_details(exc):
             for frame in frames
         ],
     }
+    if isinstance(exc, TypeError) and exc.args and isinstance(exc.args[0], str):
+        message = exc.args[0]
+        duplicate = re.search(r"got multiple values for keyword argument '([A-Za-z_][A-Za-z0-9_]*)'", message)
+        unexpected = re.search(r"unexpected keyword argument '([A-Za-z_][A-Za-z0-9_]*)'", message)
+        if duplicate:
+            details["type_error_kind"] = "duplicate_keyword"
+            details["argument_name"] = duplicate.group(1)
+        elif unexpected:
+            details["type_error_kind"] = "unexpected_keyword"
+            details["argument_name"] = unexpected.group(1)
+    return details
