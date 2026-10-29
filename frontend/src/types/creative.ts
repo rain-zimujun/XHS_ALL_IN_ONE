@@ -36,6 +36,7 @@ export type CreativeAnalysisOptions = {
   workflow?: "legacy" | "multi_agent" | "langgraph";
   idea_count: 1 | 3 | 5;
   variant_count?: 2 | 3;
+  title_max_length?: number;
   audience: string;
   instruction: string;
 };

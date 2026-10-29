@@ -29,6 +29,9 @@ class CreativeAnalysisOptions(BaseModel):
     workflow: Literal["legacy", "multi_agent", "langgraph"] = "legacy"
     idea_count: Literal[1, 3, 5] = 3
     variant_count: Literal[2, 3] = 3
+    # Program-owned title budget. The judge asks for specifics and topic words,
+    # so the old 20-character ceiling forced the model to truncate mid-word.
+    title_max_length: int = Field(default=26, ge=10, le=40)
     audience: str = Field(default="电商、服装行业、AI、时尚行业、营销行业、美工、后期从业者", max_length=300)
     instruction: str = Field(default="符合小红书爆款文案的调性，文案尽可能精简、抓眼球", max_length=2000)
 

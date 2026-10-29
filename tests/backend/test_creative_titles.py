@@ -7,9 +7,10 @@ import requests
 from backend.app.schemas.creative_agents import TitleCandidates
 from backend.app.schemas.creative_agents import CopyVariants
 from backend.app.services.creative_agents.copy_generation import validate_copy_variants
-from backend.app.services.creative_agents.title_generation import _title_is_obviously_incomplete, analyze_titles, bind_title_ids, ensure_title_revision_progress, prepare_title_input, run_title_generation, validate_title_candidates
+from backend.app.services.creative_agents.title_generation import _title_is_obviously_incomplete, analyze_titles, bind_title_ids, ensure_title_revision_progress, prepare_title_input, run_title_generation, title_response_type, validate_title_candidates
 from backend.app.services.creative_agents.topic_review import run_topic_review
 from backend.app.services.creative_analysis import CreativeError
+from backend.app.services.creative_graph.model import response_parameter
 from backend.app.services.creative_orchestrator import AgentRunError, AgentValidationError
 from test_creative_topic_review import FakeCompletion as TopicJudge, inputs as topic_inputs, model_db
 
@@ -136,7 +137,7 @@ def test_candidate_errors_repair_once(fault):
             for c in group["candidates"]:
                 c["angle"] = "同一角度"
         elif fault == "long":
-            first["title"] = "长" * 21
+            first["title"] = "长" * 27
         elif fault == "editorial":
             first["title"] = "标题：可以直接复制"
         elif fault == "unclosed":
@@ -165,6 +166,28 @@ def test_title_quality_revision_must_change_words_not_just_punctuation():
 def test_title_completeness_guard_accepts_natural_verb_ending_and_checks_chinese_quotes():
     assert not _title_is_obviously_incomplete("AI工具怎么用")
     assert _title_is_obviously_incomplete("AI工具「")
+
+
+def test_half_word_endings_from_the_old_20_character_cap_are_rejected():
+    # Observed in the real run when the model had to squeeze specifics into 20 characters.
+    for truncated in ("AI服装设计手稿灵感：从自然形态与结构找",
+                      "AI服装设计：自然色形纹理结构，变手稿灵",
+                      "青竹到瓷感潮玩，玉竹少女给AI服装设计灵",
+                      "玉竹少女从青竹到瓷感潮玩，AI服装设计可"):
+        assert _title_is_obviously_incomplete(truncated, 20), truncated
+    for complete in ("AI服装设计灵感参考：玉竹少女的青竹与玉石",
+                     "把创意变成服装设计语言，AI不止会出图"):
+        assert not _title_is_obviously_incomplete(complete, 26), complete
+    # Short titles may end on a verb; only the capped budget treats that as truncation.
+    assert not _title_is_obviously_incomplete("AI工具怎么用", 26)
+
+
+def test_default_title_budget_is_26_characters():
+    payload = prepare_title_input(**inputs())
+    assert payload["title_max_length"] == 26
+    schema = response_parameter(title_response_type(payload))["json_schema"]["schema"]
+    candidate = schema["$defs"]["TitleCandidateContent"]["properties"]["title"]
+    assert candidate["maxLength"] == 26
 
 
 def test_structural_repairs_bounded_and_cancellation_does_not_send():

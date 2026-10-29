@@ -22,12 +22,13 @@ from backend.app.services.creative_copy import has_editorial_leak
 from backend.app.services.creative_orchestrator import AgentRun, AgentSpec, AgentValidationError, run_agent
 
 
-TITLE_PROMPT_VERSION = "title-generation-v3"
+TITLE_PROMPT_VERSION = "title-generation-v4"
 TITLE_SYSTEM_PROMPT = """你是标题 Agent，只为已通过评审的选题生成候选标题，不选优、不写正文和配图。
 只返回符合 output_schema 的 JSON；原样回填 topic_revision 和 input_fingerprint。
 逐一覆盖 topic_brief.ideas，每个 idea_id 恰好一次，每项严格生成 candidate_count 个候选，全批 candidate_id 唯一。
 每个候选 title 是可直接复制的单行纯标题，不含“标题：”、说明、评分、标签或待填写占位符。
 title 不超过 title_max_length 个 Unicode 字符（含空格标点）。这是程序统一长度预算，不代表平台精确计数。
+长度不足时宁可少写一个细节、删掉修饰词或改用更短的表达，也绝不能为了凑长度把词语截断：标题最后一个词必须是完整的词，不能停在半个词、单个量词或悬空动词上（例如“变手稿灵”“从形态找”“给设计可”都是不可接受的结尾）。
 同一选题的候选按顺序采用不同表达路径：具体场景、问题切入、细节观察、清单/方法收益、反差或读者选择；候选不足五个时仍至少使用三种路径。不得让多个候选都套用同一关键词清单结构，也不能只替换同义词或标点。
 具体对象、清楚场景和有内容支撑的价值优先；灵感分享不强迫变成赚钱教程，不堆叠抽象形容词和夸张营销词。
 angle、reader_value、promise、support_points、rationale 分别记录表达角度、读者价值、标题承诺、正文支撑要点和简短理由，不能混进 title。
@@ -132,9 +133,14 @@ _TITLE_BRACKETS = {
     "「": "」", "『": "』", "“": "”", '"': '"',
 }
 _INCOMPLETE_TITLE_ENDINGS = ("以及", "怎么", "如何", "从", "到", "与", "和", "及", "把", "对", "按", "为", "的", "并")
+# A title that fills its whole budget and still ends on a bare verb or half-word
+# was cut off: the real run produced "…从自然形态与结构找", "…变手稿灵",
+# "…给AI服装设计灵", "…设计可" at the old 20-character cap. Short titles ending
+# in a verb ("AI工具怎么用") are natural, so this only applies at the budget.
+_TRUNCATION_TAIL_CHARS = "找变给让做学用拿放看写画可说想灵"
 
 
-def _title_is_obviously_incomplete(title: str) -> bool:
+def _title_is_obviously_incomplete(title: str, limit: int | None = None) -> bool:
     stack = []
     closing = set(_TITLE_BRACKETS.values())
     for char in title:
@@ -146,7 +152,11 @@ def _title_is_obviously_incomplete(title: str) -> bool:
         elif char in closing:
             if not stack or stack.pop() != char:
                 return True
-    return bool(stack) or title.endswith(_INCOMPLETE_TITLE_ENDINGS) or title.endswith(("：", ":", "，", ",", "、"))
+    if stack or title.endswith(("：", ":", "，", ",", "、")):
+        return True
+    if title.endswith(_INCOMPLETE_TITLE_ENDINGS):
+        return True
+    return bool(limit) and len(title) >= limit and title[-1:] in _TRUNCATION_TAIL_CHARS
 
 
 def ensure_title_revision_progress(previous: dict, proposed: dict, target_ids: list[str]) -> None:
@@ -168,7 +178,7 @@ def prepare_title_input(
     keyword: str, requirements: str, requested_idea_count: int,
     sample_analysis: dict[str, Any] | SampleAnalysis, audience_brief: dict[str, Any] | AudienceBrief,
     topic_brief: dict[str, Any] | TopicBrief, topic_revision: int,
-    topic_review: dict[str, Any] | TopicReviewResult, candidate_count: int = 5, title_max_length: int = 20,
+    topic_review: dict[str, Any] | TopicReviewResult, candidate_count: int = 5, title_max_length: int = 26,
     approved_claims: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if type(candidate_count) is not int or not 5 <= candidate_count <= 8:
@@ -224,7 +234,7 @@ def validate_title_candidates(result: TitleCandidates, payload: dict[str, Any]) 
                 (unicodedata.category(c).startswith("C") and c != "\u200d") or c in "\u2028\u2029" for c in title
             ):
                 raise AgentValidationError("标题必须是长度预算内的单行纯文本，不含控制字符")
-            if _title_is_obviously_incomplete(title):
+            if _title_is_obviously_incomplete(title, payload["title_max_length"]):
                 raise AgentValidationError("标题存在未闭合标点或明显未完成的结尾表达，请改成语义完整的自然短句")
             if has_editorial_leak(title) or title.startswith(("标题：", "标题:", "#", "＃")):
                 raise AgentValidationError("标题中不能包含编辑标签、助手开场白、话题或待填写占位符")

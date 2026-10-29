@@ -46,6 +46,7 @@ export function HotContentPage() {
   const [preprocessModelId, setPreprocessModelId] = useState<number>();
   const [ideaCount, setIdeaCount] = useState<1 | 3 | 5>(3);
   const [variantCount, setVariantCount] = useState<2 | 3>(3);
+  const [titleLength, setTitleLength] = useState(26);
   const [workflow, setWorkflow] = useState<NonNullable<CreativeAnalysisOptions["workflow"]>>("multi_agent");
   const [audience, setAudience] = useState("电商、服装行业、AI、时尚行业、营销行业、美工、后期从业者");
   const [instruction, setInstruction] = useState("符合小红书爆款文案的调性，文案尽可能精简、抓眼球");
@@ -102,7 +103,7 @@ export function HotContentPage() {
     return {
       model_id: modelId,
       ...(workflow === "langgraph" && preprocessModelId ? { preprocess_model_id: preprocessModelId } : {}),
-      idea_count: ideaCount, variant_count: variantCount, audience, instruction, workflow,
+      idea_count: ideaCount, variant_count: variantCount, title_max_length: titleLength, audience, instruction, workflow,
     };
   }
 
@@ -148,6 +149,7 @@ export function HotContentPage() {
         setModelId(item.payload.analysis.model_id); setIdeaCount(item.payload.analysis.idea_count);
         setPreprocessModelId(item.payload.analysis.preprocess_model_id || item.payload.analysis.model_id);
         setVariantCount(item.payload.analysis.variant_count || 3);
+        setTitleLength(item.payload.analysis.title_max_length || 26);
         setWorkflow(item.payload.analysis.workflow || "multi_agent");
         setAudience(item.payload.analysis.audience); setInstruction(item.payload.analysis.instruction);
       }
@@ -227,6 +229,7 @@ export function HotContentPage() {
             {workflow === "langgraph" && <Col xs={24} md={12}><Form.Item label="轻量预处理模型" extra="只处理分批样本摘要与证据；后续创作和评审仍使用上方文字模型。"><Select aria-label="轻量预处理模型" value={preprocessModelId} onChange={setPreprocessModelId} placeholder="选择预处理模型" options={models.map(m => ({ value: m.id, label: `${m.name} · ${m.model_name}`, disabled: !m.has_api_key || !m.base_url }))} /></Form.Item></Col>}
             <Col xs={12} md={6}><Form.Item label="标题数量"><Select aria-label="标题数量" value={ideaCount} onChange={setIdeaCount} options={[1, 3, 5].map(value => ({ value, label: `${value} 个标题` }))} /></Form.Item></Col>
             <Col xs={12} md={6}><Form.Item label="每个标题的文案数"><Select aria-label="每个标题的文案数" value={variantCount} onChange={setVariantCount} options={[2, 3].map(value => ({ value, label: `${value} 个版本` }))} /></Form.Item></Col>
+            <Col xs={12} md={6}><Form.Item label="标题长度上限" extra="按字符计（含标点）。过短会迫使模型截断词语。"><Select aria-label="标题长度上限" value={titleLength} onChange={setTitleLength} options={[20, 24, 26, 30, 34].map(value => ({ value, label: `${value} 字` }))} /></Form.Item></Col>
             <Col span={24}><Form.Item label="目标受众"><Input aria-label="目标受众" maxLength={300} value={audience} onChange={e => setAudience(e.target.value)} /></Form.Item></Col>
             <Col span={24}><Form.Item label="创作要求"><Input.TextArea aria-label="创作要求" rows={3} maxLength={2000} value={instruction} onChange={e => setInstruction(e.target.value)} placeholder="默认写可直接发布的作品／灵感分享，参考样本口吻，不夹带制作指导。可补充：语气自然、少用术语；需要教程时请明确写出。" /></Form.Item></Col>
           </Row>
@@ -242,7 +245,7 @@ export function HotContentPage() {
           </Space>
         </Form>
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>正文参考本批有效样本的共同语气、开头、分段与互动方式，保持原创。每个标题对应 {variantCount} 版不同文案，每版都有独立配图建议与提示词；共生成 {ideaCount * variantCount} 版，数量越多通常耗时和费用越高。</Paragraph>
-        {workflow !== "legacy" && <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>当前使用{workflow === "langgraph" ? " LangGraph 试用流程" : "多 Agent"}：样本 → 受众 → 选题 → 标题 → 正文 → 配图 → 终审。{workflow === "langgraph" ? `配图与终审逐篇处理，样本分批较多时标题和正文评审也会拆到单项；每批完成后保存进度。当前数量首次全部通过约需 ${7 + 2 * ideaCount + 2 * ideaCount * variantCount} 次模型请求，累计上限会按采集数量和输出批次数自适应（至少 72 次、最多 512 次），每轮执行窗口为 90 分钟。` : "首次全部通过通常为 10 次模型请求，任务总计最多 36 次，每轮执行窗口为 30 分钟。"}每个生产阶段最多质量返工 2 次，执行窗口到期后不再开始新请求。模型评分仅供参考，仍需人工确认。</Paragraph>}
+        {workflow !== "legacy" && <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>当前使用{workflow === "langgraph" ? " LangGraph 试用流程" : "多 Agent"}：样本 → 受众 → 选题 → 标题 → 正文 → 配图 → 终审。{workflow === "langgraph" ? `配图与终审逐篇处理，样本分批较多时标题和正文评审也会拆到单项；每批完成后保存进度。当前数量首次全部通过约需 ${7 + 2 * ideaCount + 2 * ideaCount * variantCount} 次模型请求，累计上限会按采集数量和输出批次数自适应（至少 72 次、最多 512 次），每轮执行窗口为 90 分钟。` : "首次全部通过通常为 10 次模型请求，任务总计最多 36 次，每轮执行窗口为 30 分钟。"}每个生产阶段最多质量返工 3 次，执行窗口到期后不再开始新请求。模型评分仅供参考，仍需人工确认。</Paragraph>}
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>点击生成会将样本文字发送给所选模型服务，按其规则计费；每次请求读取超时为 3 分钟。多 Agent 与 LangGraph 遇到临时网络故障最多额外重试 3 次，通常分别等待 15、30、60 秒；格式修复另计，最多一次。超时的原请求仍可能完成并计费。LangGraph 模型服务失败或执行窗口到期，可在累计请求次数未用尽时从失败阶段继续；停止任务无法撤回已发出的请求。</Paragraph>
       </Card>
       {collection && <Card title={`创作任务 #${collection.id} · ${collection.payload.search.keyword}`} extra={collecting && <Button onClick={() => void stopTask()}>停止任务</Button>}>
