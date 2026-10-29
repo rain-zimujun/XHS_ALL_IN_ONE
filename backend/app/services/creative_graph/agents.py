@@ -192,13 +192,18 @@ class StructuredAgent:
                 if self.spec.stage == "copy":
                     from backend.app.services.creative_copy import normalize_result_copy
                     adapted = normalize_result_copy(adapted)
+                if revision and self.spec.stage in {"copy", "image"}:
+                    from backend.app.services.creative_agents.revision import preserve_untargeted_revision
+                    adapted = preserve_untargeted_revision(
+                        self.spec.stage, adapted, revision["previous_output"], revision["target_ids"],
+                    )
                 result = self.output_model.model_validate({**adapted, **{k: payload[k] for k in self.state_fields}})
                 kind = "creative_handoff_invalid"
                 validate_output(result)
                 if revision:
                     from backend.app.services.creative_agents.revision import ensure_targeted_revision
                     revision_value = (result.model_dump(mode="json")
-                                      if self.payload_output_adapter or self.spec.stage == "topic" else value)
+                                      if self.payload_output_adapter or self.spec.stage == "topic" else adapted)
                     ensure_targeted_revision(self.spec.stage, revision["previous_output"], revision_value, revision["target_ids"])
                 traces.append(AgentAttemptTrace(attempt, round((monotonic() - started) * 1000), "completed"))
                 diagnostic_event("模型调用及校验完成", **context, duration_ms=traces[-1].duration_ms)

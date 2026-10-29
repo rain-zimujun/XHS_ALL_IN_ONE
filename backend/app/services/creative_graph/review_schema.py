@@ -29,6 +29,19 @@ def _literal(values: list[str], label: str):
     return Literal[unique]
 
 
+def _peer_refs(item_ids: list[str], *, max_length: int):
+    """References to other review items in the same batch.
+
+    A single-item batch has no legal peer: the business check rejects self
+    references, so the contract must forbid the field instead of offering an
+    enum whose only member would always be rejected. The empty form mirrors
+    ``source_note_ids_type`` for compact reviews without source notes.
+    """
+    if len(item_ids) < 2:
+        return Annotated[list[str], Field(max_length=0)]
+    return Annotated[list[_literal(item_ids, "关联对象")], Field(max_length=max_length)]
+
+
 def _batch_values(payload: dict) -> tuple[list[str], list[str], list[str]]:
     criteria = [item["key"] for item in payload["rubric"]]
     item_ids = [item["item_id"] for item in payload["items"]]
@@ -48,7 +61,6 @@ def item_review_response_type(payload: dict) -> type:
     criterion = _literal(criteria, "评分项")
     field = _literal(fields, "字段")
     item_id = _literal(item_ids, "评审对象")
-    related_ids = _literal(item_ids, "关联对象")
     score = _strict("DynamicItemScore", {
         "criterion": criterion,
         "score": Annotated[float, Field(ge=0, le=10, allow_inf_nan=False)],
@@ -64,7 +76,7 @@ def item_review_response_type(payload: dict) -> type:
         "problem": Text,
         "revision_instruction": Text,
         "note_ids": _note_ids(payload),
-        "related_item_ids": Annotated[list[related_ids], Field(max_length=8)],
+        "related_item_ids": _peer_refs(item_ids, max_length=8),
         "responsible_stage": Literal["topic", "title", "copy", "image", None],
     })
     judgement = _strict("DynamicItemJudgement", {
@@ -91,7 +103,6 @@ def title_review_response_type(payload: dict) -> type:
     criterion = _literal(criteria, "评分项")
     field = _literal(fields, "字段")
     item_id = _literal(item_ids, "评审对象")
-    related_ids = _literal(item_ids, "关联对象")
     scores = _strict("DynamicTitleScores", {
         key: Annotated[float, Field(ge=0, le=10, allow_inf_nan=False)] for key in criteria
     })
@@ -102,7 +113,7 @@ def title_review_response_type(payload: dict) -> type:
         "quote": Annotated[str, Field(min_length=1, max_length=180)],
         "problem": Annotated[str, Field(min_length=1, max_length=120)],
         "revision_instruction": Annotated[str, Field(min_length=1, max_length=120)],
-        "related_item_ids": Annotated[list[related_ids], Field(max_length=4)],
+        "related_item_ids": _peer_refs(item_ids, max_length=4),
     })
     judgement = _strict("DynamicTitleJudgement", {
         "item_id": item_id,
@@ -131,7 +142,6 @@ def topic_review_response_type(payload: dict) -> type:
     criterion = literal_values(criteria, "评分项")
     field = literal_values(fields, "字段")
     idea_id = literal_values(item_ids, "选题")
-    related_ids = literal_values(item_ids, "关联选题")
     score = _strict("DynamicTopicScore", {
         "criterion": criterion,
         "score": Annotated[float, Field(ge=0, le=10, allow_inf_nan=False)],
@@ -147,7 +157,7 @@ def topic_review_response_type(payload: dict) -> type:
         "problem": Text,
         "revision_instruction": Text,
         "note_ids": _note_ids(payload),
-        "related_idea_ids": Annotated[list[related_ids], Field(max_length=4)],
+        "related_idea_ids": _peer_refs(item_ids, max_length=4),
     })
     judgement = _strict("DynamicTopicJudgement", {
         "idea_id": idea_id,

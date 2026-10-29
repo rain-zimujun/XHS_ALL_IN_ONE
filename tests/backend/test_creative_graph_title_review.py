@@ -7,8 +7,11 @@ from backend.app.services.creative_agents.title_generation import run_title_gene
 from backend.app.services.creative_agents.title_review import prepare_title_review_input, select_titles
 from backend.app.services.creative_agents.reviewing import decide_review
 from backend.app.services.creative_graph.title_review import (
-    expand_title_review, prepare_title_review_batches, merge_title_review_results,
+    TITLE_REVISION_HINTS, expand_title_review, frozen_passed_judgements,
+    prepare_title_review_batches, merge_title_review_results,
 )
+from backend.app.services.creative_graph.model import response_parameter
+from backend.app.services.creative_graph.review_schema import title_review_response_type
 from test_creative_title_review import valid_review
 from test_creative_titles import inputs, TitleCompletion
 
@@ -99,6 +102,90 @@ def test_compact_title_review_synthesizes_missing_low_score_issue_from_candidate
     decision = decide_review(ItemReviewResponse.model_validate(normalized), batch)
     assert decision.status == "revision_required"
     assert decision.reviews[0].quality.passed is False
+
+
+def test_per_item_title_batch_forbids_peer_reference_ids():
+    args = inputs(count=3, candidate_count=5)
+    run, _ = run_title_generation(**args, complete=TitleCompletion())
+    payload = prepare_title_review_input(**args, title_candidates=run.output, title_revision=1)
+
+    per_item = prepare_title_review_batches(payload, sample_batches=4)
+    issue = response_parameter(title_review_response_type(per_item[0]))["json_schema"]["schema"]["$defs"]["DynamicTitleIssue"]
+    assert issue["properties"]["related_item_ids"]["maxItems"] == 0
+
+    grouped = prepare_title_review_batches(payload, sample_batches=1)
+    grouped_issue = response_parameter(title_review_response_type(grouped[0]))["json_schema"]["schema"]["$defs"]["DynamicTitleIssue"]
+    assert grouped_issue["properties"]["related_item_ids"]["maxItems"] == 4
+    assert set(grouped_issue["properties"]["related_item_ids"]["items"]["enum"]) == {
+        item["item_id"] for item in grouped[0]["items"]
+    }
+
+
+def test_total_below_threshold_without_issues_repairs_instead_of_failing_handoff():
+    args = inputs(count=1, candidate_count=5)
+    run, _ = run_title_generation(**args, complete=TitleCompletion())
+    payload = prepare_title_review_input(**args, title_candidates=run.output, title_revision=1)
+    batch = prepare_title_review_batches(payload)[0]
+    compact = valid_review(batch)
+    # 6/6/6/6/5/5 is the rubric floor: every criterion passes its own minimum
+    # but the weighted total is 5.8, below the 6.5 pass line.
+    for review in compact["reviews"]:
+        review["scores"] = {score["criterion"]: 6.0 for score in review["scores"]}
+        review["issues"] = []
+        review["comment"] = "主题明确，但吸引力一般。"
+
+    normalized = expand_title_review(compact, batch)
+    item = normalized["reviews"][0]
+    assert len(item["issues"]) == 1
+    issue = item["issues"][0]
+    assert issue["criterion"] == "hook"
+    assert issue["field"] == "title"
+    assert issue["quote"] == batch["items"][0]["fields"]["title"]
+    assert "6" in issue["problem"] and "6.5" in issue["problem"]
+    assert issue["revision_instruction"] == TITLE_REVISION_HINTS["hook"]
+    decision = decide_review(ItemReviewResponse.model_validate(normalized), batch)
+    assert decision.status == "revision_required"
+    assert decision.reviews[0].quality.passed is False
+
+
+def test_passed_verdicts_are_frozen_only_for_unchanged_titles():
+    args = inputs(count=1, candidate_count=5)
+    run, _ = run_title_generation(**args, complete=TitleCompletion())
+    payload = prepare_title_review_input(**args, title_candidates=run.output, title_revision=1)
+    batch = prepare_title_review_batches(payload)[0]
+    decided = decide_review(ItemReviewResponse.model_validate(valid_review(batch)), batch).model_dump(mode="json")
+    reviewed = {item["item_id"]: item["fields"]["title"] for item in batch["items"]}
+
+    frozen = frozen_passed_judgements(decided, batch, reviewed)
+    assert set(frozen) == {item["item_id"] for item in batch["items"]}
+
+    # A reworked title is new content: its old verdict must not be reused.
+    changed = copy.deepcopy(batch)
+    changed["items"][0]["fields"]["title"] = "改过的标题，需要重新评审"
+    assert set(frozen_passed_judgements(decided, changed, reviewed)) == {
+        item["item_id"] for item in changed["items"][1:]
+    }
+
+
+def test_frozen_judgements_fill_the_batches_and_keep_full_coverage():
+    args = inputs(count=1, candidate_count=5)
+    run, _ = run_title_generation(**args, complete=TitleCompletion())
+    payload = prepare_title_review_input(**args, title_candidates=run.output, title_revision=1)
+    full = prepare_title_review_batches(payload)[0]
+    decided = decide_review(ItemReviewResponse.model_validate(valid_review(full)), full).model_dump(mode="json")
+    frozen = frozen_passed_judgements(decided, payload, {
+        item["item_id"]: item["fields"]["title"] for item in payload["items"]
+    })
+    keep = set(list(frozen)[:2])
+    batches = prepare_title_review_batches(payload, skip_item_ids=keep)
+    assert all(not (keep & {item["item_id"] for item in batch["items"]}) for batch in batches)
+    assert sum(len(batch["items"]) for batch in batches) == 3
+
+    results = [ItemReviewResponse.model_validate(valid_review(batch)) for batch in batches]
+    merged = merge_title_review_results(results, payload, {item_id: frozen[item_id] for item_id in keep})
+    decision = decide_review(merged, payload)
+    assert decision.status == "passed"
+    assert [review.judgement.item_id for review in decision.reviews] == [item["item_id"] for item in payload["items"]]
 
 
 def test_split_sample_analysis_adapts_title_reviews_to_one_title_with_id_free_peer_summaries():

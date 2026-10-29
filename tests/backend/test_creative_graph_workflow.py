@@ -9,6 +9,7 @@ import requests
 
 from backend.app.services.creative_analysis import CreativeError
 from backend.app.services.creative_agents.revision import PipelineCancelled
+from backend.app.services.creative_agents.revision import MAX_QUALITY_REVISIONS
 from backend.app.services.creative_graph.state import SampleUpdate
 from backend.app.services.creative_graph.recovery import prepare_resume
 from backend.app.services.creative_graph.agents import langgraph_title_spec
@@ -198,6 +199,60 @@ def test_graph_executes_ten_roles_and_persists_serializable_global_state(count, 
         validate_pipeline_state(json.loads(json.dumps(state))["pipeline"])
     assert {c["response_format"]["json_schema"]["name"] for c in model.wire_calls} == set(GraphCompletion.NAMES)
     assert "fixture-private" not in json.dumps(w.state)
+
+
+def test_title_budget_option_reaches_the_title_request():
+    model = GraphCompletion()
+    w = LangGraphWorkflow(
+        search=SEARCH, sources=sources(),
+        options={"model_id": 1, "idea_count": 1, "variant_count": 2, "title_max_length": 30},
+        complete=model,
+    )
+    w.run()
+    calls = [c for c in model.wire_calls if c["response_format"]["json_schema"]["name"] == "TitleResponse"]
+    assert json.loads(calls[0]["user_prompt"])["input"]["title_max_length"] == 30
+    assert w.state["title"]["ideas"]
+
+
+def test_passed_title_verdicts_are_frozen_after_a_rework_round():
+    model = GraphCompletion()
+    sent = []
+
+    def complete(**kwargs):
+        output = json.loads(model(**kwargs))
+        name = kwargs["response_format"]["json_schema"]["name"]
+        prompt = json.loads(kwargs["user_prompt"])
+        if name == "TitleResponse" and "quality_revision" in prompt:
+            for group in output["ideas"].values():
+                for candidate in group["candidates"]:
+                    candidate["title"] = candidate["title"] + "改"
+            return json.dumps(output, ensure_ascii=False)
+        if name != "TitleReviewResponse":
+            return json.dumps(output, ensure_ascii=False)
+        for review, item in zip(output["reviews"], prompt["input"]["items"]):
+            sent.append(item["item_id"])
+            # idea_1 passes at once (frozen afterwards); the other ideas fail
+            # once and then pass on the reworked text.
+            if item["idea_id"] == "idea_1" or sent.count(item["item_id"]) > 1:
+                review["scores"] = {key: 8.0 for key in review["scores"]}
+                review["issues"] = []
+            else:
+                review["scores"] = {key: 5.0 for key in review["scores"]}
+                review["issues"] = [{
+                    "criterion": "hook", "severity": "blocking", "field": "title",
+                    "quote": item["fields"]["title"], "problem": "钩子不够具体。",
+                    "revision_instruction": "换成更具体的切入。", "related_item_ids": [],
+                }]
+        return json.dumps(output, ensure_ascii=False)
+
+    w = workflow(complete, 3, 2)
+    result, _ = w.run()
+    assert result
+    assert w.state["title_review"]["status"] == "passed"
+    # Frozen: an approved, unchanged title is never judged twice.
+    assert sent.count("title_0_0") == 1
+    assert sent.count("title_1_0") == 2
+    assert w.state["title_review"]["selected_candidate_ids"]["idea_1"].startswith("title_0_")
 
 
 def test_topic_response_schema_and_adapter_prevent_duplicate_source_references():
@@ -423,7 +478,9 @@ def test_graph_title_revision_restores_approved_candidates_changed_by_model():
     assert len(result["ideas"]) == 3
     assert all(len(idea["variants"]) == 2 for idea in result["ideas"])
     assert model.counts["TitleCandidates"] == 2
-    assert model.counts["title_review"] == 6
+    # Round 1 reviews three batches; round 2 only re-judges the failed idea's
+    # candidates because the approved ones keep their verdict.
+    assert model.counts["title_review"] == 4
     assert w.state["pipeline"]["status"] == "completed"
 
 
@@ -450,9 +507,10 @@ def test_title_revision_briefs_bind_scores_and_actionable_issues_to_each_candida
 
 def test_title_prompt_assigns_distinct_candidate_angles_and_avoids_repeated_revision_templates():
     prompt = langgraph_title_spec().system_prompt
-    assert TITLE_PROMPT_VERSION == "title-generation-v3"
+    assert TITLE_PROMPT_VERSION == "title-generation-v4"
     assert "具体场景、问题切入、细节观察、清单/方法收益" in prompt
     assert "不得让多个候选都套用同一关键词清单结构" in prompt
+    assert "绝不能为了凑长度把词语截断" in prompt
     assert "不得继续让所有标题重复“首轮/四项/清单”等同一模板" in prompt
 
 
@@ -521,7 +579,9 @@ def test_conditional_review_edge_returns_to_producer_and_only_revises_failed_ite
     w = workflow(model, 3, 3)
     result, _ = w.run()
     assert len(result["ideas"]) == 3
-    assert len(model.calls) == (34 if stage == "TopicReviewResponse" else 37)
+    # A title rework re-judges only the unresolved idea: approved candidates keep
+    # their verdict, so this path spends two calls fewer than a full re-review.
+    assert len(model.calls) == {"TopicReviewResponse": 34, "title_review": 35, "copy_review": 37}[stage]
     producer = {"TopicReviewResponse": "topic", "title_review": "title", "copy_review": "copy"}[stage]
     item = w.state["pipeline"]["stages"][producer]
     assert item["quality_revisions"] == 1
@@ -553,8 +613,9 @@ def test_exhausted_review_cycle_stops_with_drafts_and_no_final_result(stage, own
     assert caught.value.code == "creative_quality_exhausted"
     assert w.state["result"] is None
     assert w.state["pipeline"]["status"] == "revision_required"
-    assert w.state["pipeline"]["stages"][owner]["quality_revisions"] == 2
-    assert model.counts[stage] == (6 if stage == "final_review" else 3)
+    assert w.state["pipeline"]["stages"][owner]["quality_revisions"] == MAX_QUALITY_REVISIONS
+    per_round = 2 if stage == "final_review" else 1
+    assert model.counts[stage] == per_round * (MAX_QUALITY_REVISIONS + 1)
 
 
 def test_budget_and_timeout_stop_without_further_requests_and_preserve_global_outputs():

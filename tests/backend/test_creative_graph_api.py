@@ -173,7 +173,8 @@ def test_all_graph_roles_and_revision_send_native_schema_in_actual_http_body(mon
             base_url="https://example.invalid/v1", model_name="mock",
         ), api_key="fixture-private", **kwargs)
     _, metadata = workflow(complete).run()
-    assert len(seen) == metadata["request_count"] == 16
+    # Audience needs are requested per segment, so two segments add one call.
+    assert len(seen) == metadata["request_count"] == 17
     assert {c["response_format"]["json_schema"]["name"] for c in seen} == set(GraphCompletion.NAMES)
 
 

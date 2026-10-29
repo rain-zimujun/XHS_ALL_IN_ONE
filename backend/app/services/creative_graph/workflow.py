@@ -29,7 +29,8 @@ from backend.app.services.creative_agents.sample_relevance import (
 from backend.app.services.creative_agents.reviewing import decide_review
 from backend.app.services.creative_quality import rubric_for
 from backend.app.services.creative_graph.title_review import (
-    TITLE_REVIEW_VERSION, merge_title_review_results, prepare_title_review_batches,
+    TITLE_REVIEW_VERSION, frozen_passed_judgements, merge_title_review_results,
+    prepare_title_review_batches,
 )
 from backend.app.services.creative_agents.revision import (
     MAX_QUALITY_REVISIONS, PipelineCancelled, RequestBudget,
@@ -107,7 +108,9 @@ def topic_inputs(s):
 
 
 def title_inputs(s):
-    return dict(**topic_inputs(s), topic_review=s["topic_review"], title_candidates=s["title"], title_revision=s["pipeline"]["stages"]["title"]["revision"])
+    return dict(**topic_inputs(s), topic_review=s["topic_review"], title_candidates=s["title"],
+                title_revision=s["pipeline"]["stages"]["title"]["revision"],
+                title_max_length=s["options"].get("title_max_length", 26))
 
 
 def copy_inputs(s):
@@ -354,7 +357,7 @@ class LangGraphWorkflow:
                     self.resuming_producer = None
                 else:
                     if item["quality_revisions"] >= MAX_QUALITY_REVISIONS:
-                        self._quality_stop("当前阶段已达到两次质量返工上限。")
+                        self._quality_stop(f"当前阶段已达到 {MAX_QUALITY_REVISIONS} 次质量返工上限。")
                     item["quality_revisions"] += 1
             previous = deepcopy(s[stage])
             if stage == "copy":
@@ -747,14 +750,38 @@ class LangGraphWorkflow:
         return self._reviewer(s, "topic", payload)
 
     def title_node(self, s: CreativeGraphState) -> TitleUpdate:
-        payload = title_generation.prepare_title_input(**topic_inputs(s), topic_review=s["topic_review"])
+        payload = title_generation.prepare_title_input(
+            **topic_inputs(s), topic_review=s["topic_review"],
+            title_max_length=s["options"].get("title_max_length", 26),
+        )
         return self._producer(s, "title", payload, lambda r: title_generation.validate_title_candidates(r, payload))
+
+    def _reviewed_title_texts(self) -> dict[str, str] | None:
+        """Title text as it stood when the latest title review ran."""
+        history = self.active_pipeline["stages"]["title"]["history"]
+        for index in range(len(history) - 1, -1, -1):
+            if history[index]["role"] != "reviewer":
+                continue
+            for prior in range(index - 1, -1, -1):
+                if history[prior]["role"] == "producer":
+                    return {candidate["candidate_id"]: candidate["title"]
+                            for idea in history[prior]["output"].get("ideas", [])
+                            for candidate in idea.get("candidates", [])}
+            return None
+        return None
 
     def title_review_node(self, s: CreativeGraphState) -> TitleReviewUpdate:
         payload = title_review.prepare_title_review_input(**title_inputs(s))
+        # A passed, unchanged title keeps its verdict: re-judging identical text
+        # only re-rolls the judge and can drop an approval the task already had.
+        frozen = frozen_passed_judgements(
+            s["title_review"], payload, self._reviewed_title_texts(),
+        )
+        skip = set(frozen) if 0 < len(frozen) < len(payload["items"]) else set()
         batches = prepare_title_review_batches(
             payload,
             sample_batches=sample_batch_count(self.active_pipeline["stages"]["sample_analysis"]["metadata"]),
+            skip_item_ids=skip,
         )
 
         def invoke(agent, original_payload, validator, pipeline, revision):
@@ -763,7 +790,7 @@ class LangGraphWorkflow:
                 metadata=pipeline["stages"]["title"]["metadata"], prefix="title_review",
                 version=TITLE_REVIEW_VERSION,
                 validate=decide_review,
-                merge=lambda results: merge_title_review_results(results, original_payload),
+                merge=lambda results: merge_title_review_results(results, original_payload, frozen if skip else None),
                 checkpoint=lambda text: self._checkpoint(pipeline, text),
                 max_workers=MAX_PARALLEL_BATCHES, state_lock=self._checkpoint_lock,
             )
@@ -852,7 +879,7 @@ class LangGraphWorkflow:
         if not plan:
             self._quality_stop("终审未通过，但缺少可执行的责任阶段。")
         if any(s["pipeline"]["stages"][stage]["quality_revisions"] >= MAX_QUALITY_REVISIONS for stage in plan):
-            self._quality_stop("责任阶段已达到两次质量返工上限。")
+            self._quality_stop(f"责任阶段已达到 {MAX_QUALITY_REVISIONS} 次质量返工上限。")
         earliest = next(stage for stage in PRODUCTION_ORDER if stage in plan)
         update: RevisionPlanUpdate = {"pipeline": self.active_pipeline, "revision_plan": plan}
         for stage in (*PRODUCTION_ORDER[PRODUCTION_ORDER.index(earliest):], "final_review"):

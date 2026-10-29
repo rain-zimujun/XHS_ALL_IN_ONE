@@ -8,7 +8,7 @@ import requests
 from backend.app.main import app
 from backend.app.models import Task
 from backend.app.services.creative_analysis import CreativeError, get_creative_text_client_factory
-from backend.app.services.creative_agents.revision import PipelineCancelled
+from backend.app.services.creative_agents.revision import MAX_QUALITY_REVISIONS, PipelineCancelled
 from backend.app.services.creative_pipeline import validate_pipeline_state
 from backend.app.services.creative_runner import recover_interrupted_runs
 from backend.app.services.creative_workflow import CreativeWorkflow
@@ -149,9 +149,9 @@ def test_quality_revision_exhaustion_is_terminal_and_keeps_drafts(stage, owner):
     assert error.value.code == "creative_quality_exhausted"
     assert w.state["status"] == "revision_required"
     producer = {"TopicReviewResponse": "topic", "final_review": "image", "copy_review": "copy"}[stage]
-    assert w.state["stages"][producer]["quality_revisions"] == 2
+    assert w.state["stages"][producer]["quality_revisions"] == MAX_QUALITY_REVISIONS
     assert w.state["stages"][producer]["output"]
-    assert model.counts[stage] == 3
+    assert model.counts[stage] == MAX_QUALITY_REVISIONS + 1
 
 
 def test_budget_and_transport_failure_preserve_prior_stages_and_do_not_retry():
@@ -281,7 +281,7 @@ def test_api_quality_failure_keeps_review_and_excludes_final_result(env):
     assert result["payload"]["pipeline"]["stages"]["final_review"]["review_result"]["status"] == "revision_required"
     assert result["payload"]["pipeline"]["stages"]["final_review"]["history"][-1]["output"]["status"] == "revision_required"
     assert "result" not in result["payload"]
-    assert model.counts["final_review"] == 3
+    assert model.counts["final_review"] == MAX_QUALITY_REVISIONS + 1
 
 
 def test_api_cancel_during_model_keeps_cancelled_state(env):

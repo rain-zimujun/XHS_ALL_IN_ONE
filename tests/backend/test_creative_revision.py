@@ -5,7 +5,7 @@ import pytest
 
 from backend.app.schemas.creative_agents import CopyVariants
 from backend.app.services.creative_agents.copy_generation import COPY_AGENT, prepare_copy_input
-from backend.app.services.creative_agents.revision import RequestBudget, ensure_targeted_revision, revision_completion
+from backend.app.services.creative_agents.revision import RequestBudget, ensure_targeted_revision, preserve_untargeted_revision, revision_completion
 from backend.app.services.creative_analysis import CreativeError
 from backend.app.services.creative_orchestrator import AgentValidationError, run_agent
 from test_creative_copy_agent import inputs, valid_copies
@@ -14,6 +14,20 @@ from test_creative_copy_agent import inputs, valid_copies
 def drafts():
     payload = prepare_copy_input(**inputs())
     return payload, valid_copies(payload)
+
+
+def test_untargeted_variants_are_restored_instead_of_failing_the_rework():
+    _, old = drafts()
+    new = copy.deepcopy(old)
+    new["ideas"][0]["variants"][0]["body"] = "只改这一版"
+    new["ideas"][0]["variants"][1]["body"] = "模型顺手改坏了已通过版本"
+    new["ideas"][0]["candidate_id"] = "title_other"
+
+    restored = preserve_untargeted_revision("copy", new, old, ["copy_0_0"])
+    assert restored["ideas"][0]["candidate_id"] == old["ideas"][0]["candidate_id"]
+    assert restored["ideas"][0]["variants"][0]["body"] == "只改这一版"
+    assert restored["ideas"][0]["variants"][1] == old["ideas"][0]["variants"][1]
+    ensure_targeted_revision("copy", old, restored, ["copy_0_0"])
 
 
 def test_targeted_revision_can_change_only_failed_version():
@@ -44,23 +58,23 @@ def test_revision_cannot_hide_failed_items_or_change_binding(change):
         ensure_targeted_revision("copy", old, new, targets)
 
 
-def test_out_of_scope_revision_uses_one_existing_structural_repair():
+def test_out_of_scope_revision_restores_approved_variants_without_a_retry():
     payload, old = drafts()
     calls = []
     def complete(**kwargs):
         calls.append(kwargs)
         new = copy.deepcopy(old)
         new["ideas"][0]["variants"][0]["body"] = "针对问题修正后的正文"
-        if len(calls) == 1:
-            new["ideas"][0]["variants"][1]["body"] = "擅自改动已经通过的正文"
+        new["ideas"][0]["variants"][1]["body"] = "擅自改动已经通过的正文"
         return json.dumps(new, ensure_ascii=False)
     wrapped = revision_completion(complete, stage="copy", previous=old, target_ids=["copy_0_0"], feedback={"issues": ["读者价值不具体"]})
     run = run_agent(COPY_AGENT, input_payload=payload, output_model=CopyVariants, complete=wrapped)
-    assert len(calls) == 2
-    prompt, _ = json.JSONDecoder().raw_decode(calls[1]["user_prompt"])
+    # The server-owned copy wins for out-of-scope variants, so no repair round is spent.
+    assert len(calls) == 1
+    prompt, _ = json.JSONDecoder().raw_decode(calls[0]["user_prompt"])
     assert prompt["quality_revision"]["target_ids"] == ["copy_0_0"]
-    assert "未列入返工范围" in calls[1]["user_prompt"]
     assert run.output.ideas[0].variants[1].body == old["ideas"][0]["variants"][1]["body"]
+    assert run.output.ideas[0].variants[0].body == "针对问题修正后的正文"
 
 
 def test_request_budget_counts_attempted_calls_and_never_retries_transport():

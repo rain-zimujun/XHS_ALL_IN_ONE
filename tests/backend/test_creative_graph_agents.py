@@ -144,6 +144,17 @@ def test_item_review_schema_narrows_dynamic_references_to_current_batch():
     assert judgement["item_id"]["enum"] == ["copy_a", "copy_b"]
 
 
+def test_single_item_review_schema_forbids_self_peer_references():
+    payload = {
+        "kind": "final",
+        "rubric": [{"key": "safety"}],
+        "items": [{"item_id": "variant_a", "fields": {"title": "标题", "body": "正文"}}],
+    }
+    schema = response_parameter(item_review_response_type(payload))["json_schema"]["schema"]
+    related = schema["$defs"]["DynamicItemIssue"]["properties"]["related_item_ids"]
+    assert related["maxItems"] == 0
+
+
 def test_title_schema_uses_program_owned_idea_keys_and_adapter_binds_candidate_ids():
     payload = {
         "title_max_length": 20,

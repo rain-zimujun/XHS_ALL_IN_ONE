@@ -38,7 +38,7 @@ def report_case(tmp_path, monkeypatch):
 def exported(case):
     task, root, _ = case
     files = creative_report.export_report(task)["report_files"]
-    content = {f["file_name"].rsplit(".", 1)[1]: (root / "exports" / f["file_name"]).read_text() for f in files}
+    content = {f["file_name"].rsplit(".", 1)[1]: (root / "exports" / f["file_name"]).read_text(encoding="utf-8") for f in files}
     return content["html"], json.loads(content["json"])
 
 

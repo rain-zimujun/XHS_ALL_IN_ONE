@@ -160,7 +160,7 @@ class CreativeWorkflow:
         item = self.state["stages"][stage]
         if not dependency:
             if item["quality_revisions"] >= MAX_QUALITY_REVISIONS:
-                self.quality_stop("当前阶段已达到两次质量返工上限。")
+                self.quality_stop(f"当前阶段已达到 {MAX_QUALITY_REVISIONS} 次质量返工上限。")
             item["quality_revisions"] += 1
         previous = deepcopy(self.outputs[stage])
         # Dependency changes can rebind an affected group to its newly selected title.
@@ -212,7 +212,7 @@ class CreativeWorkflow:
         if not stages:
             self.quality_stop("终审未通过，但缺少可执行的责任阶段。")
         if any(self.state["stages"][s]["quality_revisions"] >= MAX_QUALITY_REVISIONS for s in stages):
-            self.quality_stop("责任阶段已达到两次质量返工上限。")
+            self.quality_stop(f"责任阶段已达到 {MAX_QUALITY_REVISIONS} 次质量返工上限。")
         self.invalidate_from(stages[0])
         changed_ideas, changed_copies = set(), set()
         for stage in PRODUCTION_ORDER[PRODUCTION_ORDER.index(stages[0]):]:
