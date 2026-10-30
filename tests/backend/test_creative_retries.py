@@ -3,11 +3,11 @@ import requests
 
 from backend.app.services.creative_analysis import CreativeError, request_analysis, retry_after_seconds
 from backend.app.services.creative_agents.revision import PipelineCancelled, RequestBudget
-from backend.app.services.creative_retries import request_with_retries
+from backend.app.services.creative_retries import NETWORK_RETRY_DELAYS, request_with_retries
 
 
-@pytest.mark.parametrize("success_at", [2, 3, 4, None])
-def test_three_retries_are_additional_and_every_request_is_counted(monkeypatch, success_at):
+@pytest.mark.parametrize("success_at", [2, 3, 4, len(NETWORK_RETRY_DELAYS) + 1, None])
+def test_network_retries_are_additional_and_every_request_is_counted(monkeypatch, success_at):
     calls, failures, waits = [], [], []
     monkeypatch.setattr("backend.app.services.creative_retries.time.sleep", waits.append)
     def complete(**kwargs):
@@ -24,13 +24,25 @@ def test_three_retries_are_additional_and_every_request_is_counted(monkeypatch, 
         with pytest.raises(CreativeError) as caught:
             run()
         assert caught.value.http_status == 524
-    expected = success_at or 4
+    expected = success_at or len(NETWORK_RETRY_DELAYS) + 1
     assert len(calls) == budget.request_count == expected
     assert all(call == {"fixture": "unchanged"} for call in calls)
     assert len(failures) == expected - (1 if success_at else 0)
-    assert sum(waits) == sum((15, 30, 60)[:expected - 1])
+    assert sum(waits) == sum(NETWORK_RETRY_DELAYS[:expected - 1])
     if not success_at:
-        assert [f["will_retry"] for f in failures] == [True, True, True, False]
+        assert [f["will_retry"] for f in failures] == [True] * len(NETWORK_RETRY_DELAYS) + [False]
+
+
+def test_exhausted_network_retries_name_the_cause_and_the_resume_entry(monkeypatch):
+    monkeypatch.setattr("backend.app.services.creative_retries.time.sleep", lambda _: None)
+    def fail(**_):
+        raise CreativeError("模型请求超时或连接中断", "ai_network_error", retryable=True)
+    with pytest.raises(CreativeError) as caught:
+        request_with_retries(RequestBudget(fail), before_attempt=lambda _: None, on_failure=lambda _: None)
+    message = str(caught.value)
+    assert caught.value.code == "ai_network_error"
+    assert "从失败阶段继续" in message
+    assert "等待几分钟" in message
 
 
 @pytest.mark.parametrize("status,retryable", [(408, True), (429, True), (500, True), (502, True), (503, True), (504, True), (524, True), (400, False), (401, False), (403, False), (404, False), (422, False)])

@@ -255,7 +255,7 @@ export function HotContentPage() {
         <Paragraph>已保存 {collection.payload.sources?.length || 0} 篇正文，失败 {collection.payload.failures?.length || 0} 篇。</Paragraph>
         {collection.payload.error && <Alert type="error" title={collection.payload.error} />}
         {collection.resume_available && <Alert type="info" title="可以从失败阶段继续" description={<Space orientation="vertical">
-          <Text>复用原任务的素材、创作设置、已完成稿件和有效批次，继续未完成部分。本轮执行窗口为 90 分钟，累计请求次数不清零。会再次调用原模型，可能产生费用；不会重新采集或重跑已完成阶段。</Text>
+          <Text>复用原任务的素材、创作设置、已完成稿件和有效批次，继续未完成部分。本轮执行窗口为 90 分钟，累计请求次数不清零。会再次调用原模型，可能产生费用；不会重新采集或重跑已完成阶段。若是模型超时或中转站中断，建议先等待几分钟再继续，避免连续失败。</Text>
           <Button type="primary" onClick={() => void resumeFailedTask()} loading={starting} disabled={collecting || searching}>从失败阶段继续</Button>
         </Space>} />}
         {collection.payload.failures?.map(f => <Paragraph key={f.note_id} type="secondary">{f.title || f.note_id}：{f.reason}</Paragraph>)}
