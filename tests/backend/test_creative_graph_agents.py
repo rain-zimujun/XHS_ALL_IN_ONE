@@ -70,7 +70,9 @@ def test_schema_and_business_failures_are_distinct_and_bounded(kind):
         if kind == "schema":
             output["observations"][0]["note_id"] = 123
         else:
-            output["observations"][0]["quote"] = "这句话不存在于原文"
+            # Duplicate evidence survives the response schema but violates the
+            # handoff rule, which is what this case must exercise.
+            output["topic_patterns"][0]["evidence"] = output["topic_patterns"][0]["evidence"] * 2
         return json.dumps(output)
     agent = build_agents(CompatibleChatModel(complete))["sample_analysis"]
     with pytest.raises(GraphOutputError) as caught:
@@ -82,21 +84,12 @@ def test_schema_and_business_failures_are_distinct_and_bounded(kind):
     assert calls[0]["response_format"] == calls[1]["response_format"] == calls[2]["response_format"]
 
 
-def test_sample_analysis_repair_prompt_reinforces_verbatim_quote_rules():
-    payload, calls = prepare_sample_input(SEARCH, sources(), OPTIONS), []
-
-    def complete(**kwargs):
-        calls.append(kwargs)
-        output = valid_output(payload)
-        if len(calls) == 1:
-            output["observations"][0]["quote"] = "这句话不存在于原文"
-        return json.dumps(output)
-
-    agent = build_agents(CompatibleChatModel(complete))["sample_analysis"]
-    result = agent.invoke(payload, validate_output=lambda value: validate_sample_evidence(value, payload))
-
-    assert len(result.attempts) == len(calls) == 2
-    assert "不得概括、补写、省略拼接" in calls[1]["user_prompt"]
+def test_sample_prompt_demands_long_verbatim_quotes():
+    # Unverifiable quotes are now dropped rather than retried, so the length
+    # requirement has to live in the prompt sent with every batch.
+    from backend.app.services.creative_agents.sample_analysis import SAMPLE_SYSTEM_PROMPT
+    assert "10～40 个字符的完整短语" in SAMPLE_SYSTEM_PROMPT
+    assert "不能只抄一两个字或一个词" in SAMPLE_SYSTEM_PROMPT
 
 
 def test_missing_nullable_field_is_invalid_and_provider_rejection_is_not_retried():

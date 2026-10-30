@@ -1,4 +1,4 @@
-"""Handwritten model responses for LangGraph, independent of legacy models.
+﻿"""Handwritten model responses for LangGraph, independent of legacy models.
 
 TypedDict describes each response; TypeAdapter supplies runtime validation and
 JSON Schema. Every model property is required, including nullable values.
@@ -13,7 +13,7 @@ from backend.app.schemas.creative import COPY_TAG_MAX_COUNT, COPY_TAG_MIN_COUNT,
 strict_response = with_config(ConfigDict(extra="forbid", str_strip_whitespace=True))
 Text = Annotated[str, Field(min_length=1, max_length=600)]
 NoteId = Annotated[str, Field(min_length=1, max_length=120)]
-Quote = Annotated[str, Field(min_length=2, max_length=180)]
+Quote = Annotated[str, Field(min_length=0, max_length=180)]
 IdeaId = Annotated[str, Field(min_length=1, max_length=40, pattern=r"^idea_[a-z0-9_]{1,39}$")]
 TitleId = Annotated[str, Field(pattern=r"^title_[a-z0-9_]{1,60}$")]
 CopyId = Annotated[str, Field(pattern=r"^copy_[a-z0-9_]{1,60}$")]
@@ -44,7 +44,7 @@ class Evidence(TypedDict):
 @strict_response
 class Finding(TypedDict):
     finding: Text
-    evidence: Annotated[list[Evidence], Field(min_length=1, max_length=8)]
+    evidence: Annotated[list[Evidence], Field(min_length=0, max_length=8)]
 
 
 @strict_response

@@ -143,6 +143,60 @@ def test_whitespace_recovery_shortens_overexpanded_source_quote_to_bounded_conti
     assert result.topic_patterns[0].evidence[0].quote == recovered
 
 
+def test_short_real_quote_is_extended_inside_the_same_field():
+    notes = sources()
+    notes[0]["content"] = "浅蓝薄纱与珍珠流苏链组成了这套礼服细节，适合做视觉参考。"
+    payload = prepare_sample_input(SEARCH, notes, OPTIONS)
+    output = valid_output(payload)
+    output["observations"][0]["quote"] = "薄纱"
+    output["topic_patterns"][0]["evidence"][0].update(
+        note_id=notes[0]["note_id"], field="body", quote="薄纱",
+    )
+    result = SampleAnalysis.model_validate(output)
+
+    validate_sample_evidence(result, payload)
+
+    recovered = result.observations[0].quote
+    assert recovered.startswith("薄纱")
+    assert len(recovered) >= 8
+    assert recovered in payload["sources"][0]["body_segments"][0]
+    assert result.topic_patterns[0].evidence[0].quote == recovered
+
+
+def test_unverifiable_evidence_is_dropped_with_a_disclosure():
+    notes = sources()
+    payload = prepare_sample_input(SEARCH, notes, OPTIONS)
+    output = valid_output(payload)
+    kept = output["topic_patterns"][0]
+    # A second, verifiable conclusion keeps the analysis usable after the bad one
+    # is removed.
+    output["topic_patterns"].append(copy.deepcopy(kept))
+    output["topic_patterns"][0]["evidence"] = [{
+        "note_id": kept["evidence"][0]["note_id"], "field": "body", "quote": "绣花",
+    }]
+    result = SampleAnalysis.model_validate(output)
+
+    validate_sample_evidence(result, payload)
+
+    assert len(result.topic_patterns) == 1
+    assert all(evidence.quote != "绣花" for finding in result.topic_patterns for evidence in finding.evidence)
+    assert any("程序校正" in line for line in result.limitations)
+
+
+def test_unverifiable_evidence_that_empties_the_analysis_still_fails():
+    notes = sources()
+    notes[0]["content"] = "浅蓝薄纱与珍珠流苏链组成了这套礼服细节。"
+    payload = prepare_sample_input(SEARCH, notes, OPTIONS)
+    output = valid_output(payload)
+    for finding in output["topic_patterns"] + output["style_patterns"]:
+        for evidence in finding["evidence"]:
+            evidence["quote"] = "绣花"
+    result = SampleAnalysis.model_validate(output)
+
+    with pytest.raises(AgentValidationError):
+        validate_sample_evidence(result, payload)
+
+
 def test_allowlist_excludes_account_config_raw_and_media_fields():
     notes = sources()
     notes[0].update(raw={"cookie": "source-private"}, author_name="private-author", images=["private-image"], note_url="private-url")
@@ -210,7 +264,7 @@ def test_output_metadata_and_stage_serialization_do_not_claim_quality_pass(count
     assert parsed.stages["audience"].status == "pending"
 
 
-@pytest.mark.parametrize("kind", ["omission", "duplicate_observation", "unknown_id", "fake_quote", "duplicate_evidence", "duplicate_dimension", "extra_copy"])
+@pytest.mark.parametrize("kind", ["omission", "duplicate_observation", "unknown_id", "duplicate_evidence", "duplicate_dimension", "extra_copy"])
 def test_reference_errors_use_only_one_bounded_repair(kind):
     def transform(result, call):
         if call > 1:
@@ -256,13 +310,19 @@ def test_whitespace_variation_and_unique_wrong_field_are_normalized_without_retr
 def test_quotes_must_be_in_a_single_transmitted_segment(quote_kind):
     notes = sources()
     notes[0]["content"] = "A" * 2000 + "省略区里的独有内容" + "B" * 2000
-    def transform(output, _call):
-        output["topic_patterns"][0]["evidence"][0]["quote"] = "省略区里的独有内容" if quote_kind == "omitted" else "AAAABBBB"
-        return output
-    complete = FakeCompletion(transform)
-    with pytest.raises(AgentRunError) as error:
-        run_sample_analysis(search=SEARCH, sources=notes, options=OPTIONS, complete=complete)
-    assert len(complete.calls) == len(error.value.attempts) == 2
+    payload = prepare_sample_input(SEARCH, notes, OPTIONS)
+    output = valid_output(payload)
+    bad = "省略区里的独有内容" if quote_kind == "omitted" else "AAAABBBB"
+    for finding in output["topic_patterns"] + output["style_patterns"]:
+        finding["evidence"] = [{
+            "note_id": notes[0]["note_id"], "field": "body", "quote": bad,
+        }]
+    result = SampleAnalysis.model_validate(output)
+
+    # The quote cannot be located, so it is never accepted as evidence; with no
+    # verifiable topic or style conclusion left, the batch stops.
+    with pytest.raises(AgentValidationError):
+        validate_sample_evidence(result, payload)
 
 
 def test_prompt_keeps_source_instructions_in_data_and_respects_user_brief():

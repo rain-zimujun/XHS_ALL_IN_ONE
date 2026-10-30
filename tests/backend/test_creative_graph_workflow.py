@@ -255,6 +255,29 @@ def test_passed_title_verdicts_are_frozen_after_a_rework_round():
     assert w.state["title_review"]["selected_candidate_ids"]["idea_1"].startswith("title_0_")
 
 
+def test_sample_analysis_retries_a_failed_batch_on_the_main_model():
+    main = GraphCompletion()
+    light_calls = []
+
+    def light(**kwargs):
+        light_calls.append(kwargs)
+        output = json.loads(main(**kwargs))
+        # Every conclusion loses its evidence, so the light model can never pass.
+        for finding in output["topic_patterns"] + output["style_patterns"]:
+            finding["evidence"] = []
+        return json.dumps(output, ensure_ascii=False)
+
+    w = LangGraphWorkflow(
+        search=SEARCH, sources=sources(),
+        options={"model_id": 1, "idea_count": 1, "variant_count": 2},
+        complete=main, preprocess_complete=light,
+    )
+    result, metadata = w.run()
+    assert result and light_calls
+    assert w.state["sample_analysis"] is not None
+    assert metadata["request_count"] > len(light_calls)
+
+
 def test_topic_response_schema_and_adapter_prevent_duplicate_source_references():
     class DuplicateTopicSources(GraphCompletion):
         def __call__(self, **kwargs):
@@ -939,7 +962,9 @@ def test_distinct_output_failure_reason_is_saved_in_global_state(kind):
         if kind == "schema":
             output["observations"][0]["note_id"] = 123
         else:
-            output["observations"][0]["quote"] = "未出现在样本中的引文"
+            # Duplicate evidence passes the response schema but violates the
+            # handoff rule; unverifiable quotes are salvaged elsewhere now.
+            output["topic_patterns"][0]["evidence"] = output["topic_patterns"][0]["evidence"] * 2
         return json.dumps(output)
     w = workflow(complete)
     with pytest.raises(CreativeError) as caught:

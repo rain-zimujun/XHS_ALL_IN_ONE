@@ -1,4 +1,4 @@
-"""Per-batch response contract for sample analysis."""
+﻿"""Per-batch response contract for sample analysis."""
 from __future__ import annotations
 
 from typing import Annotated
@@ -42,11 +42,11 @@ def sample_response_type(payload: dict) -> type:
     })
     finding = _strict("BoundSampleFinding", {
         "finding": Text,
-        "evidence": Annotated[list[evidence], Field(min_length=1, max_length=8)],
+        "evidence": Annotated[list[evidence], Field(min_length=0, max_length=8)],
     })
     style_finding = _strict("BoundSampleStyleFinding", {
         "finding": Text,
-        "evidence": Annotated[list[evidence], Field(min_length=1, max_length=8)],
+        "evidence": Annotated[list[evidence], Field(min_length=0, max_length=8)],
         "dimension": literal_values(
             ["title", "opening", "tone", "paragraphs", "emoji", "tags", "ending"], "样本风格维度",
         ),

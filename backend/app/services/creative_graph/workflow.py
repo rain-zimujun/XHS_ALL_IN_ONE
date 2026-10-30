@@ -6,7 +6,7 @@ and errors during a request; downstream nodes receive StateGraph's state.
 """
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from contextvars import copy_context
+from contextvars import ContextVar, copy_context
 from dataclasses import asdict
 from functools import partial
 from math import ceil
@@ -88,6 +88,11 @@ def estimate_graph_request_budget(source_count: int, options: dict) -> int:
     first_pass = (sample_batches * 2 + audience_calls + 2 + 1 + title_review_calls + 1
                   + copy_review_calls + idea_count * variant_count * 2)
     return min(MAX_GRAPH_REQUESTS, max(MIN_GRAPH_REQUESTS, first_pass * GRAPH_REQUEST_HEADROOM_MULTIPLIER))
+
+
+# Per-batch switch: when the light preprocessing model cannot produce a valid
+# batch, that batch is retried once with the configured main model.
+_USE_MAIN_TRANSPORT: ContextVar[bool] = ContextVar("creative_use_main_transport", default=False)
 
 
 def base_inputs(s):
@@ -227,6 +232,8 @@ class LangGraphWorkflow:
     def _recorded_transport(self, **kwargs):
         self._checkpoint(self.active_pipeline)
         transport = self.transports.get(self.current_role, self.transports["default"])
+        if _USE_MAIN_TRANSPORT.get():
+            transport = self.transports["default"]
         return transport(**kwargs)
 
     def _complete(self, **kwargs):
@@ -402,6 +409,26 @@ class LangGraphWorkflow:
             add_dependents(s, plan, "title", ids, output)
         return {role: output, "pipeline": pipeline, "revision_plan": plan}
 
+    def _sample_invoke(self, agent, payload, validator, *, on_progress=None, revision=None):
+        """Run a sample-analysis batch, retrying once on the main model.
+
+        The preprocessing model is a cost optimisation. When it cannot produce a
+        usable batch (schema/handoff failure), the same batch is retried with the
+        configured main model instead of failing the whole task.
+        """
+        try:
+            return agent.invoke(payload, validate_output=validator, on_progress=on_progress, revision=revision)
+        except GraphOutputError as exc:
+            if self.transports["sample_analysis"] is self.transports["default"]:
+                raise
+            diagnostic_event("样本分析改用主模型兜底", level="WARNING", stage="sample_analysis",
+                             attempts=len(exc.attempts), reason=str(exc)[:160])
+            token = _USE_MAIN_TRANSPORT.set(True)
+            try:
+                return agent.invoke(payload, validate_output=validator, on_progress=on_progress, revision=revision)
+            finally:
+                _USE_MAIN_TRANSPORT.reset(token)
+
     def sample_node(self, s: CreativeGraphState) -> SampleUpdate:
         filtered_sources, decisions = filter_sample_sources(
             s["sources"], keyword=s["search"]["keyword"], audience=s["options"].get("audience", ""),
@@ -431,7 +458,12 @@ class LangGraphWorkflow:
                 fingerprint_payload["sample_prompt_version"] = sample_analysis.SAMPLE_PROMPT_VERSION
                 batch["input_fingerprint"] = sample_analysis.content_fingerprint(fingerprint_payload)
         if len(batches) == 1:
-            return self._producer(s, "sample_analysis", payload, lambda r: sample_analysis.validate_sample_evidence(r, payload))
+            single_invoke = lambda agent, _payload, _validator, pipeline, revision: self._sample_invoke(
+                agent, payload, lambda r: sample_analysis.validate_sample_evidence(r, payload),
+                on_progress=lambda text: self._checkpoint(pipeline, text), revision=revision,
+            )
+            return self._producer(s, "sample_analysis", payload,
+                                  lambda r: sample_analysis.validate_sample_evidence(r, payload), invoke=single_invoke)
 
         def invoke(agent, _original, _validator, pipeline, _revision):
             stage_metadata = pipeline["stages"]["sample_analysis"]["metadata"]
@@ -468,9 +500,9 @@ class LangGraphWorkflow:
 
             def process(index, batch):
                 self._checkpoint(pipeline, f"样本分析 Agent · 批次 {index}/{len(batches)}（{len(batch['sources'])} 篇）")
-                run = agent.invoke(
-                    batch,
-                    validate_output=lambda result, current=batch: sample_analysis.validate_sample_evidence(result, current),
+                run = self._sample_invoke(
+                    agent, batch,
+                    lambda result, current=batch: sample_analysis.validate_sample_evidence(result, current),
                     on_progress=lambda text: self._checkpoint(pipeline, f"{text} · 批次 {index}/{len(batches)}"),
                 )
                 return batch["input_fingerprint"], run
