@@ -86,6 +86,33 @@ def test_invalid_image_bindings_repair_once(fault):
     assert "body" not in run.output.variants[0].model_dump()
 
 
+def test_generation_prompt_folds_the_negative_list_into_its_tail():
+    prompt = "竖版3:4，浅青灰薄纱礼服的腰部特写，柔光，胶片质感。"
+    composed = image_planning.compose_generation_prompt(prompt, "文字、水印、留白、边框")
+    assert composed.startswith(prompt)
+    assert composed.rstrip().endswith("边框。")
+    assert "画面中不要出现" in composed
+
+    # A prompt that already states its exclusions is left untouched.
+    stated = prompt + " 画面中不要出现文字和水印。"
+    assert image_planning.compose_generation_prompt(stated, "文字、水印") == stated
+    assert image_planning.compose_generation_prompt(prompt, "") == prompt
+
+
+def test_image_plan_normalization_makes_each_prompt_self_contained():
+    args = inputs()
+    payload = image_planning.prepare_image_input(**args, image_count_min=1, image_count_max=2)
+    output = valid_images(payload)
+    output["variants"][0]["image_plan"][0]["negative_prompt"] = "文字，水印，留白"
+    result = ImagePlans.model_validate(output)
+
+    image_planning.validate_image_plans(result, payload)
+    image_planning.normalize_image_prompts(result)
+
+    prompt = result.variants[0].image_plan[0].prompt
+    assert "画面中不要出现：文字，水印，留白。" in prompt
+
+
 def test_image_count_range_and_visual_brief_reach_the_plan():
     args = inputs()
     payload = image_planning.prepare_image_input(

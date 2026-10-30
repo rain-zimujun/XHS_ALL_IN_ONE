@@ -8,7 +8,9 @@ from typing_extensions import TypedDict
 
 from backend.app.schemas import creative_graph as responses
 from backend.app.schemas.creative_agents import ImagePlans, VariantImagePlan
-from backend.app.services.creative_agents.image_planning import IMAGE_AGENT as BASE_IMAGE_AGENT, validate_image_plans
+from backend.app.services.creative_agents.image_planning import (
+    IMAGE_AGENT as BASE_IMAGE_AGENT, normalize_image_prompts, validate_image_plans,
+)
 from backend.app.services.creative_agents.final_review import FINAL_REVIEW_AGENT as BASE_FINAL_AGENT
 from backend.app.services.creative_agents.title_generation import content_fingerprint
 from backend.app.services.creative_analysis import CreativeError
@@ -21,7 +23,7 @@ def _strict(name: str, annotations: dict) -> type:
     )
 
 
-IMAGE_BATCH_VERSION = "image-by-variant-v3"
+IMAGE_BATCH_VERSION = "image-by-variant-v4"
 FINAL_BATCH_VERSION = "final-by-variant-v2"
 IMAGE_AGENT = replace(BASE_IMAGE_AGENT, system_prompt=BASE_IMAGE_AGENT.system_prompt + """
 当前批次只为 locked_copies 中的一篇正文策划，variants 恰好一项。
@@ -114,6 +116,10 @@ def image_batch_revision(revision, batch):
 
 
 def merge_image_batches(results, payload, revision=None):
+    for result in results:
+        # Normalize only freshly produced plans: variants restored from the
+        # previous plan must stay byte-identical for the scope check.
+        normalize_image_prompts(result)
     variants = {v.variant_id: v for result in results for v in result.variants}
     expected = set(revision["target_ids"]) if revision else {v["variant_id"] for v in payload["locked_copies"]}
     if len(variants) != sum(len(r.variants) for r in results) or set(variants) != expected:

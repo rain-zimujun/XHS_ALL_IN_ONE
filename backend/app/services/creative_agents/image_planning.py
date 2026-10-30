@@ -1,4 +1,4 @@
-﻿"""M11: plan images for approved copy, without generating or downloading media."""
+"""M11: plan images for approved copy, without generating or downloading media."""
 from __future__ import annotations
 
 from functools import partial
@@ -18,7 +18,10 @@ IMAGE_AGENT = AgentSpec(stage="image", name="配图 Agent", temperature=0.5, sys
 每版按 image_count_min～image_count_max 张策划图片，根据本版正文而不是给全批共用泛化方案；不要为了凑数量重复画面，也不要少于最少张数。
 visual_preferences 是用户对画面效果的要求（例如简洁、全图不要文字、不留白、只做局部特写等），必须优先满足；但它只约束呈现方式，不能据此改写正文事实或虚构产品细节。
 每张说明 purpose（用途）、composition（主体、场景、构图、色彩、细节和文字留白）、aspect_ratio、search_description（找图描述）、prompt（完整生图提示词）和 negative_prompt。
-提示词应独立可用，不能依赖“同上”“照着原图”。用户要求图上不放文字时，把文字类元素写进 negative_prompt，并说明封面文字由用户后期排版。区分可生成的概念视觉与用户需提供的真实商品/案例素材。
+prompt 会直接粘贴到外部文生图平台使用，必须独立成篇、信息完整：先把 composition 里的主体、场景、构图、画面细节写进正文，再补镜头与视角、光线、色彩、材质、风格和画幅比例，建议 200～600 字，信息密集但不要堆砌同义词。
+prompt 的最后一段用自然语言写明「画面中不要出现……」：把 negative_prompt 的内容融进去（例如不要文字、不要水印、不要留白、不要边框），这样即使平台没有单独负向输入也能得到同样约束。
+negative_prompt 仍单独列出，便于支持独立负向输入的平台，内容必须与 prompt 最后一段一致、不互相矛盾。
+提示词应独立可用，不能依赖“同上”“照着原图”，也不要把几个方案写成同一段。用户要求图上不放文字时，明确写出文字类元素不要出现在画面中，并说明封面文字由用户后期排版。区分可生成的概念视觉与用户需提供的真实商品/案例素材。
 cover_text 独立给用户后期排版，不要求模型准确生成汉字。material_notes 记录需自行准备、核实或取得授权的素材，不放进发布正文。
 围绕标题承诺和正文内容服务读者，不能新增正文没有支持的效果、数据或品牌背书；不能把概念图伪装成真实产品或案例证据。
 没有样本原图，不得宣称已经分析原图构图或热门笔记图片趋势。
@@ -47,10 +50,28 @@ def prepare_image_input(*, copy_review, visual_preferences: str = "", image_coun
                            "candidate_id": item["candidate_id"], **item["fields"]} for item in payload["items"]],
         "visual_preferences": visual_preferences.strip(),
         "image_count_min": image_count_min, "image_count_max": image_count_max,
-        "prompt_version": "image-planning-v3",
+        "prompt_version": "image-planning-v4",
     })
     result["input_fingerprint"] = content_fingerprint(result)
     return result
+
+
+NEGATIVE_IN_PROMPT_MARKERS = ("不要出现", "避免出现", "禁止出现", "不要有", "不能出现")
+
+
+def compose_generation_prompt(prompt: str, negative_prompt: str) -> str:
+    """Make each prompt self-contained by folding the negative list into the tail.
+
+    The prompt is pasted into external text-to-image tools that may not offer a
+    separate negative field, so the constraints must also read as prose. Models
+    usually do this themselves; this is the deterministic fallback for the rest.
+    """
+    text = (prompt or "").strip()
+    negatives = " ".join((negative_prompt or "").split()).strip(" 。.;；")
+    if not negatives or any(marker in text for marker in NEGATIVE_IN_PROMPT_MARKERS):
+        return text
+    tail = f"画面中不要出现：{negatives}。"
+    return text if len(text) + len(tail) + 2 > 3000 else f"{text}\n\n{tail}"
 
 
 def validate_image_plans(result: ImagePlans, payload: dict) -> None:
@@ -72,10 +93,24 @@ def validate_image_plans(result: ImagePlans, payload: dict) -> None:
             )
 
 
+def normalize_image_prompts(plans: ImagePlans) -> ImagePlans:
+    """Fold negative constraints into every prompt once the plan is accepted.
+
+    Kept out of validate_image_plans on purpose: validation also runs while
+    reworked output is compared with the saved previous plan, and rewriting
+    content there would look like an out-of-scope change.
+    """
+    for variant in plans.variants:
+        for item in variant.image_plan:
+            item.prompt = compose_generation_prompt(item.prompt, item.negative_prompt)
+    return plans
+
+
 def _run_prepared(payload, complete, on_progress):
     run = run_agent(IMAGE_AGENT, input_payload=payload, output_model=ImagePlans, complete=complete, on_progress=on_progress,
                     validate_output=lambda result: validate_image_plans(result, payload))
-    return run, {"prompt_version": "image-planning-v3", "request_count": len(run.attempts),
+    normalize_image_prompts(run.output)
+    return run, {"prompt_version": "image-planning-v4", "request_count": len(run.attempts),
                  "variant_count": len(run.output.variants), "quality_review_status": "not_reviewed"}
 
 
