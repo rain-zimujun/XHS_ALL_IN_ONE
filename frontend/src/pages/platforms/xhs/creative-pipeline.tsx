@@ -67,7 +67,7 @@ export function CreativePipelineProgress({ pipeline }: { pipeline: CreativePipel
         </Col>;
       })}
     </Row>
-    <Typography.Text type="secondary">已发出 {pipeline.request_count} / {pipeline.max_requests} 次模型请求（包括评审、网络重试、格式修复和质量返工）。临时网络故障最多额外重试 3 次；阶段进度不是剩余耗时估计。</Typography.Text>
+    <Typography.Text type="secondary">已发出 {pipeline.request_count} / {pipeline.max_requests} 次模型请求（包括评审、网络重试、格式修复和质量返工）。临时网络故障最多额外重试 5 次；阶段进度不是剩余耗时估计。</Typography.Text>
     {pipeline.status === "revision_required" && <Alert type="warning" title="达到返工上限，仍有内容未通过评审" description="稿件、评分和修改意见已保留，不会将其作为已通过成稿。重新生成会创建新任务并再次调用模型，不会自动续跑。" />}
     {pipeline.status === "failed" && <Alert type="info" title="已保存完成阶段的稿件与评审" description="本次没有继续调用模型。若是超时，请先核对中转服务记录，避免重复计费。" />}
     {(approvedClaimCount !== undefined || rejectedClaims.length > 0) && <Collapse items={[{
