@@ -65,8 +65,12 @@ class CreativePipelineState(BaseModel):
 
 
 def new_pipeline_state() -> dict[str, Any]:
+    # The recorded limit must follow the same constant the workflow enforces,
+    # otherwise the UI shows a rework budget the graph never uses.
+    from backend.app.services.creative_agents.revision import MAX_QUALITY_REVISIONS
     return CreativePipelineState(
-        stages={stage: CreativeStageState(stage=stage) for stage in PIPELINE_STAGE_ORDER}
+        stages={stage: CreativeStageState(stage=stage) for stage in PIPELINE_STAGE_ORDER},
+        max_quality_revisions=MAX_QUALITY_REVISIONS,
     ).model_dump(mode="json")
 
 

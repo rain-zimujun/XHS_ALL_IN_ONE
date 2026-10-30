@@ -31,7 +31,10 @@ def test_quality_review_cannot_claim_pass_with_blocking_issues():
 
 
 def test_pipeline_state_is_serializable_and_tracks_attempts():
+    from backend.app.services.creative_agents.revision import MAX_QUALITY_REVISIONS
     state = new_pipeline_state()
+    # The recorded budget must match what the workflow actually enforces.
+    assert state["max_quality_revisions"] == MAX_QUALITY_REVISIONS
     assert validate_pipeline_state(state).current_stage is None
     state = begin_stage(state, "title")
     assert state["current_stage"] == "title"
