@@ -3,6 +3,14 @@
 > 这份文档用于记录本 Fork 的项目理解、产品决策、技术改动、验证结果和可复用的简历素材。
 > 每完成一个小任务都要更新：日期、问题背景、实现方式、测试结果、提交号和后续边界。
 
+### 2026-10-30 严格响应 Schema 去掉 uniqueItems（中转站拒绝该关键字）
+
+- 现象：真实运行在读者需求阶段收到 HTTP 400，上游提示 `Invalid schema for response_format 'AudienceGroupingResponse': In context=('properties', 'claim_ids'), 'uniqueItems' is not permitted`。同一份 Schema 此前可用，说明是中转站收紧了对严格 JSON Schema 关键字的校验；去掉配图新增参数后仍复现，与配图改动无关。
+- 实现：从受众分组、受众需求与选题证据的动态响应 Schema 中移除 `uniqueItems`（`audience.py` 两处、`source_schema.py` 两处）。唯一性仍由本地 `AfterValidator(_unique)`、稳定去重和业务校验保证，没有放宽要求。
+- 护栏：`assert_strict_contract()` 增加断言，任何生成 Schema 出现 `uniqueItems` 都会让相关测试失败，避免以后再把该关键字加回去。
+- 验证：结构化输出、受众、Agent、选题专项 **124 项通过**。
+- 边界：本次只删除该关键字；长度、枚举、`pattern` 等关键字此前可用，未改动。真实链路验证按用户要求推迟，等确认后再跑。
+
 ### 2026-10-30 配图数量区间与画面要求可配置
 
 - 背景：配图策划此前固定「每版 1～6 张」，且没有把用户的画面要求传进配图 Agent；用户希望按篇配置大致张数（如 5～9 张），并能补充「简洁、全图不要文字、不留白」这类效果要求。

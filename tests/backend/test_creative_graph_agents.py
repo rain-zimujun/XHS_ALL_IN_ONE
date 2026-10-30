@@ -1,4 +1,4 @@
-import json
+﻿import json
 from types import SimpleNamespace
 
 import pytest
@@ -203,7 +203,8 @@ def test_topic_schema_limits_evidence_claim_ids_to_current_approved_registry():
     evidence = schema["$defs"]["BoundTopicEvidence"]["properties"]
     claim_ref = evidence["claim_ids"]["items"]
     assert claim_ref.get("enum", [claim_ref.get("const")]) == ["claim_001_001"]
-    assert evidence["claim_ids"]["uniqueItems"] is True
+    # The relay rejects uniqueItems in strict response schemas; uniqueness is enforced locally.
+    assert "uniqueItems" not in evidence["claim_ids"]
     assert evidence["note_ids"]["items"]["enum"] == payload["sample_note_ids"]
 
 

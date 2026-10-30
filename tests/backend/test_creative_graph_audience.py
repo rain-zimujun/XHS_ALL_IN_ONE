@@ -1,4 +1,4 @@
-import copy
+﻿import copy
 import hashlib
 import json
 
@@ -101,7 +101,7 @@ def test_needs_are_batched_per_segment_with_bound_enums_and_compact_inputs():
             refs = schema["$defs"][name]["properties"][field]
             allowed = refs["items"].get("enum", [refs["items"].get("const")])
             assert len(allowed) == 1
-            assert refs["uniqueItems"] is True
+            assert "uniqueItems" not in refs
     assert metadata["audience_steps"]["groups"]
 
 

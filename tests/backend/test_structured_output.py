@@ -25,6 +25,9 @@ OUTPUT_MODELS = [
 def assert_strict_contract(node, root):
     if isinstance(node, dict):
         assert "default" not in node
+        # The configured relay rejects uniqueItems in strict response schemas;
+        # uniqueness is enforced by local validators instead.
+        assert "uniqueItems" not in node
         if node.get("type") == "object":
             assert node["additionalProperties"] is False
             assert set(node["required"]) == set(node["properties"])

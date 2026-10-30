@@ -42,10 +42,9 @@ def topic_response_type(payload: dict) -> type:
     """Bind topic evidence and audience references to the current state."""
     segment_type = literal_values(payload["audience_segment_ids"], "受众分组")
     note_type = Annotated[list[literal_values(payload["sample_note_ids"], "样本 note_id")],
-                          Field(max_length=8, json_schema_extra={"uniqueItems": True})]
+                          Field(max_length=8)]
     claim_ids = payload.get("approved_claim_ids", [])
-    claim_type = (Annotated[list[literal_values(claim_ids, "获批 claim_id")],
-                           Field(max_length=8, json_schema_extra={"uniqueItems": True})]
+    claim_type = (Annotated[list[literal_values(claim_ids, "获批 claim_id")], Field(max_length=8)]
                   if claim_ids else Annotated[list[str], Field(max_length=0)])
     evidence = _strict("BoundTopicEvidence", {
         "basis": Literal["sample_pattern", "sample_observation", "user_requirement"],

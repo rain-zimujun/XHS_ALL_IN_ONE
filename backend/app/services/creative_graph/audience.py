@@ -67,7 +67,7 @@ def _strict(name: str, annotations: dict) -> type:
 def _claim_ids_type(claim_ids):
     if claim_ids:
         ref = Literal[tuple(dict.fromkeys(claim_ids))]
-        return Annotated[list[ref], Field(max_length=8, json_schema_extra={"uniqueItems": True}), AfterValidator(_unique)]
+        return Annotated[list[ref], Field(max_length=8), AfterValidator(_unique)]
     return Annotated[list[str], Field(max_length=0)]
 
 
@@ -97,8 +97,7 @@ def audience_grouping_response_type(note_ids, claim_ids=()):
 def needs_response(segment_ids, note_ids=(), claim_ids=()):
     """Keep handwritten TypedDict roles; specialize refs for this invocation."""
     ref = Literal[tuple(segment_ids)]
-    refs = Annotated[list[ref], Field(min_length=1, max_length=len(segment_ids),
-                                    json_schema_extra={"uniqueItems": True}), AfterValidator(_unique)]
+    refs = Annotated[list[ref], Field(min_length=1, max_length=len(segment_ids)), AfterValidator(_unique)]
 
     evidence_type = _strict("BoundAudienceEvidence", {
         "basis": Literal["sample_evidence", "user_requirement", "hypothesis"],

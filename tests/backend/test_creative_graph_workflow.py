@@ -299,8 +299,8 @@ def test_topic_response_schema_and_adapter_prevent_duplicate_source_references()
     call = next(item for item in model.wire_calls if item["response_format"]["json_schema"]["name"] == "TopicResponse")
     schema = call["response_format"]["json_schema"]["schema"]
     evidence = schema["$defs"]["BoundTopicEvidence"]["properties"]
-    assert evidence["note_ids"]["uniqueItems"] is True
-    assert evidence["claim_ids"]["uniqueItems"] is True
+    assert "uniqueItems" not in evidence["note_ids"]
+    assert "uniqueItems" not in evidence["claim_ids"]
     assert "source_note_ids" not in schema["$defs"]["BoundTopicIdea"]["properties"]
     assert len(result["ideas"]) == 1
 
