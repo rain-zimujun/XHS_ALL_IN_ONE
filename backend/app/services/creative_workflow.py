@@ -1,4 +1,4 @@
-"""Persistable, bounded creative workflow; no model-selected tools or external actions.
+﻿"""Persistable, bounded creative workflow; no model-selected tools or external actions.
 
 Only verified outputs created inside this run are passed downstream. Old drafts
 remain in stage history; invalidated reviews never authorize a new final result.
@@ -28,7 +28,7 @@ from backend.app.services.creative_analysis import CreativeError, owned_text_mod
 from backend.app.services.creative_orchestrator import AgentRunError
 from backend.app.services.creative_pipeline import new_pipeline_state, utc_now, validate_pipeline_state
 from backend.app.services.creative_diagnostics import diagnostic_event
-from backend.app.services.creative_retries import request_with_retries
+from backend.app.services.creative_retries import NETWORK_ATTEMPTS, request_with_retries
 
 
 PRODUCERS = {"topic": run_topic_selection, "title": run_title_generation, "copy": run_copy_generation, "image": run_image_planning}
@@ -67,11 +67,12 @@ class CreativeWorkflow:
         return raw
 
     def _network_progress(self, retry):
-        self.save(f"当前 Agent 正在进行网络重试 {retry}/3" if retry else None)
+        self.save(f"当前 Agent 正在进行网络重试（第 {retry + 1}/{NETWORK_ATTEMPTS} 次请求）" if retry else None)
 
     def _network_failure(self, record):
         self.state["stages"][self.current]["metadata"].setdefault("network_attempts", []).append(record)
-        self.save(f"网络异常，{record['wait_seconds']:g} 秒后重试 {record['attempt']}/3" if record["will_retry"] else "当前模型请求的网络重试已停止")
+        self.save(f"网络异常，{record['wait_seconds']:g} 秒后重试（第 {record['attempt']}/{NETWORK_ATTEMPTS} 次请求）"
+                  if record["will_retry"] else "当前模型请求的网络重试已停止")
 
     def recorded_transport(self, **kwargs):
         self.save()  # RequestBudget has now counted the attempted request.

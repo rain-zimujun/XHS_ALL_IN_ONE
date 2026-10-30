@@ -278,6 +278,20 @@ def test_sample_analysis_retries_a_failed_batch_on_the_main_model():
     assert metadata["request_count"] > len(light_calls)
 
 
+def test_network_retry_label_follows_the_configured_attempt_budget():
+    from backend.app.services.creative_retries import NETWORK_ATTEMPTS
+    w = workflow(GraphCompletion())
+    w.current = w.current_role = "image"
+    w._network_failure({"attempt": 4, "max_retries": NETWORK_ATTEMPTS - 1, "wait_seconds": 90,
+                        "will_retry": True, "error_code": "ai_http_error", "http_status": 524,
+                        "error": "模型服务返回错误（HTTP 524）", "duration_ms": 1500})
+    activity = w.active_pipeline["activity"]
+    assert f"/{NETWORK_ATTEMPTS} 次请求" in activity
+    assert "90 秒" in activity
+    w._network_progress(3)
+    assert f"/{NETWORK_ATTEMPTS} 次请求" in w.active_pipeline["activity"]
+
+
 def test_topic_response_schema_and_adapter_prevent_duplicate_source_references():
     class DuplicateTopicSources(GraphCompletion):
         def __call__(self, **kwargs):

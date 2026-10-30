@@ -6,6 +6,7 @@ from backend.app.services.creative_diagnostics import diagnostic_event
 
 
 NETWORK_RETRY_DELAYS = (15, 30, 60, 90, 120)  # Five retries after the initial request.
+NETWORK_ATTEMPTS = len(NETWORK_RETRY_DELAYS) + 1  # Initial request plus retries.
 MAX_RETRY_WAIT_SECONDS = 300
 
 

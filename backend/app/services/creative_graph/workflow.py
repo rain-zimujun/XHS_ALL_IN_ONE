@@ -54,7 +54,7 @@ from backend.app.services.creative_graph.state import (
 )
 from backend.app.services.creative_pipeline import new_pipeline_state, utc_now, validate_pipeline_state
 from backend.app.services.creative_diagnostics import diagnostic_event
-from backend.app.services.creative_retries import request_with_retries
+from backend.app.services.creative_retries import NETWORK_ATTEMPTS, request_with_retries
 from backend.app.services.creative_orchestrator import AgentRun, AgentValidationError
 
 
@@ -248,13 +248,16 @@ class LangGraphWorkflow:
         return raw
 
     def _network_progress(self, retry):
-        activity = f"{self.agents[self.current_role].spec.name} · 正在进行网络重试 {retry}/3" if retry else None
+        # Keep the label in step with NETWORK_RETRY_DELAYS instead of hardcoding.
+        activity = (f"{self.agents[self.current_role].spec.name} · 正在进行网络重试"
+                    f"（第 {retry + 1}/{NETWORK_ATTEMPTS} 次请求）" if retry else None)
         self._checkpoint(self.active_pipeline, activity)
 
     def _network_failure(self, record):
         item = self.active_pipeline["stages"][self.current]
         item["metadata"].setdefault("network_attempts", []).append({**record, "role": self.current_role})
-        activity = (f"{self.agents[self.current_role].spec.name} · 网络异常，{record['wait_seconds']:g} 秒后重试 {record['attempt']}/3"
+        activity = (f"{self.agents[self.current_role].spec.name} · 网络异常，{record['wait_seconds']:g} 秒后重试"
+                    f"（第 {record['attempt']}/{NETWORK_ATTEMPTS} 次请求）"
                     if record["will_retry"] else "当前模型请求的网络重试已停止")
         self._checkpoint(self.active_pipeline, activity)
 
