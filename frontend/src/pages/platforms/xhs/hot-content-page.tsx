@@ -1,9 +1,9 @@
-﻿import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import { Alert, Button, Card, Col, Collapse, Empty, Form, Input, Pagination, Progress, Row, Select, Space, Table, Tag, Typography } from "antd";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { analyzeCreativeCollection, cancelCreativeRun, collectCreativeNotes, fetchAccounts, fetchCreativeHistory, fetchCreativeRun, fetchModelConfigs, resumeCreativeRun, searchCreativeNotes } from "../../../lib/api";
+import { analyzeCreativeCollection, cancelCreativeRun, collectCreativeNotes, fetchAccounts, fetchCreativeHistory, fetchCreativeRun, fetchModelConfigs, pauseCreativeRun, resumeCreativeRun, searchCreativeNotes } from "../../../lib/api";
 import type { ModelConfig, PlatformAccount, XhsSearchNote } from "../../../types";
 import type { CreativeAnalysisOptions, CreativeHistoryItem, CreativeRun, CreativeSearch } from "../../../types/creative";
 import { CreativeResults } from "./creative-results";
@@ -20,7 +20,7 @@ const timeOptions = [
   { value: 0, label: "不限时间" }, { value: 1, label: "一天内" },
   { value: 2, label: "一周内" }, { value: 3, label: "半年内" },
 ];
-const statusNames: Record<string, string> = { pending: "等待中", running: "进行中", completed: "已完成", failed: "失败", cancelled: "已停止" };
+const statusNames: Record<string, string> = { pending: "等待中", running: "进行中", completed: "已完成", failed: "失败", paused: "已暂停", cancelled: "已停止" };
 
 export function HotContentPage() {
   const [accounts, setAccounts] = useState<PlatformAccount[]>([]);
@@ -133,6 +133,12 @@ export function HotContentPage() {
     if (!collection) return;
     try { setCollection(await cancelCreativeRun(collection.id)); void loadHistory(); }
     catch { setError("停止请求未成功，请重试。"); }
+  }
+
+  async function pauseTask() {
+    if (!collection) return;
+    try { setCollection(await pauseCreativeRun(collection.id)); void loadHistory(); }
+    catch { setError("暂停请求未成功。只有 LangGraph 任务支持暂停，其他生成方式可先停止再重新生成。"); }
   }
 
   async function resumeFailedTask() {
@@ -258,15 +264,25 @@ export function HotContentPage() {
         {workflow !== "legacy" && <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>当前使用{workflow === "langgraph" ? " LangGraph 试用流程" : "多 Agent"}：样本 → 受众 → 选题 → 标题 → 正文 → 配图 → 终审。{workflow === "langgraph" ? `配图与终审逐篇处理，样本分批较多时标题和正文评审也会拆到单项；每批完成后保存进度。当前数量首次全部通过约需 ${7 + 2 * ideaCount + 2 * ideaCount * variantCount} 次模型请求，累计上限会按采集数量和输出批次数自适应（至少 72 次、最多 512 次），每轮执行窗口为 90 分钟。` : "首次全部通过通常为 10 次模型请求，任务总计最多 36 次，每轮执行窗口为 30 分钟。"}每个生产阶段最多质量返工 3 次，执行窗口到期后不再开始新请求。模型评分仅供参考，仍需人工确认。</Paragraph>}
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>点击生成会将样本文字发送给所选模型服务，按其规则计费；每次请求读取超时为 3 分钟。多 Agent 与 LangGraph 遇到临时网络故障最多额外重试 5 次，通常分别等待 15、30、60、90、120 秒；格式修复另计，最多一次。超时的原请求仍可能完成并计费。LangGraph 模型服务失败或执行窗口到期，可在累计请求次数未用尽时从失败阶段继续；停止任务无法撤回已发出的请求。</Paragraph>
       </Card>
-      {collection && <Card title={`创作任务 #${collection.id} · ${collection.payload.search.keyword}`} extra={collecting && <Button onClick={() => void stopTask()}>停止任务</Button>}>
+      {collection && <Card title={`创作任务 #${collection.id} · ${collection.payload.search.keyword}`} extra={collecting ? <Space>
+        {collection.payload.analysis?.workflow === "langgraph" && <Button onClick={() => void pauseTask()} loading={starting}>暂停</Button>}
+        <Button onClick={() => void stopTask()}>停止任务</Button>
+      </Space> : collection.status === "paused" ? <Space>
+        <Button type="primary" onClick={() => void resumeFailedTask()} loading={starting}>继续</Button>
+        <Button onClick={() => void stopTask()}>放弃任务</Button>
+      </Space> : undefined}>
         <Text>{collection.status === "failed" || collection.status === "cancelled" ? statusNames[collection.status] : collection.payload.stage || statusNames[collection.status] || collection.status}</Text>
         <Progress percent={collection.progress} status={collection.status === "failed" ? "exception" : collecting ? "active" : "normal"} />
         {collection.payload.pipeline && <CreativePipelineProgress pipeline={collection.payload.pipeline} />}
         <Paragraph>已保存 {collection.payload.sources?.length || 0} 篇正文，失败 {collection.payload.failures?.length || 0} 篇。</Paragraph>
         {collection.payload.error && <Alert type="error" title={collection.payload.error} />}
-        {collection.resume_available && <Alert type="info" title="可以从失败阶段继续" description={<Space orientation="vertical">
+        {collection.resume_available && collection.status !== "paused" && <Alert type="info" title="可以从失败阶段继续" description={<Space orientation="vertical">
           <Text>复用原任务的素材、创作设置、已完成稿件和有效批次，继续未完成部分。本轮执行窗口为 90 分钟，累计请求次数不清零。会再次调用原模型，可能产生费用；不会重新采集或重跑已完成阶段。若是模型超时或中转站中断，建议先等待几分钟再继续，避免连续失败。</Text>
           <Button type="primary" onClick={() => void resumeFailedTask()} loading={starting} disabled={collecting || searching}>从失败阶段继续</Button>
+        </Space>} />}
+        {collection.status === "paused" && <Alert type="info" title="任务已暂停" description={<Space orientation="vertical">
+          <Text>已完成阶段和批次都已保存，点「继续」会从暂停的节点重新进入，已完成的批次直接复用，不会重跑前面的内容。暂停时正在发出的请求可能已经完成并计费。</Text>
+          <Button type="primary" onClick={() => void resumeFailedTask()} loading={starting}>从暂停处继续</Button>
         </Space>} />}
         {collection.payload.failures?.map(f => <Paragraph key={f.note_id} type="secondary">{f.title || f.note_id}：{f.reason}</Paragraph>)}
       </Card>}

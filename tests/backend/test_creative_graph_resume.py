@@ -1,4 +1,4 @@
-import copy
+﻿import copy
 import json
 from types import SimpleNamespace
 
@@ -56,17 +56,67 @@ def test_resume_starts_at_exact_agent_preserving_every_upstream_artifact(failed_
     assert task.payload == before
 
 
+def test_paused_snapshot_resumes_without_an_error_whitelist():
+    model = GraphCompletion()
+    def complete(**kwargs):
+        if kwargs["response_format"]["json_schema"]["name"] == "TitleResponse":
+            raise CreativeError("模型服务返回错误（HTTP 401）", "ai_http_error", http_status=401)
+        return model(**kwargs)
+    original = workflow(complete)
+    with pytest.raises(CreativeError):
+        original.run()
+    saved = copy.deepcopy(original.state)
+    saved["options"]["workflow"] = "langgraph"
+    pipeline = saved["pipeline"]
+    # A user pause keeps the same snapshot shape but is not a failure.
+    pipeline.update(status="paused", error_code="creative_paused")
+    stage = pipeline["current_stage"]
+    pipeline["stages"][stage]["status"] = "paused"
+    task = SimpleNamespace(status="paused", error_type=None, payload={
+        "analysis": copy.deepcopy(saved["options"]), "search": saved["search"],
+        "sources": saved["sources"], "graph_state": saved,
+    })
+
+    restored, role = prepare_resume(task)
+    assert role == "title"
+    resumed = LangGraphWorkflow(search=restored["search"], sources=restored["sources"],
+                                options=restored["options"], complete=GraphCompletion(),
+                                resume_state=restored, resume_role=role)
+    result, _ = resumed.run()
+    assert result["ideas"]
+
+
+def test_paused_snapshot_without_a_paused_stage_is_rejected():
+    model = GraphCompletion()
+    def complete(**kwargs):
+        if kwargs["response_format"]["json_schema"]["name"] == "TitleResponse":
+            raise CreativeError("模型服务返回错误（HTTP 401）", "ai_http_error", http_status=401)
+        return model(**kwargs)
+    original = workflow(complete)
+    with pytest.raises(CreativeError):
+        original.run()
+    saved = copy.deepcopy(original.state)
+    saved["options"]["workflow"] = "langgraph"
+    task = SimpleNamespace(status="paused", error_type=None, payload={
+        "analysis": copy.deepcopy(saved["options"]), "search": saved["search"],
+        "sources": saved["sources"], "graph_state": saved,
+    })
+    with pytest.raises(CreativeError):
+        prepare_resume(task)
+
+
 def test_resume_api_preserves_original_and_is_idempotent_with_ownership(env):
     failing = GraphCompletion(timeout_stage="title_review")
     install_client(failing)
     original = collect_for_analysis(env, {"model_id": env.model_id, "workflow": "langgraph", "idea_count": 1, "variant_count": 2})
     assert original["status"] == "failed"
     assert original["resume_available"] is True
-    assert failing.counts["title_review"] == 4
+    from backend.app.services.creative_retries import NETWORK_ATTEMPTS
+    assert failing.counts["title_review"] == NETWORK_ATTEMPTS
     failed_pipeline = copy.deepcopy(original["payload"]["pipeline"])
     failed_network = failed_pipeline["stages"]["title"]["metadata"]["network_attempts"]
-    assert len(failed_network) == 4
-    assert [r["will_retry"] for r in failed_network] == [True, True, True, False]
+    assert len(failed_network) == NETWORK_ATTEMPTS
+    assert [r["will_retry"] for r in failed_network] == [True] * (NETWORK_ATTEMPTS - 1) + [False]
     assert env.client.post(f"/api/xhs/creative/runs/{original['id']}/resume", headers=env.other_headers).status_code == 404
     recovery = GraphCompletion()
     install_client(recovery)
@@ -78,7 +128,7 @@ def test_resume_api_preserves_original_and_is_idempotent_with_ownership(env):
     assert child["parent_task_id"] == original["id"]
     assert child["payload"]["resume"]["role"] == "title_review"
     assert child["payload"]["sources"] == original["payload"]["sources"]
-    assert child["payload"]["pipeline"]["request_count"] == 19
+    assert child["payload"]["pipeline"]["request_count"] == 21
     assert child["payload"]["graph_state"]["pipeline"] == child["payload"]["pipeline"]
     assert len(recovery.calls) == 7
     assert recovery.wire_calls[0]["response_format"]["json_schema"]["name"] == "TitleReviewResponse"

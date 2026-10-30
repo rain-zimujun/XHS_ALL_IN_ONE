@@ -10,18 +10,51 @@ from backend.app.models import Note, Task, User
 from backend.app.services.creative_analysis import CreativeError, analyze_sources
 from backend.app.services.creative_report import export_report
 from backend.app.services.creative_workflow import analyze_multi_agent
-from backend.app.services.creative_agents.revision import PipelineCancelled
+from backend.app.services.creative_agents.revision import PipelineCancelled, PipelinePaused
 from backend.app.services.creative_diagnostics import diagnostic_context, diagnostic_event, exception_details
 
 
 RunCancelled = PipelineCancelled
+RunPaused = PipelinePaused
 
 
 def checkpoint(db, task: Task, **updates):
     db.refresh(task)
     if task.status == "cancelled":
         raise RunCancelled()
+    # Pausing is only meaningful for the resumable LangGraph pipeline. The flag
+    # is cleared when raised so the paused snapshot can still be written without
+    # tripping the same check again.
+    if (task.status == "running" and ((task.payload or {}).get("analysis") or {}).get("workflow") == "langgraph"
+            and (task.payload or {}).get("pause_requested")):
+        task.payload = {**(task.payload or {}), "pause_requested": False}
+        db.commit()
+        raise RunPaused()
     task.payload = {**(task.payload or {}), **updates}
+    db.commit()
+
+
+def mark_paused(db, task: Task) -> None:
+    """Persist a user pause without treating it as a failure."""
+    db.refresh(task)
+    if task.status != "running":
+        return
+    task.status = "paused"
+    task.error_type = None
+    task.finished_at = shanghai_now()
+    payload = {**(task.payload or {}), "stage": "已暂停，可从暂停处继续"}
+    pipeline = payload.get("pipeline")
+    if pipeline and pipeline.get("status") != "paused":
+        pip = {**pipeline, "status": "paused", "error_code": "creative_paused", "activity": "已暂停，可从暂停处继续"}
+        stage = pip.get("current_stage")
+        stages = pip.get("stages") or {}
+        if stage in stages:
+            item = stages[stage]
+            pip["stages"] = {**stages, stage: {**item, "status": "paused" if item.get("status") == "running" else item.get("status")}}
+        payload["pipeline"] = pip
+        if payload.get("graph_state"):
+            payload["graph_state"] = {**payload["graph_state"], "pipeline": pip, "result": None, "metadata": {}}
+    task.payload = payload
     db.commit()
 
 
@@ -117,6 +150,8 @@ def analyze_collection(task_id: int, session_factory, client_factory):
             db.commit()
         except RunCancelled:
             pass
+        except RunPaused:
+            mark_paused(db, task)
         except Exception as exc:
             fail_task(db, task, exc, "AI 分析失败，请检查模型配置或网络后重新生成。采集数据已保留。")
 
@@ -185,6 +220,8 @@ def collect_samples(task_id: int, session_factory, adapter_factory, client_facto
         except RunCancelled:
             task.finished_at = shanghai_now()
             db.commit()
+        except RunPaused:
+            mark_paused(db, task)
         except Exception as exc:
             fail_task(db, task, exc, "任务失败，请检查账号、模型配置或网络后重试；已采集的正文仍保留。")
 

@@ -53,7 +53,8 @@ def prepare_resume(task):
     """Never accepts client-supplied artifacts, sources, role or options."""
     try:
         payload = task.payload or {}
-        if task.status != "failed":
+        paused = task.status == "paused"
+        if task.status not in ("failed", "paused"):
             raise ValueError("not a resumable failure")
         if payload.get("analysis", {}).get("workflow") != "langgraph":
             raise ValueError("not LangGraph")
@@ -66,7 +67,11 @@ def prepare_resume(task):
             raise ValueError("incomplete state")
         pipeline = validate_pipeline_state(state["pipeline"]).model_dump(mode="json")
         stage = pipeline["current_stage"]
-        if pipeline["status"] != "failed" or stage not in pipeline["stages"] or pipeline["stages"][stage]["status"] != "failed":
+        if paused:
+            if (pipeline["status"] != "paused" or stage not in pipeline["stages"]
+                    or pipeline["stages"][stage]["status"] not in ("paused", "running")):
+                raise ValueError("not paused at a model stage")
+        elif pipeline["status"] != "failed" or stage not in pipeline["stages"] or pipeline["stages"][stage]["status"] != "failed":
             raise ValueError("not failed at a model stage")
         if state["result"] is not None or state["search"] != payload["search"] or state["sources"] != payload["sources"]:
             raise ValueError("mismatched snapshot")
@@ -75,7 +80,11 @@ def prepare_resume(task):
         if saved_options != options:
             raise ValueError("changed options")
         item = pipeline["stages"][stage]
-        if task.error_type == INTERRUPTED_CODE:
+        if paused:
+            # A deliberate pause needs no error whitelist: the snapshot
+            # consistency and the remaining request budget are the only gates.
+            pass
+        elif task.error_type == INTERRUPTED_CODE:
             # A process restart is not a model/business failure. It is safe to
             # continue only when startup recovery marked both persisted copies
             # consistently and the original cumulative budget still has room.
@@ -205,7 +214,8 @@ def prepare_resume(task):
             if detail and detail.get("reason") != "time":
                 raise ValueError("not a time budget failure")
         item.update(status="pending", error=None)
-        pipeline.update(status="pending", error_code=None, activity="等待从失败阶段继续")
+        pipeline.update(status="pending", error_code=None,
+                        activity="等待从暂停处继续" if paused else "等待从失败阶段继续")
         state.update(pipeline=pipeline, result=None, metadata={})
         return state, role
     except (KeyError, TypeError, ValueError, AttributeError) as exc:

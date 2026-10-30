@@ -180,13 +180,25 @@ def analyze(
     return serialize_task(task)
 
 
+@router.post("/runs/{task_id}/pause")
+def pause(task_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Ask a running LangGraph task to pause at its next checkpoint."""
+    task = owned_task(db, current_user, task_id)
+    if ((task.payload or {}).get("analysis") or {}).get("workflow") != "langgraph":
+        raise HTTPException(400, "只有 LangGraph 任务支持暂停；其他生成方式可先停止再重新生成。")
+    if task.status in ("pending", "running"):
+        task.payload = {**task.payload, "pause_requested": True, "stage": "暂停中（等待当前请求结束）"}
+        db.commit()
+    return serialize_creative_task(db, task)
+
+
 @router.post("/runs/{task_id}/cancel")
 def cancel(task_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     task = owned_task(db, current_user, task_id)
-    if task.status in ("pending", "running"):
+    if task.status in ("pending", "running", "paused"):
         task.status = "cancelled"
         task.finished_at = shanghai_now()
-        task.payload = {**task.payload, "stage": "已停止"}
+        task.payload = {**task.payload, "stage": "已停止", "pause_requested": False}
         db.commit()
     return serialize_task(task)
 

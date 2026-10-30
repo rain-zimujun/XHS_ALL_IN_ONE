@@ -18,6 +18,10 @@ class PipelineCancelled(Exception):
     pass
 
 
+class PipelinePaused(Exception):
+    """Raised at a checkpoint when the user asked to pause a running task."""
+
+
 def revision_items(stage: str, output: dict) -> dict[str, tuple[tuple, dict]]:
     """Index content by stable IDs, retaining parent bindings for moved-item detection."""
     entries = []

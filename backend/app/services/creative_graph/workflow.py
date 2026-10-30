@@ -33,7 +33,7 @@ from backend.app.services.creative_graph.title_review import (
     prepare_title_review_batches,
 )
 from backend.app.services.creative_agents.revision import (
-    MAX_QUALITY_REVISIONS, PipelineCancelled, RequestBudget,
+    MAX_QUALITY_REVISIONS, PipelineCancelled, PipelinePaused, RequestBudget,
 )
 from backend.app.services.creative_graph.agents import GraphOutputError, build_agents
 from backend.app.services.creative_graph.model import CompatibleChatModel
@@ -1000,6 +1000,22 @@ class LangGraphWorkflow:
             # graph limit is secondary; RequestBudget is the authoritative cap.
             self.state = self.graph.invoke(self.state, config={"recursion_limit": 4 * self.budget.max_requests + 20})
             return self.state["result"], self.state["metadata"]
+        except PipelineCancelled:
+            self._fail(PipelineCancelled())
+            raise
+        except PipelinePaused:
+            # A deliberate pause is not a failure: keep the snapshot resumable
+            # and record which role was interrupted.
+            pipeline = self.active_pipeline
+            pipeline.update(status="paused", error_code="creative_paused", activity="已暂停，可从暂停处继续")
+            item = pipeline["stages"][self.current]
+            item["metadata"]["failed_role"] = self.current_role
+            item["metadata"]["retryable_model_error"] = False
+            if item["attempts"] and item["attempts"][-1].get("status") == "running":
+                item["attempts"][-1].update(status="paused", finished_at=utc_now(), error="用户暂停")
+            item.update(status="paused", error="用户暂停")
+            self._checkpoint(pipeline, "已暂停，可从暂停处继续")
+            raise
         except Exception as exc:
             self._fail(exc)
             raise

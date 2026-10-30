@@ -1,4 +1,4 @@
-"""Serializable state for the staged creative-agent pipeline."""
+﻿"""Serializable state for the staged creative-agent pipeline."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -12,7 +12,7 @@ from backend.app.services.creative_quality import QualityReview
 PipelineStage = Literal[
     "sample_analysis", "audience", "topic", "title", "copy", "image", "final_review"
 ]
-StageStatus = Literal["pending", "running", "completed", "failed", "skipped", "revision_required", "invalidated", "cancelled"]
+StageStatus = Literal["pending", "running", "completed", "failed", "skipped", "revision_required", "invalidated", "cancelled", "paused"]
 PIPELINE_SCHEMA_VERSION = 2
 PIPELINE_STAGE_ORDER: tuple[PipelineStage, ...] = (
     "sample_analysis", "audience", "topic", "title", "copy", "image", "final_review"
@@ -53,7 +53,7 @@ class CreativePipelineState(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     schema_version: int = PIPELINE_SCHEMA_VERSION
-    status: Literal["pending", "running", "completed", "failed", "cancelled", "revision_required"] = "pending"
+    status: Literal["pending", "running", "completed", "failed", "cancelled", "revision_required", "paused"] = "pending"
     current_stage: PipelineStage | None = None
     stages: dict[str, CreativeStageState]
     request_count: int = 0

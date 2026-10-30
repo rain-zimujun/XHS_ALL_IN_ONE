@@ -150,6 +150,37 @@ def test_restart_marks_graph_snapshot_interrupted_without_model_calls(env):
     assert model.calls == []
 
 
+def test_pause_requires_langgraph_and_cancel_works_from_paused(env):
+    from backend.app.services.creative_runner import RunPaused, checkpoint
+    with env.factory() as db:
+        graph_task = Task(user_id=env.user_id, platform="xhs", task_type="creative_analysis", status="running", progress=0,
+                          payload={"analysis": {"workflow": "langgraph"}, "search": {}, "sources": [], "stage": "x"})
+        legacy_task = Task(user_id=env.user_id, platform="xhs", task_type="creative_analysis", status="running", progress=0,
+                           payload={"analysis": {"workflow": "multi_agent"}, "search": {}, "sources": [], "stage": "x"})
+        db.add_all([graph_task, legacy_task])
+        db.commit()
+        graph_id, legacy_id = graph_task.id, legacy_task.id
+        # The checkpoint raises the pause without treating it as a failure.
+        graph_task.payload = {**graph_task.payload, "pause_requested": True}
+        db.commit()
+        with pytest.raises(RunPaused):
+            checkpoint(db, graph_task)
+        assert graph_task.payload["pause_requested"] is False
+
+    assert env.client.post(f"/api/xhs/creative/runs/{legacy_id}/pause", headers=env.headers).status_code == 400
+    paused = env.client.post(f"/api/xhs/creative/runs/{graph_id}/pause", headers=env.headers)
+    assert paused.status_code == 200
+    assert paused.json()["payload"]["pause_requested"] is True
+
+    with env.factory() as db:
+        row = db.get(Task, graph_id)
+        row.status = "paused"
+        db.commit()
+    cancelled = env.client.post(f"/api/xhs/creative/runs/{graph_id}/cancel", headers=env.headers)
+    assert cancelled.status_code == 200
+    assert cancelled.json()["status"] == "cancelled"
+
+
 def test_all_graph_roles_and_revision_send_native_schema_in_actual_http_body(monkeypatch):
     model, seen = GraphCompletion(fail_stage="copy_review"), []
     def post(url, **kwargs):

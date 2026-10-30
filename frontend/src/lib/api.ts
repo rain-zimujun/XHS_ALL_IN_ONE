@@ -112,6 +112,10 @@ export async function cancelCreativeRun(id: number): Promise<CreativeRun> {
   return (await http.post<CreativeRun>(`/xhs/creative/runs/${id}/cancel`)).data;
 }
 
+export async function pauseCreativeRun(id: number): Promise<CreativeRun> {
+  return (await http.post<CreativeRun>(`/xhs/creative/runs/${id}/pause`)).data;
+}
+
 export async function resumeCreativeRun(id: number): Promise<CreativeRun> {
   return (await http.post<CreativeRun>(`/xhs/creative/runs/${id}/resume`)).data;
 }
