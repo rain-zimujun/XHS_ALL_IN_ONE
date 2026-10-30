@@ -1,4 +1,4 @@
-"""StateGraph controls the workflow; nodes read state and return partial updates.
+﻿"""StateGraph controls the workflow; nodes read state and return partial updates.
 
 No legacy workflow object or hidden manual producer/reviewer loop is used.
 The mutable snapshot on the runner mirrors graph state solely for persistence
@@ -125,6 +125,9 @@ def copy_inputs(s):
 
 def image_inputs(s):
     return dict(**copy_inputs(s), copy_review=s["copy_review"], image_plans=s["image"],
+                visual_preferences=s["options"].get("visual_preferences", ""),
+                image_count_min=s["options"].get("image_count_min", 1),
+                image_count_max=s["options"].get("image_count_max", 6),
                 final_revision=len(s["pipeline"]["stages"]["final_review"]["history"]) + 1)
 
 
@@ -858,7 +861,12 @@ class LangGraphWorkflow:
         return self._reviewer(s, "copy", payload, invoke=invoke)
 
     def image_node(self, s: CreativeGraphState) -> ImageUpdate:
-        payload = image_planning.prepare_image_input(**copy_inputs(s), copy_review=s["copy_review"])
+        payload = image_planning.prepare_image_input(
+            **copy_inputs(s), copy_review=s["copy_review"],
+            visual_preferences=s["options"].get("visual_preferences", ""),
+            image_count_min=s["options"].get("image_count_min", 1),
+            image_count_max=s["options"].get("image_count_max", 6),
+        )
 
         def invoke(agent, original, validator, pipeline, revision):
             run = run_batches(

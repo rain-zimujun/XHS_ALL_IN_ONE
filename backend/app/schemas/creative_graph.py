@@ -364,7 +364,7 @@ class VariantImages(TypedDict):
     candidate_id: TitleId
     variant_id: CopyId
     cover_text: Annotated[str, Field(min_length=1, max_length=80)]
-    image_plan: Annotated[list[ImagePlan], Field(min_length=1, max_length=6)]
+    image_plan: Annotated[list[ImagePlan], Field(min_length=1, max_length=12)]
     material_notes: Annotated[list[Text], Field(min_length=1, max_length=6)]
 
 

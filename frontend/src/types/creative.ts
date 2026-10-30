@@ -37,6 +37,9 @@ export type CreativeAnalysisOptions = {
   idea_count: 1 | 3 | 5;
   variant_count?: 2 | 3;
   title_max_length?: number;
+  image_count_min?: number;
+  image_count_max?: number;
+  visual_preferences?: string;
   audience: string;
   instruction: string;
 };

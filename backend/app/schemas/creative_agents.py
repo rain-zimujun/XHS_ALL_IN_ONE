@@ -1,4 +1,4 @@
-"""Structured, evidence-linked outputs for the creative agents."""
+﻿"""Structured, evidence-linked outputs for the creative agents."""
 from __future__ import annotations
 
 from typing import Annotated, Literal
@@ -283,7 +283,7 @@ class VariantImagePlan(AgentOutputModel):
     candidate_id: str = Field(pattern=r"^title_[a-z0-9_]{1,60}$")
     variant_id: str = Field(pattern=r"^copy_[a-z0-9_]{1,60}$")
     cover_text: str = Field(min_length=1, max_length=80)
-    image_plan: list[ImagePlanItem] = Field(min_length=1, max_length=6)
+    image_plan: list[ImagePlanItem] = Field(min_length=1, max_length=12)
     material_notes: list[FindingText] = Field(min_length=1, max_length=6)
 
 

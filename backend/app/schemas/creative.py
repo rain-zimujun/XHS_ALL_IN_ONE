@@ -1,6 +1,6 @@
-from typing import Annotated, Literal
+﻿from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 MAX_COPY_BODY_CHARS = 500
@@ -32,8 +32,19 @@ class CreativeAnalysisOptions(BaseModel):
     # Program-owned title budget. The judge asks for specifics and topic words,
     # so the old 20-character ceiling forced the model to truncate mid-word.
     title_max_length: int = Field(default=26, ge=10, le=40)
+    # Per-variant image plan size and optional look-and-feel brief. The range is
+    # what the planner aims for; the judge still checks relevance per image.
+    image_count_min: int = Field(default=1, ge=1, le=12)
+    image_count_max: int = Field(default=6, ge=1, le=12)
+    visual_preferences: str = Field(default="", max_length=500)
     audience: str = Field(default="电商、服装行业、AI、时尚行业、营销行业、美工、后期从业者", max_length=300)
     instruction: str = Field(default="符合小红书爆款文案的调性，文案尽可能精简、抓眼球", max_length=2000)
+
+    @model_validator(mode="after")
+    def image_range_is_ordered(self) -> "CreativeAnalysisOptions":
+        if self.image_count_min > self.image_count_max:
+            raise ValueError("配图数量区间需要满足最少张数不大于最多张数")
+        return self
 
 
 class CreativeCollectRequest(BaseModel):
@@ -65,7 +76,7 @@ class CreativeVariant(BaseModel):
     body: str = Field(min_length=1, max_length=6000, description="给小红书读者看的纯正文成稿；默认自然分享作品或灵感，不写给发布者的指导。不得包含标题、话题标签、配图/生图说明、分析注释或待填占位符。")
     tags: list[ShortText] = Field(min_length=1, max_length=10, description="历史结果兼容读取；新生成时选择与本版最终正文最相关的 5～8 个不同话题，按相关性从高到低排列，不带 #，不重复写进 body")
     cover_text: ShortText
-    image_plan: list[CreativeImagePlan] = Field(min_length=1, max_length=6)
+    image_plan: list[CreativeImagePlan] = Field(min_length=1, max_length=12)
 
 
 class CreativeIdea(BaseModel):

@@ -3,9 +3,14 @@ import json
 
 import pytest
 
+from backend.app.schemas.creative_agents import ImagePlans
+from backend.app.services.creative_agents import image_planning
 from backend.app.services.creative_agents.copy_review import run_copy_review
 from backend.app.services.creative_agents.image_planning import run_image_planning
 from backend.app.services.creative_analysis import CreativeError
+from backend.app.services.creative_graph import visual_batches
+from backend.app.services.creative_graph.model import response_parameter
+from backend.app.services.creative_orchestrator import AgentValidationError
 from test_creative_copy_review import inputs as review_inputs
 from test_creative_title_review import JudgeCompletion, block
 
@@ -79,6 +84,39 @@ def test_invalid_image_bindings_repair_once(fault):
     run, _ = run_image_planning(**inputs(), complete=complete)
     assert len(complete.calls) == 2
     assert "body" not in run.output.variants[0].model_dump()
+
+
+def test_image_count_range_and_visual_brief_reach_the_plan():
+    args = inputs()
+    payload = image_planning.prepare_image_input(
+        **args, image_count_min=3, image_count_max=5, visual_preferences="简洁，全图不要文字，不留白",
+    )
+    assert payload["image_count_min"] == 3 and payload["image_count_max"] == 5
+    assert payload["visual_preferences"] == "简洁，全图不要文字，不留白"
+
+    # The response schema binds the requested range so the model cannot drift.
+    schema = response_parameter(visual_batches.image_response_type(payload))["json_schema"]["schema"]
+    plan = schema["$defs"]["BoundVariantImages"]["properties"]["image_plan"]
+    assert plan["minItems"] == 3 and plan["maxItems"] == 5
+
+
+def test_image_plan_outside_the_requested_range_is_rejected():
+    args = inputs()
+    payload = image_planning.prepare_image_input(**args, image_count_min=3, image_count_max=5)
+    output = valid_images(payload)
+    assert len(output["variants"][0]["image_plan"]) == 1
+    result = ImagePlans.model_validate(output)
+
+    with pytest.raises(AgentValidationError) as caught:
+        image_planning.validate_image_plans(result, payload)
+    assert "3～5 张" in str(caught.value)
+
+
+def test_image_count_range_must_be_ordered():
+    from pydantic import ValidationError
+    from backend.app.schemas.creative import CreativeAnalysisOptions
+    with pytest.raises(ValidationError):
+        CreativeAnalysisOptions(model_id=1, image_count_min=6, image_count_max=3)
 
 
 def test_unapproved_copy_or_changed_body_blocks_image_call():

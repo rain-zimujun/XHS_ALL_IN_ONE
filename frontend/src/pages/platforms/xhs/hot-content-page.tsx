@@ -1,4 +1,4 @@
-import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+﻿import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
 import { Alert, Button, Card, Col, Collapse, Empty, Form, Input, Pagination, Progress, Row, Select, Space, Table, Tag, Typography } from "antd";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
@@ -47,6 +47,9 @@ export function HotContentPage() {
   const [ideaCount, setIdeaCount] = useState<1 | 3 | 5>(3);
   const [variantCount, setVariantCount] = useState<2 | 3>(3);
   const [titleLength, setTitleLength] = useState(26);
+  const [imageMin, setImageMin] = useState(2);
+  const [imageMax, setImageMax] = useState(4);
+  const [visualPreferences, setVisualPreferences] = useState("");
   const [workflow, setWorkflow] = useState<NonNullable<CreativeAnalysisOptions["workflow"]>>("multi_agent");
   const [audience, setAudience] = useState("电商、服装行业、AI、时尚行业、营销行业、美工、后期从业者");
   const [instruction, setInstruction] = useState("符合小红书爆款文案的调性，文案尽可能精简、抓眼球");
@@ -103,7 +106,8 @@ export function HotContentPage() {
     return {
       model_id: modelId,
       ...(workflow === "langgraph" && preprocessModelId ? { preprocess_model_id: preprocessModelId } : {}),
-      idea_count: ideaCount, variant_count: variantCount, title_max_length: titleLength, audience, instruction, workflow,
+      idea_count: ideaCount, variant_count: variantCount, title_max_length: titleLength,
+      image_count_min: imageMin, image_count_max: imageMax, visual_preferences: visualPreferences, audience, instruction, workflow,
     };
   }
 
@@ -150,6 +154,9 @@ export function HotContentPage() {
         setPreprocessModelId(item.payload.analysis.preprocess_model_id || item.payload.analysis.model_id);
         setVariantCount(item.payload.analysis.variant_count || 3);
         setTitleLength(item.payload.analysis.title_max_length || 26);
+        setImageMin(item.payload.analysis.image_count_min || 2);
+        setImageMax(item.payload.analysis.image_count_max || 4);
+        setVisualPreferences(item.payload.analysis.visual_preferences || "");
         setWorkflow(item.payload.analysis.workflow || "multi_agent");
         setAudience(item.payload.analysis.audience); setInstruction(item.payload.analysis.instruction);
       }
@@ -230,6 +237,9 @@ export function HotContentPage() {
             <Col xs={12} md={6}><Form.Item label="标题数量"><Select aria-label="标题数量" value={ideaCount} onChange={setIdeaCount} options={[1, 3, 5].map(value => ({ value, label: `${value} 个标题` }))} /></Form.Item></Col>
             <Col xs={12} md={6}><Form.Item label="每个标题的文案数"><Select aria-label="每个标题的文案数" value={variantCount} onChange={setVariantCount} options={[2, 3].map(value => ({ value, label: `${value} 个版本` }))} /></Form.Item></Col>
             <Col xs={12} md={6}><Form.Item label="标题长度上限" extra="按字符计（含标点）。过短会迫使模型截断词语。"><Select aria-label="标题长度上限" value={titleLength} onChange={setTitleLength} options={[20, 24, 26, 30, 34].map(value => ({ value, label: `${value} 字` }))} /></Form.Item></Col>
+            <Col xs={12} md={6}><Form.Item label="每篇最少配图"><Select aria-label="每篇最少配图" value={imageMin} onChange={value => { setImageMin(value); setImageMax(current => Math.max(current, value)); }} options={Array.from({ length: 12 }, (_, i) => i + 1).map(value => ({ value, label: `${value} 张` }))} /></Form.Item></Col>
+            <Col xs={12} md={6}><Form.Item label="每篇最多配图"><Select aria-label="每篇最多配图" value={imageMax} onChange={setImageMax} options={Array.from({ length: 12 }, (_, i) => i + 1).filter(value => value >= imageMin).map(value => ({ value, label: `${value} 张` }))} /></Form.Item></Col>
+            <Col span={24}><Form.Item label="画面要求" extra="可选。例如：界面简洁、全图不要文字、不留白、只做局部特写；只影响画面呈现，不改变正文事实。"><Input.TextArea aria-label="画面要求" rows={2} maxLength={500} value={visualPreferences} onChange={e => setVisualPreferences(e.target.value)} placeholder="例如：简洁干净，全图不要出现文字，四周不留白，主图用服装特写。" /></Form.Item></Col>
             <Col span={24}><Form.Item label="目标受众"><Input aria-label="目标受众" maxLength={300} value={audience} onChange={e => setAudience(e.target.value)} /></Form.Item></Col>
             <Col span={24}><Form.Item label="创作要求"><Input.TextArea aria-label="创作要求" rows={3} maxLength={2000} value={instruction} onChange={e => setInstruction(e.target.value)} placeholder="默认写可直接发布的作品／灵感分享，参考样本口吻，不夹带制作指导。可补充：语气自然、少用术语；需要教程时请明确写出。" /></Form.Item></Col>
           </Row>
