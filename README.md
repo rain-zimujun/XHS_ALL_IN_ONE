@@ -1,283 +1,162 @@
-<p align="center">
-  <a href="https://github.com/cv-cat/XHS_ALL_IN_ONE" target="_blank">
-    <picture>
-      <img width="220" src="./author/logo.jpg" alt="XHS_ALL_IN_ONE logo">
-    </picture>
-  </a>
-</p>
+# 小红书全域运营器 · XHS_ALL_IN_ONE
 
-<div align="center">
+> 基于 [cv-cat/XHS_ALL_IN_ONE](https://github.com/cv-cat/XHS_ALL_IN_ONE) 二次开发的个人版本。
+> 上游提供小红书账号接入、采集 SDK 与平台底座；本仓库的主要工作集中在 **AI 内容创作链路**，以及围绕它的前后端体验、质量评审与任务恢复。
 
-# XHS_ALL_IN_ONE
+一句话：从关键词搜索一批笔记，选出样本，交给一组 Agent 做研究、选题、写标题正文、出配图方案，再用评审把关、返工收敛，最后导出一份可以直接拿去用的内容方案。
 
-**小红书一站式智能运营平台 — 采集、分析、AI 创作、自动发布，全链路闭环**
-
-[![Skills](https://img.shields.io/badge/skills-supported-success)](https://github.com/cv-cat/XhsSkills)
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
-[![Node.js](https://img.shields.io/badge/nodejs-20%2B-green)](https://nodejs.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.100%2B-009688)](https://fastapi.tiangolo.com/)
-[![React](https://img.shields.io/badge/React-19-61DAFB)](https://react.dev/)
-[![Docker](https://img.shields.io/badge/Docker-ready-2496ED)](https://www.docker.com/)
-[![License](https://img.shields.io/badge/license-MIT-orange)](LICENSE)
-
-</div>
-
-> 市面上的小红书工具要么只能爬数据，要么只能发笔记，要么需要手动复制粘贴到 AI 平台再贴回来。
-> **XHS_ALL_IN_ONE 是第一个把「采集 → 内容库 → AI 改写 → 图片润色 → 一键发布 → 定时自动运营」全链路打通的开源平台。**
-> 一个浏览器标签页，完成别人用 5 个工具才能做的事。
-
-**⚠️ 本项目仅供学习交流使用，禁止任何商业化行为，如有违反，后果自负**
+**⚠️ 本项目仅供学习交流使用，禁止任何商业化行为**
 
 ---
 
-## 核心优势
+## 这个版本做了什么
 
-| | 传统方案 | XHS_ALL_IN_ONE |
-|---|---|---|
-| **数据采集** | 写脚本 / 用第三方爬虫 | 平台内搜索 + 一键入库，素材自动下载到本地 |
-| **内容管理** | Excel / 文件夹 / 各种笔记软件 | 统一内容库，标签筛选，卡片预览 |
-| **AI 改写** | 复制到 ChatGPT → 手动粘贴回来 | 编辑器内一键改写，标题/正文/标签全覆盖 |
-| **图片处理** | Photoshop / 在线工具 | AI 图片润色 + 参考图，原位替换 |
-| **发布** | 手动打开创作者平台上传 | 选账号 → 点发布，支持定时 |
-| **自动化** | 没有 / 需要写代码 | 配置关键词 + 频率，全自动：搜索→改写→发布 |
-| **多账号** | 反复切换浏览器 | 账号矩阵统一管理，2h 自动健康巡检 |
+### 1. 用 LangGraph 把创作链路做成可回溯的状态图
 
----
+13 个节点：样本分析 → 样本证据评审 → 读者需求 → 选题 → 选题评审 → 标题 → 标题评审 → 正文 → 正文评审 → 配图 → 终审 → 返工计划 → 结果组装。
 
-## 平台预览
+评审结论经条件边决定返工回到哪一阶段，而不是整条重跑。每个节点只允许写自己声明的状态字段，越权写入在运行时直接中断，阶段交接因此可审计。
 
-### 账号矩阵 — 多账号绑定与健康管理
+### 2. 两层校验，挡住模型"编造引用"
 
-支持绑定多个 PC / Creator 账号，扫码登录、手机验证码、Cookie 导入三种方式。Cookie 加密存储，2 小时自动健康巡检，过期自动通知。
+- 第一层：每次请求按当次的合法 ID（样本、结论、选题、标题、正文）动态生成严格 JSON Schema，通过 `response_format` 下发，越界引用在 Schema 层就被拒。
+- 第二层：程序再核对来源归属、逐字引用、数量与返工范围——Schema 只能保证形状，保证不了关系。
 
-<img src="./static/frontend_1.jpg" width="600" />
+"结论 claim ↔ 来源 note" 的绑定由程序反查生成，不接受模型自报；逐字引用允许空白与字段标注差异，但必须能在单一字段内命中 ≥8 字连续原文。
 
-### 笔记发现 — 关键词搜索与详情预览
+### 3. 长任务可恢复
 
-输入关键词一键搜索小红书全站笔记，支持排序、类型、时间等多维筛选。点击笔记卡片打开详情抽屉，查看无水印原图、互动数据、评论区，一键保存到内容库。
+按输入指纹做批次缓存与结果复用：样本按 2～3 篇、标题按候选 ≤5 个、正文按锁定标题 2～3 版、配图与终审逐篇。失败接续与主动暂停都只补未完成批次。
 
-<img src="./static/frontend_2.jpg" width="600" />
+配合请求预算（72～512 次）、90 分钟执行窗口、5 次退避重试（15/30/60/90/120 秒）与批内三路并发。
 
-### 内容库 — 采集内容的统一管理
+### 4. 返工只改该改的
 
-所有采集到的笔记统一沉淀在内容库，属于平台用户而非某个 XHS 账号。卡片/列表双视图，支持自定义标签、关键词搜索、批量操作、JSON/CSV 导出。
+分阶段评分 rubric 与阻断/建议分级，未通过项定位到具体对象与字段；返工范围由代码强制，其余内容由服务端恢复原稿后再校验；已通过且文本未变的候选"冻结判定"不再重复送审，每阶段最多 3 轮。
 
-<img src="./static/frontend_3.jpg" width="600" />
+### 5. 上下文按角色裁剪
 
-### 草稿工坊 — AI 改写与内容编辑
+每个角色只收到本阶段需要的字段白名单，未参与判断的上游产物不进请求。实测选题请求从 12,209 字符降到 6,036，标题 15,787→6,065，正文 16,745→8,140。
 
-三栏布局：草稿队列 + 编辑器 + AI 助手。从内容库深拷贝笔记进入草稿，AI 一键改写正文、润色标题、生成标签，拖拽排序图片素材，编辑完成直接送入发布中心。
+### 6. 前端重做
 
-<img src="./static/frontend_4.jpg" width="600" />
-
-### 素材优化 — AI 图片润色
-
-选择草稿中的任意图片，添加参考图，输入润色指令，AI 生成优化后的图片并原位替换。当前素材和优化结果并排对比，点击即可放大预览。
-
-<img src="./static/frontend_5.jpg" width="600" />
-
-### 发布中心 — 一键发布到小红书
-
-预览草稿内容和图片素材，选择 Creator 账号，设置可见性和发布模式（立即/定时），发布校验通过后一键发布到小红书创作者平台。
-
-<img src="./static/frontend_6.jpg" width="600" />
-
-### 自动运营 — 全自动内容生产管线
-
-设置关键词和调度频率（每日/每周/自定义间隔），系统自动执行完整管线：搜索热门笔记 → AI 改写标题+正文 → 上传图片素材 → 通过 Creator API 自动发布。真正的无人值守。
-
-<img src="./static/frontend_7.jpg" width="600" />
+React 19 + TypeScript + Ant Design，17 个页面；创作任务有阶段进度、请求计数、评审明细、失败诊断与原句对照，结果支持多版本切换、复制与 HTML/JSON 报告导出。
 
 ---
 
-## ⭐ 完整功能清单
+## 平台原有能力（继承自上游）
 
-### 底层 SDK（逆向签名算法，透明封装）
-
-| 模块 | 功能 | 状态 |
-|------|------|------|
-| **小红书 PC 端** | 二维码登录 / 手机验证码登录 | ✅ |
-| | 搜索笔记 & 搜索用户 | ✅ |
-| | 获取笔记详情（无水印图片 & 视频） | ✅ |
-| | 获取笔记评论 | ✅ |
-| | 获取用户发布 / 喜欢 / 收藏的笔记 | ✅ |
-| | 获取用户主页信息 / 自己的账号信息 | ✅ |
-| | 获取主页推荐 / 未读消息 | ✅ |
-| **创作者平台** | 二维码登录 / 手机验证码登录 | ✅ |
-| | 上传图集 / 视频作品 | ✅ |
-| | 查看已发布作品列表 | ✅ |
-| **蒲公英平台** | KOL 博主列表 & 粉丝画像 & 合作邀请 | ✅ |
-| **千帆平台** | 分销商列表 & 合作品类 / 商品信息 | ✅ |
-
-### Web 运营平台
-
-| 模块 | 功能 |
-|------|------|
-| **账号矩阵** | 多 PC / Creator 账号绑定、Cookie 加密存储、2h 自动健康巡检、过期通知 |
-| **笔记发现** | 关键词搜索、URL 直查、多维筛选、已保存标记、一键入库 |
-| **数据抓取** | 批量 URL / 搜索 / 评论抓取、Excel 导出、素材本地下载 |
-| **内容库** | 卡片/列表双视图、自定义标签、批量操作、JSON/CSV 导出、查看原文 |
-| **草稿工坊** | 三栏编辑器、AI 改写正文、润色标题/标签、拖拽排序素材、AI 图片润色 |
-| **图片工坊** | AI 图片生成（支持参考图）、图片描述、AI/普通图片资产管理 |
-| **发布中心** | 图集发布、定时发布、发布校验、状态追踪、重试/取消 |
-| **自动运营** | 定时任务（每日/每周/自定义间隔）、全自动管线：搜索→AI改写→上传→发布 |
-| **数据洞察** | 仪表盘总览、互动趋势、Top 内容、热门话题、评论分析 |
-| **竞品监控** | 关键词/账号/品牌/URL 监控、自动爬取刷新、快照历史 |
-| **任务中心** | 全量任务审计、调度器状态、耗时追踪 |
-| **通知系统** | Cookie 过期 / 任务失败自动通知、铃铛实时展示 |
-| **模型配置** | 支持任意 OpenAI 兼容 API（火山引擎、阿里云百炼、OpenAI 中转等） |
-
-### 平台扩展（规划中）
-
-| 平台 | 状态 |
-|------|------|
-| 小红书 (XHS) | ✅ 已实现 |
-| 抖音 (Douyin) | Coming Soon |
-| 快手 (Kuaishou) | Coming Soon |
-| 微博 (Weibo) | Coming Soon |
-| 闲鱼 (Xianyu) | Coming Soon |
-| 淘宝 (Taobao) | Coming Soon |
+账号矩阵（PC / Creator 双端、Cookie 加密存储、定时健康巡检）、笔记发现（关键词搜索、URL 直查）、数据抓取（批量 URL / 评论、Excel 导出）、内容库、草稿工坊、图片工坊、视频工坊、发布中心（立即 / 定时）、自动运营、数据洞察、竞品监控、任务中心、通知与模型配置。
 
 ---
 
-## 🧩 Skills 支持
+## 技术栈
 
-当前项目已支持基于 skills 的能力接入，可直接作为底层能力仓库使用，也可通过标准化 skills 方式被上层 Agent 工具链引入。
-
-封装好的 skills 请查看 [XhsSkills](https://github.com/cv-cat/XhsSkills)，可被 `Clawbot`、`Claude Code`、`Codex` 等工具直接引入与集成。
+| 层 | 选型 |
+|---|---|
+| 后端 | Python 3.11 / FastAPI / SQLAlchemy / Alembic / APScheduler |
+| AI 编排 | LangGraph / LangChain / Pydantic / 严格 JSON Schema |
+| 前端 | React 19 / TypeScript / Vite / Ant Design |
+| 存储 | SQLite（默认）/ MySQL |
+| 部署 | Docker Compose / uvicorn |
 
 ---
 
-## 🛠️ 快速开始
+## 快速开始
 
-### 环境要求
-
-- Python 3.10+
-- Node.js 20+
-
-### 安装依赖
+环境：Python 3.11+、Node.js 20+。
 
 ```bash
-git clone https://github.com/cv-cat/XHS_ALL_IN_ONE.git
+git clone https://github.com/rain-zimujun/XHS_ALL_IN_ONE.git
 cd XHS_ALL_IN_ONE
 
+python -m venv .venv
+# Windows: .venv\Scripts\activate   macOS/Linux: source .venv/bin/activate
 pip install -r requirements.txt
-npm install
-cd frontend && npm install && cd ..
-```
 
-### 启动项目
+npm ci
+cd frontend && npm ci && cd ..
 
-```bash
-# 一键启动（后端 + 前端）
 python main.py --with-frontend
 ```
 
 启动后访问：
-- 前端: http://localhost:5178
-- API 文档: http://localhost:8000/docs
 
-首次启动自动创建数据库，注册账号即可使用。
+- 前端 http://127.0.0.1:5178
+- 接口文档 http://127.0.0.1:8000/docs
 
-### Docker 部署
+首次使用注册本地账号即可；数据库与运行数据会在项目目录下自动创建（已在 `.gitignore` 中忽略）。
+
+> 国内网络如果卡在包源，可换镜像：
+> `pip install -r requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple`
+> `npm ci --registry=https://registry.npmmirror.com`
+
+---
+
+## 配置
+
+- 基础配置：`config/default.yaml`（数据库、端口、CORS、调度开关、密钥）
+- 覆盖方式：`CONFIG_FILE` 指定的 YAML < `.env` < 环境变量
+- 模型：在页面「模型配置」里填任意 OpenAI 兼容端点（火山引擎、阿里云百炼、中转站均可），文本模型与图片模型分开配置
+
+真实创作需要两样东西：一个已绑定的小红书账号，和一个能跑通的模型端点。两者都可以先用本地模拟数据跑通界面流程，不必一上来就接真账号。
+
+---
+
+## 测试
 
 ```bash
-docker compose up -d
+pytest tests/backend -q                     # 后端
+node tests/browser/hot_content_smoke.cjs    # 浏览器流程（需先起前端，Playwright + 本机 Chrome）
+```
+
+后端现有 958 项测试。其中 12 项是改动前就已存在的过期断言（重试次数从 3→5、请求预算调整后仍按旧值断言），不影响运行，修复在进行中；其余 946 项通过。
+
+浏览器流程测试用模拟接口驱动真实 Chrome，覆盖"搜索 → 采集 → 生成 → 多版本切换 → 复制 → 导出报告"整条主流程。它验证的是前端与状态机有没有被改坏，不验证模型输出质量——后者靠真实链路人工验收。
+
+---
+
+## 目录结构（只列改造重点）
+
+```
+backend/app/
+├── services/creative_graph/        # 创作链路核心
+│   ├── workflow.py                 # 13 节点状态图与条件路由
+│   ├── state.py                    # 全局状态与各节点可写字段
+│   ├── agents.py                   # 各角色 Agent 与结构化输出绑定
+│   ├── *_schema.py                 # 按请求动态生成的严格 Schema
+│   ├── adaptive_batches.py         # 分批策略
+│   ├── batch_runner.py             # 批内并发、缓存与合并
+│   ├── recovery.py                 # 失败接续与暂停恢复
+│   └── context.py                  # 按角色裁剪上下文
+├── services/creative_retries.py    # 请求预算、重试与诊断
+└── api/                            # FastAPI 路由（约 139 个）
+frontend/src/pages/platforms/xhs/   # 创作、结果、评审等页面
+tests/backend/                      # 后端测试
+tests/browser/                      # Playwright 流程测试
+docs/                               # 开发日志与流程说明
 ```
 
 ---
 
-## 📁 项目结构
+## 已知限制
 
-```
-XHS_ALL_IN_ONE/
-├── main.py                         # 统一启动入口
-├── config/                         # YAML 配置（default / production）
-├── apis/                           # XHS 底层 SDK（逆向签名 + HTTP 接口）
-├── xhs_utils/                      # 签名算法封装
-├── static/                         # 签名核心 JS 文件
-├── backend/
-│   └── app/
-│       ├── main.py                 # FastAPI 应用
-│       ├── core/                   # 配置、数据库、安全、时区
-│       ├── models/                 # SQLAlchemy 数据模型（20+ 张表）
-│       ├── api/                    # API 路由
-│       ├── services/               # 业务逻辑 + 定时调度
-│       ├── adapters/xhs/           # XHS SDK 适配层
-│       └── storage/                # 媒体文件 + 导出文件
-├── frontend/
-│   └── src/
-│       ├── pages/platforms/xhs/    # 各功能页面
-│       ├── components/layout/      # 侧边栏 + 通知系统
-│       ├── lib/api.ts              # HTTP 客户端
-│       └── types/                  # TypeScript 类型
-├── tests/                          # 后端测试（126 passed）
-├── Dockerfile                      # 多阶段构建
-└── docker-compose.yml              # 编排文件
-```
+- 后台任务只在单进程内运行，没有分布式调度，也没有 LangGraph checkpointer；"接续"是新建子任务从失败节点重入，不是原地续跑。
+- 生图模块是独立能力，创作链路目前只产出可直接使用的正反向提示词，尚未自动串联到出图。
+- 效果强依赖模型与中转站：弱模型在样本分析阶段就会因为引文不足失败，中转站 504 也会让长任务卡住。
+- 真实规模化未验证，定位是本地自用工具而非线上服务。
 
 ---
 
-## ⚙️ 配置说明
+## 与上游的关系
 
-分层配置，优先级：`config/default.yaml` < `CONFIG_FILE` < `.env` < 环境变量
-
-```yaml
-database:
-  type: "sqlite"                    # sqlite 或 mysql
-security:
-  secret_key: "change-me"          # JWT 签名密钥
-scheduler:
-  enabled: false                    # 启用定时任务（自动运营/监控/Cookie巡检）
-```
-
-主要环境变量：`SECRET_KEY`、`DATABASE_TYPE`、`DATABASE_URL`、`SCHEDULER_ENABLED`
+- 小红书账号接入、采集适配、发布与运营等基础能力来自 [cv-cat/XHS_ALL_IN_ONE](https://github.com/cv-cat/XHS_ALL_IN_ONE)，本仓库是它的 fork。
+- 界面截图与品牌素材同样来自上游。
+- 上游 README 声明 MIT License，但仓库内没有 LICENSE 文件；本仓库沿用同一声明。
+- 上游声明：本项目仅供学习交流使用，禁止任何商业化行为。
 
 ---
 
-## 🗝️ 注意事项
+## 致谢
 
-- `apis/` 是底层 SDK 层，**请勿直接修改**，上层通过 `backend/app/adapters/` 中转调用
-- Cookie 有时效性，平台内置 2 小时自动健康巡检 + 过期通知
-- 所有敏感数据（Cookie、API Key）使用 Fernet 加密存储
-- AI 功能需在「模型配置」页面配置 OpenAI 兼容的 API 端点（支持火山引擎、阿里云百炼等）
-
----
-
-## 🧸 额外说明
-
-1. 感谢 Star ⭐ 和 Follow，项目会持续更新
-2. 作者联系方式在主页，有问题随时联系
-3. 欢迎 PR 和 Issue，也欢迎关注作者其他项目
-
----
-
-## 📈 Star History
-
-
-<a href="https://cvcat.site/star-history/svg?repos=cv-cat/XHS_ALL_IN_ONE&type=Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://cvcat.site/star-history/svg?repos=cv-cat/XHS_ALL_IN_ONE&type=Date&theme=dark" />
-    <source media="(prefers-color-scheme: light)" srcset="https://cvcat.site/star-history/svg?repos=cv-cat/XHS_ALL_IN_ONE&type=Date" />
-    <img alt="Star History Chart" src="https://cvcat.site/star-history/svg?repos=cv-cat/XHS_ALL_IN_ONE&type=Date" />
-  </picture>
-</a>
-
----
-
-
-## 🍔 交流群
-
-如果你对爬虫和 AI Agent 感兴趣，可以加入群聊一起讨论~
-
-ps: 请加群，人满或者过期 issue | wx 提醒 | qq提醒
-
-| group-1 | group-2 | group-3 | group-4 (2000人qq群) |
-|:--:|:--:|:--:|:--:|
-| <img width="280" alt="group1" src="https://cvcat.site/assets/group1.jpg" /> | <img width="280" alt="group2" src="https://cvcat.site/assets/group2.jpg" /> | <img width="280" alt="group3" src="https://cvcat.site/assets/group3.jpg" /> | <img width="280" alt="group3" src="https://cvcat.site/assets/group4.jpg" /> |
-
----
-
-## License
-
-MIT License - see [LICENSE](LICENSE) for details.
+感谢 [cv-cat](https://github.com/cv-cat) 开源的 XHS_ALL_IN_ONE：账号接入与采集适配是整条链路里最枯燥、也最容易翻车的部分，这部分省下来的时间才让创作链路能专心做深。
