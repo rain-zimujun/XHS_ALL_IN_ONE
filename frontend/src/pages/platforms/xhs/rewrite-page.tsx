@@ -41,6 +41,7 @@ import {
   Popconfirm,
   Row,
   Segmented,
+  Select,
   Space,
   Spin,
   Tabs,
@@ -71,6 +72,7 @@ import {
   updateDraft,
   updateDraftAsset,
   uploadAssetFile,
+  validateDraft,
 } from "../../../lib/api";
 import { formatShanghaiTime } from "../../../lib/time";
 import type { DraftAsset } from "../../../lib/api";
@@ -213,6 +215,20 @@ export function XhsDraftsPage() {
   const [isPolishingTags, setIsPolishingTags] = useState(false);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isSendingPublish, setIsSendingPublish] = useState(false);
+  const [sendModalOpen, setSendModalOpen] = useState(false);
+  const [validating, setValidating] = useState(false);
+  const [validation, setValidation] = useState<{
+    ok: boolean;
+    issues: { field: string; message: string }[];
+    warnings: string[];
+    tags: string[];
+    creator_accounts: { id: number; nickname: string; status: string }[];
+  } | null>(null);
+  const [publishAccountId, setPublishAccountId] = useState<number | null>(null);
+  const [publishTopics, setPublishTopics] = useState("");
+  const [publishMode, setPublishMode] = useState<"immediate" | "scheduled">("immediate");
+  const [scheduledAt, setScheduledAt] = useState("");
+  const [publishPrivate, setPublishPrivate] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [rewritePreview, setRewritePreview] = useState<string | null>(null);
@@ -552,15 +568,44 @@ export function XhsDraftsPage() {
       setError("请先选择一个草稿。");
       return;
     }
+    setValidating(true);
+    clearStatus();
+    setValidation(null);
+    setSendModalOpen(true);
+    try {
+      const saved = await updateDraft(selectedDraft.id, { title, body });
+      upsertDraft(saved);
+      const result = await validateDraft(saved.id);
+      setValidation(result);
+      setPublishTopics(result.tags.join("，"));
+      setPublishAccountId(result.creator_accounts[0]?.id ?? null);
+      setPublishMode("immediate");
+      setScheduledAt("");
+      setPublishPrivate(false);
+    } catch (err: unknown) {
+      const d = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setError(d || "发布前检查失败，请稍后重试。");
+      setSendModalOpen(false);
+    } finally {
+      setValidating(false);
+    }
+  }
+
+  async function confirmSendToPublish() {
+    if (!selectedDraft || !validation?.ok) return;
     setIsSendingPublish(true);
     clearStatus();
     try {
-      const saved = await updateDraft(selectedDraft.id, { title, body });
-      const job = await sendDraftToPublish(saved.id, {
-        publish_mode: "immediate",
+      const topics = publishTopics.split(/[，,]/).map((topic) => topic.trim()).filter(Boolean);
+      const job = await sendDraftToPublish(selectedDraft.id, {
+        platform_account_id: publishAccountId,
+        publish_mode: publishMode,
+        scheduled_at: publishMode === "scheduled" && scheduledAt ? scheduledAt.replace("T", " ") : null,
+        topics,
+        is_private: publishPrivate,
       });
-      upsertDraft(saved);
-      setMessage(`已送入发布中心，发布任务 #${job.id}。请前往发布中心选择账号并发布。`);
+      setSendModalOpen(false);
+      setMessage(`已送入发布中心，发布任务 #${job.id}。图片需在发布中心上传后再点发布。`);
     } catch (err: unknown) {
       const d = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(d || "送发布中心失败。");
@@ -1024,6 +1069,95 @@ export function XhsDraftsPage() {
           </Card>
           </div>
         </Col>
+
+        {/* Send-to-publish modal */}
+        <Modal
+          title="送入发布中心"
+          open={sendModalOpen}
+          onCancel={() => setSendModalOpen(false)}
+          onOk={() => void confirmSendToPublish()}
+          okText="创建发布任务"
+          confirmLoading={isSendingPublish}
+          okButtonProps={{ disabled: !validation?.ok }}
+          width={620}
+        >
+          {validating && <div style={{ padding: 24, textAlign: "center" }}><Spin /></div>}
+          {validation && (
+            <Space orientation="vertical" size={12} style={{ width: "100%" }}>
+              {validation.issues.length > 0 && (
+                <Alert
+                  type="error"
+                  showIcon
+                  title={`有 ${validation.issues.length} 项不满足发布要求`}
+                  description={<ul style={{ margin: 0, paddingLeft: 18 }}>
+                    {validation.issues.map((issue, index) => <li key={index}>{issue.message}</li>)}
+                  </ul>}
+                />
+              )}
+              {validation.ok && <Alert type="success" showIcon title="检查通过，可以创建发布任务" />}
+              {validation.warnings.length > 0 && (
+                <Alert type="warning" showIcon title="提醒" description={
+                  <ul style={{ margin: 0, paddingLeft: 18 }}>
+                    {validation.warnings.map((warning, index) => <li key={index}>{warning}</li>)}
+                  </ul>
+                } />
+              )}
+              <div>
+                <Text strong>发布账号（Creator）</Text>
+                <Select
+                  style={{ width: "100%", marginTop: 6 }}
+                  placeholder="选择创作者服务平台账号"
+                  value={publishAccountId ?? undefined}
+                  onChange={(value) => setPublishAccountId(value)}
+                  options={validation.creator_accounts.map((account) => ({
+                    value: account.id,
+                    label: `${account.nickname}${account.status === "expired" ? "（登录已失效）" : ""}`,
+                  }))}
+                />
+              </div>
+              <div>
+                <Text strong>话题标签</Text>
+                <Input
+                  style={{ marginTop: 6 }}
+                  value={publishTopics}
+                  onChange={(event) => setPublishTopics(event.target.value)}
+                  placeholder="用逗号分隔，例如：AI服装，服装设计"
+                  maxLength={200}
+                />
+                <Text type="secondary" style={{ fontSize: 12 }}>默认带入草稿里的标签，可增删改；最多 10 个。</Text>
+              </div>
+              <div>
+                <Text strong>发布方式</Text>
+                <Segmented
+                  style={{ marginTop: 6, display: "block" }}
+                  value={publishMode}
+                  onChange={(value) => setPublishMode(value as "immediate" | "scheduled")}
+                  options={[{ value: "immediate", label: "立即发布" }, { value: "scheduled", label: "定时（由小红书执行）" }]}
+                />
+                {publishMode === "scheduled" && (
+                  <Input
+                    style={{ marginTop: 6 }}
+                    type="datetime-local"
+                    value={scheduledAt}
+                    onChange={(event) => setScheduledAt(event.target.value)}
+                  />
+                )}
+              </div>
+              <div>
+                <Text strong>可见范围</Text>
+                <Segmented
+                  style={{ marginTop: 6, display: "block" }}
+                  value={publishPrivate ? "private" : "public"}
+                  onChange={(value) => setPublishPrivate(value === "private")}
+                  options={[{ value: "public", label: "公开" }, { value: "private", label: "仅自己可见" }]}
+                />
+              </div>
+              <Text type="secondary" style={{ fontSize: 12 }}>
+                这里只创建发布任务；图片需到发布中心上传，确认无误后再点「发布」。
+              </Text>
+            </Space>
+          )}
+        </Modal>
 
         {/* Optimize modal */}
         <Modal

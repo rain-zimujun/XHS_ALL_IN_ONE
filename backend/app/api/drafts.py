@@ -178,6 +178,82 @@ def create_draft(
     return _serialize_draft(draft)
 
 
+TITLE_LIMIT = 20
+BODY_LIMIT = 1000
+TAG_LIMIT = 10
+IMAGE_LIMIT = 18
+
+
+def _tag_name(tag: Any) -> str:
+    if isinstance(tag, str):
+        return tag.strip().lstrip("#").strip()
+    if isinstance(tag, dict):
+        return str(tag.get("name") or "").strip()
+    return ""
+
+
+@router.post("/{draft_id}/validate")
+def validate_draft(
+    draft_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Pre-flight checks before a draft is handed to the publish center."""
+    draft = db.get(AiDraft, draft_id)
+    if draft is None or draft.user_id != current_user.id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Draft not found")
+
+    issues: list[dict[str, str]] = []
+    warnings: list[str] = []
+    title = (draft.title or "").strip()
+    if not title:
+        issues.append({"field": "title", "message": "标题不能为空"})
+    elif len(title) > TITLE_LIMIT:
+        issues.append({"field": "title", "message": f"标题 {len(title)} 字，小红书上限 {TITLE_LIMIT} 字"})
+    body = (draft.body or "").strip()
+    if not body:
+        issues.append({"field": "body", "message": "正文不能为空"})
+    elif len(body) > BODY_LIMIT:
+        issues.append({"field": "body", "message": f"正文 {len(body)} 字，小红书上限 {BODY_LIMIT} 字"})
+    tags = [_tag_name(tag) for tag in (draft.tags or [])]
+    tags = [tag for tag in tags if tag]
+    if len(tags) > TAG_LIMIT:
+        issues.append({"field": "tags", "message": f"话题 {len(tags)} 个，最多 {TAG_LIMIT} 个"})
+    long_tags = [tag for tag in tags if len(tag) > 20]
+    if long_tags:
+        warnings.append(f"话题过长可能被平台截断：{'、'.join(long_tags[:3])}")
+
+    assets = db.scalars(select(DraftAsset).where(DraftAsset.draft_id == draft.id)).all()
+    images = [asset for asset in assets if asset.asset_type == "image"]
+    videos = [asset for asset in assets if asset.asset_type == "video"]
+    if videos:
+        issues.append({"field": "assets", "message": "当前只支持图文发布，请移除视频素材"})
+    if not images:
+        issues.append({"field": "assets", "message": "至少需要 1 张图片"})
+    elif len(images) > IMAGE_LIMIT:
+        issues.append({"field": "assets", "message": f"图片 {len(images)} 张，最多 {IMAGE_LIMIT} 张"})
+
+    creators = db.scalars(select(PlatformAccount).where(
+        PlatformAccount.user_id == current_user.id,
+        PlatformAccount.platform == "xhs",
+        PlatformAccount.sub_type == "creator",
+    )).all()
+    if not creators:
+        issues.append({"field": "account", "message": "没有可用的 Creator 账号，请先在「账号绑定」里扫码绑定"})
+
+    return {
+        "ok": not issues,
+        "issues": issues,
+        "warnings": warnings,
+        "images": len(images),
+        "tags": tags,
+        "creator_accounts": [
+            {"id": account.id, "nickname": account.nickname or f"账号 {account.id}", "status": account.status}
+            for account in creators
+        ],
+    }
+
+
 @router.post("/{draft_id}/send-to-publish")
 def send_draft_to_publish(
     draft_id: int,
@@ -188,6 +264,8 @@ def send_draft_to_publish(
     draft = db.get(AiDraft, draft_id)
     if draft is None or draft.user_id != current_user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Draft not found")
+    if not (draft.title or "").strip():
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="请先填写标题再送入发布中心")
 
     account_id: Optional[int] = None
     if payload.platform_account_id is not None:

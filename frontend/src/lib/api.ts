@@ -614,6 +614,19 @@ export async function reorderDraftAssets(draftId: number, assetIds: number[]): P
   await http.put(`/drafts/${draftId}/assets/reorder`, { asset_ids: assetIds });
 }
 
+export type DraftValidation = {
+  ok: boolean;
+  issues: { field: string; message: string }[];
+  warnings: string[];
+  images: number;
+  tags: string[];
+  creator_accounts: { id: number; nickname: string; status: string }[];
+};
+
+export async function validateDraft(draftId: number): Promise<DraftValidation> {
+  return (await http.post<DraftValidation>(`/drafts/${draftId}/validate`)).data;
+}
+
 export async function sendDraftToPublish(draftId: number, payload: SendDraftToPublishPayload): Promise<PublishJob> {
   const response = await http.post<PublishJob>(`/drafts/${draftId}/send-to-publish`, payload);
   return response.data;
