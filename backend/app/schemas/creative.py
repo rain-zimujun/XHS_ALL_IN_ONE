@@ -49,6 +49,8 @@ class CreativeAnalysisOptions(BaseModel):
 
     model_id: int = Field(gt=0)
     preprocess_model_id: int | None = Field(default=None, gt=0)
+    # The page defaults to LangGraph. The API keeps ``legacy`` as the implicit
+    # value so older callers and stored tasks stay reproducible.
     workflow: Literal["legacy", "multi_agent", "langgraph"] = "legacy"
     idea_count: Literal[1, 3, 5] = 3
     variant_count: Literal[2, 3] = 3
