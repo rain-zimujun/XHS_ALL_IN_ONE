@@ -199,7 +199,8 @@ def save_run_to_drafts(
                 user_id=current_user.id, platform="xhs",
                 title=(prefix + str(idea.get("title") or ""))[:200],
                 body=str(variant.get("body") or ""),
-                tags=tags[:10] or None,
+                # The draft workbench stores tags as {id, name}; keep the same shape.
+                tags=[{"id": "", "name": tag} for tag in tags[:10]] or None,
                 source_type="creative", source_task_id=task.id,
                 source_variant_id=variant_id, status="draft",
             )

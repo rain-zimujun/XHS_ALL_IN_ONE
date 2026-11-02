@@ -370,7 +370,9 @@ export function XhsDraftsPage() {
     setBody(draft.body);
     setDraftTags(
       Array.isArray(draft.tags)
-        ? draft.tags.map((t) => ({ id: t.id || "", name: t.name || "" }))
+        ? draft.tags.map((t: string | { id?: string; name?: string }) => typeof t === "string"
+          ? { id: "", name: t }
+          : { id: t?.id || "", name: t?.name || "" }).filter((t) => t.name)
         : [],
     );
     clearStatus();
@@ -391,7 +393,9 @@ export function XhsDraftsPage() {
         setBody(current.body);
         setDraftTags(
           Array.isArray(current.tags)
-            ? current.tags.map((t) => ({ id: t.id || "", name: t.name || "" }))
+            ? current.tags.map((t: string | { id?: string; name?: string }) => typeof t === "string"
+                ? { id: "", name: t }
+                : { id: t?.id || "", name: t?.name || "" }).filter((t) => t.name)
             : [],
         );
       } else {
@@ -697,31 +701,35 @@ export function XhsDraftsPage() {
 
         {/* Col 2: Main editor */}
         <Col xs={24} lg={12}>
-          {sourceNote && (
+          {(
             <Card
-              title="草稿内容"
+              title={sourceNote ? "草稿内容与素材" : "草稿素材"}
               size="small"
               style={{ marginBottom: 16 }}
               extra={
-                <a
-                  href={getNoteUrl(sourceNote)}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  <Button type="link" size="small" icon={<LinkOutlined />}>查看原文</Button>
-                </a>
+                sourceNote ? (
+                  <a
+                    href={getNoteUrl(sourceNote)}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <Button type="link" size="small" icon={<LinkOutlined />}>查看原文</Button>
+                  </a>
+                ) : undefined
               }
             >
-              <Text strong style={{ display: "block", marginBottom: 4 }}>{sourceNote.title}</Text>
-              <Paragraph
-                ellipsis={{ rows: 3, expandable: true, symbol: "展开" }}
-                type="secondary"
-                style={{ marginBottom: 8, fontSize: 13 }}
-              >
-                {sourceNote.content}
-              </Paragraph>
+              {sourceNote && <>
+                <Text strong style={{ display: "block", marginBottom: 4 }}>{sourceNote.title}</Text>
+                <Paragraph
+                  ellipsis={{ rows: 3, expandable: true, symbol: "展开" }}
+                  type="secondary"
+                  style={{ marginBottom: 8, fontSize: 13 }}
+                >
+                  {sourceNote.content}
+                </Paragraph>
+              </>}
 
-              {hasImageAssets && (
+              {hasImageAssets ? (
                 <div style={{ marginBottom: 8 }}>
                   <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
                     <Text type="secondary" style={{ fontSize: 12 }}>
@@ -754,6 +762,20 @@ export function XhsDraftsPage() {
                     </SortableContext>
                   </DndContext>
                 </div>
+              ) : (
+                <div
+                  onClick={() => setUploadModalOpen(true)}
+                  style={{
+                    marginBottom: 8, width: "100%", height: 92, borderRadius: 8,
+                    border: "1px dashed #434343", display: "flex", alignItems: "center",
+                    justifyContent: "center", flexDirection: "column", gap: 4,
+                    cursor: "pointer", background: "rgba(255,255,255,0.04)",
+                  }}
+                >
+                  <PlusOutlined style={{ fontSize: 22, color: "#8c8c8c" }} />
+                  <Text style={{ fontSize: 13 }}>上传图片素材</Text>
+                  <Text type="secondary" style={{ fontSize: 12 }}>图文笔记至少 1 张图；可从本地、素材库或已生成图片中选择</Text>
+                </div>
               )}
 
               {hasVideoAssets && (
@@ -762,7 +784,7 @@ export function XhsDraftsPage() {
                     <div key={asset.id} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
                       <Button
                         type="link" size="small" icon={<PlayCircleOutlined />}
-                        href={asset.url || sourceNote.video_url} target="_blank" rel="noopener noreferrer"
+                        href={asset.url || sourceNote?.video_url || ""} target="_blank" rel="noopener noreferrer"
                       >
                         查看视频
                       </Button>

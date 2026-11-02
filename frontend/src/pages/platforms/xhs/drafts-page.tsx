@@ -461,11 +461,15 @@ export function XhsDraftsPage() {
     }
     let cancelled = false;
     (async () => {
-      // Load tags from draft itself
+      // Load tags from draft itself. Creative drafts may carry plain strings.
       if (!cancelled) {
         const tags = selectedDraft.tags;
         if (Array.isArray(tags)) {
-          setDraftTags(tags.map((t) => ({ id: t.id || "", name: t.name || "" })));
+          setDraftTags(tags
+            .map((t: string | { id?: string; name?: string }) => typeof t === "string"
+              ? { id: "", name: t }
+              : { id: t?.id || "", name: t?.name || "" })
+            .filter((t) => t.name));
         } else {
           setDraftTags([]);
         }
@@ -858,12 +862,13 @@ export function XhsDraftsPage() {
                 {/* Empty state when no assets */}
                 {imageAssets.length === 0 && videoAssets.length === 0 && (
                   <div onClick={() => setUploadModalOpen(true)} style={{
-                    width: "100%", height: 80, borderRadius: 8, border: "1px dashed #434343",
+                    width: "100%", height: 96, borderRadius: 8, border: "1px dashed #434343",
                     display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column",
                     cursor: "pointer", background: "rgba(255,255,255,0.04)", gap: 4,
                   }}>
                     <PlusOutlined style={{ fontSize: 24, color: "#8c8c8c" }} />
-                    <Text type="secondary" style={{ fontSize: 12 }}>添加素材</Text>
+                    <Text style={{ fontSize: 13 }}>上传图片 / 视频素材</Text>
+                    <Text type="secondary" style={{ fontSize: 12 }}>图文笔记至少 1 张图；也可从素材库或已生成图片中选择</Text>
                   </div>
                 )}
               </Card>

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import json
 from datetime import datetime
@@ -98,7 +98,8 @@ def _apply_publish_options(note_info: dict[str, Any], options: dict[str, Any]) -
     if not topics:
         draft_tags = options.get("draft_tags")
         if isinstance(draft_tags, list):
-            topics = [str(t.get("name", "")) for t in draft_tags if isinstance(t, dict) and t.get("name")]
+            topics = [t if isinstance(t, str) else str(t.get("name", "")) for t in draft_tags]
+            topics = [topic.strip() for topic in topics if topic and topic.strip()]
     if topics:
         note_info["topics"] = topics
     location = options.get("location")
