@@ -10,12 +10,13 @@ from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
 from backend.app.core.time import shanghai_now
 from backend.app.models import Note, Task, User
-from backend.app.schemas.creative import CreativeAnalyzeRequest, CreativeCollectRequest, CreativeSearchRequest
+from backend.app.schemas.creative import (CreativeAccountNotesRequest, CreativeAnalyzeRequest, CreativeCollectRequest,
+                                          CreativeSearchRequest, CreativeUserSearchRequest)
 from backend.app.services.creative_analysis import CreativeError, get_creative_text_client_factory, owned_text_model
 from backend.app.services.creative_runner import analyze_collection, collect_samples
 from backend.app.services.creative_report import export_report
 from backend.app.services.creative_copy import normalize_result_copy
-from backend.app.services.creative_service import search_samples
+from backend.app.services.creative_service import normalize_user_candidates, search_account_notes, search_samples
 from backend.app.services.creative_graph.recovery import can_resume, prepare_resume
 
 router = APIRouter(prefix="/xhs/creative", tags=["xhs-creative"])
@@ -88,6 +89,69 @@ def search(
     except Exception as exc:
         task.status = "failed"
         task.payload = {**task.payload, "error": "搜索失败，请检查账号状态、网络或稍后重试。"}
+        task.finished_at = shanghai_now()
+        db.commit()
+        raise HTTPException(502, task.payload["error"]) from exc
+    task.finished_at = shanghai_now()
+    db.commit()
+    return serialize_creative_task(db, task)
+
+
+@router.post("/users")
+def users(
+    payload: CreativeUserSearchRequest, current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db), adapter_factory=Depends(get_xhs_pc_api_adapter_factory),
+):
+    """Resolve a nickname to account candidates; the caller picks one."""
+    cookies = _get_owned_pc_account_cookies(db, current_user, payload.account_id)
+    try:
+        success, _message, raw = adapter_factory(cookies).search_users(payload.nickname)
+    except Exception as exc:
+        raise HTTPException(502, "账号搜索失败，请检查账号状态、网络或稍后重试。") from exc
+    if not success:
+        raise HTTPException(502, "账号搜索失败，请检查账号状态、网络或稍后重试。")
+    candidates = normalize_user_candidates(raw)
+    if not candidates:
+        raise HTTPException(404, "没有找到该昵称的账号，试试完整昵称或小红书号。")
+    return {"users": candidates[:10]}
+
+
+@router.post("/search-account", status_code=202)
+def search_account(
+    payload: CreativeAccountNotesRequest, current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db), adapter_factory=Depends(get_xhs_pc_api_adapter_factory),
+):
+    """Load one account's latest public notes as the sample pool."""
+    cookies = _get_owned_pc_account_cookies(db, current_user, payload.account_id)
+    search = {
+        "source": "user", "account_id": payload.account_id, "user_id": payload.user_id,
+        # Downstream prompts and the report read ``keyword``; the account nickname
+        # is the closest anchor when samples come from one account.
+        "keyword": payload.nickname or "账号样本",
+        "nickname": payload.nickname, "red_id": payload.red_id,
+        "sort": payload.sort, "scan": payload.scan, "limit": payload.limit,
+    }
+    task = Task(
+        user_id=current_user.id, platform="xhs", task_type="creative_search",
+        status="running", progress=0, started_at=shanghai_now(),
+        payload={"search": search},
+    )
+    db.add(task)
+    db.commit()
+    try:
+        items, warnings, scanned = search_account_notes(
+            adapter_factory(cookies), payload.user_id, scan=payload.scan, sort=payload.sort,
+        )
+        task.payload = {
+            **task.payload, "items": items, "warnings": warnings,
+            "default_selected_ids": [item["note_id"] for item in items[:payload.limit]],
+            "search": {**search, "scanned": scanned},
+        }
+        task.status = "completed"
+        task.progress = 100
+    except Exception as exc:
+        task.status = "failed"
+        task.payload = {**task.payload, "error": "账号笔记获取失败，请检查账号状态或稍后重试。"}
         task.finished_at = shanghai_now()
         db.commit()
         raise HTTPException(502, task.payload["error"]) from exc

@@ -1,4 +1,4 @@
-﻿from typing import Annotated, Literal
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -19,6 +19,29 @@ class CreativeSearchRequest(BaseModel):
     sort_type_choice: int = Field(default=2, ge=0, le=4)
     note_time: int = Field(default=2, ge=0, le=3)
     note_type: int = Field(default=2, ge=0, le=2)
+
+
+class CreativeUserSearchRequest(BaseModel):
+    """Nickname -> account candidates; the nickname is the only search term."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    account_id: int = Field(gt=0)
+    nickname: str = Field(min_length=1, max_length=40)
+
+
+class CreativeAccountNotesRequest(BaseModel):
+    """One account's latest notes, newest or most liked first."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    account_id: int = Field(gt=0)
+    user_id: str = Field(min_length=1, max_length=64)
+    nickname: str = Field(default="", max_length=40)
+    red_id: str = Field(default="", max_length=40)
+    sort: Literal["latest", "likes"] = "latest"
+    scan: int = Field(default=300, ge=20, le=300)
+    limit: Literal[20, 30, 50] = 30
 
 
 class CreativeAnalysisOptions(BaseModel):

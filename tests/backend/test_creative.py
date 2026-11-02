@@ -69,6 +69,25 @@ class FakeAdapter:
         }} for i in range(first, first + 20)]
         return True, "", {"data": {"items": items, "has_more": page < 4}}
 
+    def search_users(self, keyword):
+        self.calls.append(("users", keyword))
+        if keyword != "PixPix":
+            return True, "", {"data": {"users": []}}
+        return True, "", {"data": {"users": [
+            {"id": "user-a", "name": "PixPix", "red_id": "63677579548", "fans": "1546",
+             "image": "https://img/a.jpg", "note_count": 22, "profession": "软件公司"},
+            {"link": "xhsdiscover://1/user/user.user-b", "name": "pixpix", "fans": "73"},
+        ]}}
+
+    def user_notes(self, user_id, cursor="", xsec_token="", xsec_source="pc_user"):
+        self.calls.append(("user_notes", user_id, cursor))
+        page = int(cursor or 1)
+        items = [{"note_id": f"{user_id}-{page}-{i}", "xsec_token": "tok",
+                  "display_title": f"账号笔记 {page}-{i}", "time": 1792000000000 + page * 100 + i,
+                  "interact_info": {"liked_count": str((page * 10) + i)},
+                  "cover": {"url_default": "https://img/c.jpg"}} for i in range(10)]
+        return True, "", {"data": {"notes": items, "has_more": page < 3, "cursor": str(page + 1)}}
+
     def get_note_info(self, url):
         note_id = url.rsplit("/", 1)[-1]
         return True, "", {"data": {"items": [{"id": note_id, "note_card": {
@@ -146,6 +165,69 @@ def test_insufficient_search_results_are_reported(monkeypatch):
     notes, warnings = creative_service.search_samples(ShortAdapter(), CreativeSearchRequest(account_id=1, keyword="AI", limit=30))
     assert len(notes) == 1
     assert "实际获得 1 篇" in warnings[0]
+
+
+def test_nickname_search_returns_account_candidates(env):
+    response = env.client.post("/api/xhs/creative/users", headers=env.headers,
+                                json={"account_id": env.account_id, "nickname": "PixPix"})
+    assert response.status_code == 200
+    users = response.json()["users"]
+    assert [user["name"] for user in users] == ["PixPix", "pixpix"]
+    assert users[0]["red_id"] == "63677579548" and users[0]["fans"] == "1546"
+    # The id may only exist inside the profile link.
+    assert users[1]["user_id"] == "user-b"
+    assert env.client.post("/api/xhs/creative/users", headers=env.headers,
+                           json={"account_id": env.account_id, "nickname": "nobody"}).status_code == 404
+    assert env.client.post("/api/xhs/creative/users", headers=env.other_headers,
+                           json={"account_id": env.account_id, "nickname": "PixPix"}).status_code == 404
+
+
+def test_account_search_returns_latest_notes_and_default_selection(env):
+    response = env.client.post("/api/xhs/creative/search-account", headers=env.headers, json={
+        "account_id": env.account_id, "user_id": "user-a", "nickname": "PixPix",
+        "red_id": "63677579548", "sort": "latest", "scan": 20, "limit": 20,
+    })
+    assert response.status_code == 202
+    run = response.json()
+    assert run["status"] == "completed"
+    payload = run["payload"]
+    assert payload["search"]["source"] == "user" and payload["search"]["scanned"] == 20
+    notes = payload["items"]
+    assert len(notes) == 20 and all(note["raw"] == {} for note in notes)
+    assert all("xsec_source=pc_user" in note["note_url"] for note in notes)
+    # Newest first: page 2 timestamps are larger than page 1's.
+    assert [note["timestamp"] for note in notes] == sorted(
+        (note["timestamp"] for note in notes), reverse=True)
+    assert payload["default_selected_ids"] == [note["note_id"] for note in notes[:20]]
+
+
+def test_account_search_sorts_by_likes_within_scan_limit(env):
+    response = env.client.post("/api/xhs/creative/search-account", headers=env.headers, json={
+        "account_id": env.account_id, "user_id": "user-a", "sort": "likes", "scan": 30, "limit": 20,
+    })
+    assert response.status_code == 202
+    notes = response.json()["payload"]["items"]
+    likes = [note["likes"] for note in notes]
+    assert likes == sorted(likes, reverse=True)
+    assert len(notes) == 30
+
+
+def test_account_search_without_public_notes_is_reported(monkeypatch):
+    class EmptyAdapter:
+        def __init__(self, cookies):
+            pass
+
+        def user_notes(self, user_id, cursor="", xsec_token="", xsec_source="pc_user"):
+            return True, "", {"data": {"notes": [], "has_more": False}}
+
+    from backend.app.main import app
+    from backend.app.api.platforms.xhs.pc import get_xhs_pc_api_adapter_factory
+    app.dependency_overrides[get_xhs_pc_api_adapter_factory] = lambda: EmptyAdapter
+    try:
+        notes, warnings, scanned = creative_service.search_account_notes(EmptyAdapter(""), "user-a", scan=300)
+        assert notes == [] and scanned == 0 and warnings == []
+    finally:
+        app.dependency_overrides.pop(get_xhs_pc_api_adapter_factory, None)
 
 
 def test_history_is_paginated_and_reports_total(env):

@@ -1,11 +1,11 @@
-import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
-import { Alert, Button, Card, Col, Collapse, Empty, Form, Input, Pagination, Progress, Row, Select, Space, Table, Tag, Typography } from "antd";
-import { useEffect, useState } from "react";
+﻿import { ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+import { Alert, Avatar, Button, Card, Col, Collapse, Empty, Form, Input, List, Pagination, Progress, Row, Segmented, Select, Space, Table, Tag, Typography } from "antd";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
-import { analyzeCreativeCollection, cancelCreativeRun, collectCreativeNotes, fetchAccounts, fetchCreativeHistory, fetchCreativeRun, fetchModelConfigs, pauseCreativeRun, resumeCreativeRun, searchCreativeNotes } from "../../../lib/api";
+import { analyzeCreativeCollection, cancelCreativeRun, collectCreativeNotes, fetchAccounts, fetchCreativeHistory, fetchCreativeRun, fetchModelConfigs, pauseCreativeRun, resumeCreativeRun, searchCreativeAccount, searchCreativeNotes, searchCreativeUsers } from "../../../lib/api";
 import type { ModelConfig, PlatformAccount, XhsSearchNote } from "../../../types";
-import type { CreativeAnalysisOptions, CreativeHistoryItem, CreativeRun, CreativeSearch } from "../../../types/creative";
+import type { CreativeAnalysisOptions, CreativeHistoryItem, CreativeRun, CreativeSearch, CreativeUserCandidate } from "../../../types/creative";
 import { CreativeResults } from "./creative-results";
 import { CreativePipelineProgress } from "./creative-pipeline";
 import { CreativeReviewAudit } from "./creative-reviews";
@@ -26,6 +26,13 @@ export function HotContentPage() {
   const [accounts, setAccounts] = useState<PlatformAccount[]>([]);
   const [accountId, setAccountId] = useState<number>();
   const [keyword, setKeyword] = useState("AI 服装设计");
+  const [nickname, setNickname] = useState("");
+  const [userCandidates, setUserCandidates] = useState<CreativeUserCandidate[]>([]);
+  const [selectedAccount, setSelectedAccount] = useState<CreativeUserCandidate | null>(null);
+  const [accountSort, setAccountSort] = useState<"latest" | "likes">("latest");
+  const [accountFilter, setAccountFilter] = useState("");
+  const [searchSource, setSearchSource] = useState<"keyword" | "account">("keyword");
+  const [searchingAccount, setSearchingAccount] = useState(false);
   const [limit, setLimit] = useState<20 | 30 | 50>(20);
   const [sort, setSort] = useState(2);
   const [noteTime, setNoteTime] = useState(2);
@@ -171,7 +178,7 @@ export function HotContentPage() {
     } catch { setError("历史任务加载失败。"); }
   }
 
-  async function search() {
+  async function searchKeyword() {
     if (!accountId || !keyword.trim()) return;
     setSearching(true); setError(""); setRun(null); setSelected([]); setCollection(null);
     const payload: CreativeSearch = {
@@ -187,7 +194,57 @@ export function HotContentPage() {
     finally { setSearching(false); }
   }
 
-  const notes = creativeSamples(run, collection);
+  async function loadAccountNotes(user: CreativeUserCandidate) {
+    if (!accountId) return;
+    setSearchingAccount(true); setError(""); setUserCandidates([]); setSelectedAccount(user); setAccountFilter("");
+    try {
+      const result = await searchCreativeAccount({
+        account_id: accountId, user_id: user.user_id, nickname: user.name, red_id: user.red_id,
+        sort: accountSort, scan: 300, limit,
+      });
+      setRun(result); setCollection(null);
+      setSelected(result.payload.default_selected_ids ?? (result.payload.items || []).slice(0, limit).map(note => note.note_id));
+      void loadHistory();
+    } catch { setError("账号笔记获取失败，请检查账号状态或稍后重试。"); }
+    finally { setSearchingAccount(false); }
+  }
+
+  async function searchAccount() {
+    if (!accountId || !nickname.trim()) return;
+    setSearchingAccount(true); setError(""); setRun(null); setSelected([]); setCollection(null);
+    setSelectedAccount(null); setUserCandidates([]);
+    try {
+      const { users } = await searchCreativeUsers({ account_id: accountId, nickname: nickname.trim() });
+      if (users.length === 1) await loadAccountNotes(users[0]);
+      else setUserCandidates(users);
+    } catch { setError("没有找到该昵称的账号，试试完整昵称或小红书号。"); }
+    finally { setSearchingAccount(false); }
+  }
+
+  function exitAccountMode() {
+    setSelectedAccount(null); setUserCandidates([]); setAccountFilter("");
+    setRun(null); setSelected([]); setNickname("");
+  }
+
+  async function submitSearch() {
+    if (!accountId) { setError("请先选择已绑定的小红书账号。"); return; }
+    if (selectedAccount) { await loadAccountNotes(selectedAccount); return; }
+    if (keyword.trim() && nickname.trim()) { setError("首次搜索只能填关键词或昵称其中之一；选好账号后再用名称筛选。"); return; }
+    if (nickname.trim()) { await searchAccount(); return; }
+    if (!keyword.trim()) { setError("请输入关键词或昵称后再搜索。"); return; }
+    await searchKeyword();
+  }
+
+  const accountMode = Boolean(selectedAccount);
+  const bothFilled = !accountMode && Boolean(keyword.trim()) && Boolean(nickname.trim());
+  const sampleList = useMemo(() => creativeSamples(run, collection), [run, collection]);
+  const notes = useMemo(() => {
+    if (run?.payload.search.source === "user" && accountFilter.trim()) {
+      const needle = accountFilter.trim().toLowerCase();
+      return sampleList.filter(note => (note.title || "").toLowerCase().includes(needle));
+    }
+    return sampleList;
+  }, [run, sampleList, accountFilter]);
   return (
     <Space orientation="vertical" size={20} style={{ width: "100%" }}>
       <div>
@@ -197,29 +254,58 @@ export function HotContentPage() {
       {error && <Alert type="error" title={error} closable onClose={() => setError("")} />}
       {!loadingAccounts && !accounts.length && <Alert type="info" title="先绑定小红书账号" description={<span>在 <Link to="/platforms/xhs/accounts">账号绑定</Link> 添加 PC 账号并扫码登录，再回来搜索。</span>} />}
       <Card title="1. 搜索内容" extra={<Button icon={<ReloadOutlined />} onClick={() => void loadAccounts()} loading={loadingAccounts}>刷新账号</Button>}>
-        <Form layout="vertical" onFinish={() => void search()} disabled={searching || collecting || starting}>
+        <Form layout="vertical" onFinish={() => void submitSearch()} disabled={searching || collecting || starting}>
           <Row gutter={16}>
             <Col xs={24} md={8}><Form.Item label="小红书账号"><Select aria-label="小红书账号" placeholder="选择已绑定的 PC 账号" value={accountId} onChange={setAccountId} options={accounts.map(a => ({ value: a.id, label: `${a.nickname || `账号 ${a.id}`}${a.status === "expired" ? "（登录已失效）" : ""}` }))} /></Form.Item></Col>
-            <Col xs={24} md={16}><Form.Item label="搜索关键词"><Input aria-label="搜索关键词" value={keyword} onChange={e => setKeyword(e.target.value)} maxLength={120} placeholder="例如：AI 服装设计、AI 模特、虚拟试衣" /></Form.Item></Col>
-            <Col xs={12} md={6}><Form.Item label="排序方式"><Select aria-label="排序方式" value={sort} onChange={setSort} options={sortOptions} /></Form.Item></Col>
-            <Col xs={12} md={6}><Form.Item label="发布时间"><Select aria-label="发布时间" value={noteTime} onChange={setNoteTime} options={timeOptions} /></Form.Item></Col>
-            <Col xs={12} md={6}><Form.Item label="笔记类型"><Select aria-label="笔记类型" value={noteType} onChange={setNoteType} options={[{ value: 2, label: "图文笔记" }, { value: 1, label: "视频笔记" }, { value: 0, label: "不限类型" }]} /></Form.Item></Col>
+            <Col xs={24} md={16}><Form.Item label="搜索方式"><Segmented aria-label="搜索方式" value={searchSource} onChange={value => { setSearchSource(value as "keyword" | "account"); setUserCandidates([]); }} options={[{ value: "keyword", label: "按关键词" }, { value: "account", label: "按账号" }]} /></Form.Item></Col>
+            {searchSource === "keyword" ? <>
+              <Col xs={24} md={16}><Form.Item label="搜索关键词"><Input aria-label="搜索关键词" value={keyword} onChange={e => setKeyword(e.target.value)} maxLength={120} placeholder="例如：AI 服装设计、AI 模特、虚拟试衣" /></Form.Item></Col>
+              <Col xs={12} md={6}><Form.Item label="排序方式"><Select aria-label="排序方式" value={sort} onChange={setSort} options={sortOptions} /></Form.Item></Col>
+              <Col xs={12} md={6}><Form.Item label="发布时间"><Select aria-label="发布时间" value={noteTime} onChange={setNoteTime} options={timeOptions} /></Form.Item></Col>
+              <Col xs={12} md={6}><Form.Item label="笔记类型"><Select aria-label="笔记类型" value={noteType} onChange={setNoteType} options={[{ value: 2, label: "图文笔记" }, { value: 1, label: "视频笔记" }, { value: 0, label: "不限类型" }]} /></Form.Item></Col>
+            </> : <>
+              <Col xs={24} md={16}><Form.Item label="昵称或小红书号" extra={selectedAccount ? `当前账号：${selectedAccount.name}${selectedAccount.red_id ? `（小红书号 ${selectedAccount.red_id}）` : ""}` : "先搜出账号，再在候选里选一个；昵称重名时以小红书号和粉丝数为准。"}><Input aria-label="搜索昵称" value={nickname} onChange={e => setNickname(e.target.value)} maxLength={40} placeholder="例如：PixPix" disabled={accountMode} /></Form.Item></Col>
+              <Col xs={12} md={8}><Form.Item label="账号内排序"><Select aria-label="账号内排序" value={accountSort} onChange={setAccountSort} options={[{ value: "latest", label: "最新发布" }, { value: "likes", label: "点赞最高（最近 300 篇）" }]} /></Form.Item></Col>
+            </>}
             <Col xs={12} md={6}><Form.Item label="目标数量"><Select aria-label="目标数量" value={limit} onChange={setLimit} options={[20, 30, 50].map(value => ({ value, label: `${value} 篇` }))} /></Form.Item></Col>
           </Row>
+          {accountMode && <Space wrap style={{ marginBottom: 12 }}>
+            <Tag color="blue" closable onClose={() => exitAccountMode()}>样本来源：{selectedAccount?.name}{selectedAccount?.red_id ? `（小红书号 ${selectedAccount.red_id}）` : ""}</Tag>
+            <Input aria-label="账号内筛选" value={accountFilter} onChange={e => setAccountFilter(e.target.value)} allowClear maxLength={40} placeholder={`在已加载的 ${sampleList.length} 篇里按标题筛选`} style={{ width: 280 }} />
+            <Text type="secondary">已命中 {notes.length} 篇；标题为空的笔记不会被关键词命中，可在列表里直接勾选。</Text>
+          </Space>}
+          {userCandidates.length > 0 && <Card size="small" title={`找到 ${userCandidates.length} 个账号，选择一个`} style={{ marginBottom: 12 }}>
+            <List
+              dataSource={userCandidates}
+              renderItem={user => <List.Item actions={[<Button key="use" type="link" onClick={() => void loadAccountNotes(user)} loading={searchingAccount}>用这个账号</Button>]}>
+                <List.Item.Meta
+                  avatar={<Avatar src={user.avatar} />}
+                  title={`${user.name}${user.description ? ` · ${user.description}` : ""}`}
+                  description={`小红书号 ${user.red_id || "—"} · 粉丝 ${user.fans || "—"} · 笔记 ${user.note_count || 0} 篇`}
+                />
+              </List.Item>}
+            />
+          </Card>}
           <Space wrap>
-            <Button type="primary" htmlType="submit" icon={<SearchOutlined />} loading={searching} disabled={!accountId || !keyword.trim()}>搜索 {limit} 篇内容</Button>
-            <Text type="secondary">自动翻页、去重；保留平台排序，数量不足时据实显示。</Text>
+            <Button type="primary" htmlType="submit" icon={<SearchOutlined />} loading={searching || searchingAccount}
+              disabled={!accountId || bothFilled || (accountMode ? false : !keyword.trim() && !nickname.trim())}>
+              {accountMode ? "重新加载账号笔记" : searchSource === "account" ? "搜索账号并加载笔记" : `搜索 ${limit} 篇内容`}
+            </Button>
+            <Text type="secondary">{bothFilled ? "首次搜索只能填关键词或昵称其中之一。" : accountMode ? "会重新拉取该账号最近 300 篇；关键词筛选只在已加载列表内生效。" : "自动翻页、去重；数量不足时据实显示。"}</Text>
           </Space>
         </Form>
       </Card>
       <Card title={run || !collection ? "2. 选取分析样本" : "2. 已采集样本"} extra={<Tag color="blue">{run || !collection ? `已选 ${selected.length} / ${notes.length} 篇` : `已采集 ${collection.payload.sources?.length || 0} / ${notes.length} 篇`}</Tag>}>
-        {run && <Paragraph type="secondary">本批结果：{run.payload.search.keyword} · {sortOptions.find(o => o.value === run.payload.search.sort_type_choice)?.label} · {timeOptions.find(o => o.value === run.payload.search.note_time)?.label}</Paragraph>}
+        {run && (run.payload.search.source === "user"
+          ? <Paragraph type="secondary">账号：{run.payload.search.nickname || run.payload.search.user_id} · {run.payload.search.sort === "likes" ? "点赞最高" : "最新发布"} · 已扫描 {run.payload.search.scanned ?? run.payload.items?.length ?? 0} 篇</Paragraph>
+          : <Paragraph type="secondary">本批结果：{run.payload.search.keyword} · {sortOptions.find(o => o.value === run.payload.search.sort_type_choice)?.label} · {timeOptions.find(o => o.value === run.payload.search.note_time)?.label}</Paragraph>)}
         <Paragraph type="secondary">搜索接口可能不提供发布时间；采集详情后会自动补全。缺失时间不代表采集失败。</Paragraph>
         {run?.payload.warnings?.map(w => <Alert key={w} type="warning" title={w} style={{ marginBottom: 12 }} />)}
+        {accountMode && accountFilter.trim() && <Alert type="info" title={`已在已加载列表里按标题筛选，命中 ${notes.length} 篇`} style={{ marginBottom: 12 }} />}
         <Table<XhsSearchNote>
-          rowKey="note_id" dataSource={notes} loading={searching} scroll={{ x: 760 }}
+          rowKey="note_id" dataSource={notes} loading={searching || searchingAccount} scroll={{ x: 760 }}
           pagination={{ pageSize: 10, showSizeChanger: false }}
-          locale={{ emptyText: <Empty description={searching ? "正在搜索…" : "输入关键词搜索后，内容会出现在这里"} /> }}
+          locale={{ emptyText: <Empty description={searching || searchingAccount ? "正在搜索…" : "输入关键词或昵称搜索后，内容会出现在这里"} /> }}
           rowSelection={run ? { selectedRowKeys: selected, onChange: keys => setSelected(keys.map(String)), getCheckboxProps: () => ({ disabled: collecting || starting }) } : undefined}
           columns={[
             { title: "笔记", key: "note", render: (_, note) => <Space align="start">{note.cover_url && <img src={note.cover_url} referrerPolicy="no-referrer" alt="笔记封面" style={{ width: 48, height: 64, objectFit: "cover", borderRadius: 4 }} />}<div><a href={note.note_url} target="_blank" rel="noreferrer">{note.title || "无标题笔记"}</a><br /><Text type="secondary">{note.author_name}</Text></div></Space> },
@@ -264,7 +350,7 @@ export function HotContentPage() {
         {workflow !== "legacy" && <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>当前使用{workflow === "langgraph" ? " LangGraph 试用流程" : "多 Agent"}：样本 → 受众 → 选题 → 标题 → 正文 → 配图 → 终审。{workflow === "langgraph" ? `配图与终审逐篇处理，样本分批较多时标题和正文评审也会拆到单项；每批完成后保存进度。当前数量首次全部通过约需 ${7 + 2 * ideaCount + 2 * ideaCount * variantCount} 次模型请求，累计上限会按采集数量和输出批次数自适应（至少 72 次、最多 512 次），每轮执行窗口为 90 分钟。` : "首次全部通过通常为 10 次模型请求，任务总计最多 36 次，每轮执行窗口为 30 分钟。"}每个生产阶段最多质量返工 3 次，执行窗口到期后不再开始新请求。模型评分仅供参考，仍需人工确认。</Paragraph>}
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>点击生成会将样本文字发送给所选模型服务，按其规则计费；每次请求读取超时为 3 分钟。多 Agent 与 LangGraph 遇到临时网络故障最多额外重试 5 次，通常分别等待 15、30、60、90、120 秒；格式修复另计，最多一次。超时的原请求仍可能完成并计费。LangGraph 模型服务失败或执行窗口到期，可在累计请求次数未用尽时从失败阶段继续；停止任务无法撤回已发出的请求。</Paragraph>
       </Card>
-      {collection && <Card title={`创作任务 #${collection.id} · ${collection.payload.search.keyword}`} extra={collecting ? <Space>
+      {collection && <Card title={`创作任务 #${collection.id} · ${collection.payload.search.keyword || collection.payload.search.nickname || "账号样本"}`} extra={collecting ? <Space>
         {collection.payload.analysis?.workflow === "langgraph" && <Button onClick={() => void pauseTask()} loading={starting}>暂停</Button>}
         <Button onClick={() => void stopTask()}>停止任务</Button>
       </Space> : collection.status === "paused" ? <Space>

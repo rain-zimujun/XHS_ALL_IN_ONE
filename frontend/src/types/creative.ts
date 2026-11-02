@@ -9,10 +9,31 @@ export type CreativeSearch = {
   note_type: number;
 };
 
+export type CreativeUserCandidate = {
+  user_id: string;
+  name: string;
+  red_id: string;
+  avatar: string;
+  fans: string;
+  note_count: number;
+  description: string;
+};
+
+export type CreativeAccountSearch = {
+  account_id: number;
+  user_id: string;
+  nickname?: string;
+  red_id?: string;
+  sort: "latest" | "likes";
+  scan: number;
+  limit: 20 | 30 | 50;
+};
+
 export type CreativeRun = Omit<TaskRecord, "payload"> & {
   resume_available?: boolean;
   payload: {
-    search: CreativeSearch;
+    search: CreativeSearch & { source?: "keyword" | "user"; user_id?: string; nickname?: string; red_id?: string; sort?: "latest" | "likes"; scan?: number; scanned?: number };
+    default_selected_ids?: string[];
     items?: XhsSearchNote[];
     selected_notes?: XhsSearchNote[];
     warnings?: string[];

@@ -41,6 +41,17 @@ class XhsPcApiAdapter:
                 search_id=search_id,
             )
 
+    def search_users(self, keyword: str) -> Any:
+        """Resolve a nickname to public account candidates."""
+        with direct_xhs_request_env():
+            return self._api().search_user(keyword)
+
+    def user_notes(self, user_id: str, cursor: str = "", xsec_token: str = "",
+                   xsec_source: str = "pc_user") -> Any:
+        """One page (30 notes) of a public account's posted notes."""
+        with direct_xhs_request_env():
+            return self._api().get_user_note_info(user_id, cursor, xsec_token, xsec_source)
+
     def get_note_info(self, url: str) -> Any:
         with direct_xhs_request_env():
             return self._api().get_note_info(url=url)

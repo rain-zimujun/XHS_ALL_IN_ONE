@@ -1,8 +1,8 @@
-import axios from "axios";
+﻿import axios from "axios";
 import { message } from "antd";
 
 import { fallbackPlatforms } from "./platforms";
-import type { CreativeSearch, CreativeRun, CreativeHistoryItem, CreativeHistoryPage, CreativeAnalysisOptions } from "../types/creative";
+import type { CreativeSearch, CreativeRun, CreativeHistoryItem, CreativeHistoryPage, CreativeAnalysisOptions, CreativeUserCandidate, CreativeAccountSearch } from "../types/creative";
 import type {
   AuthPayload,
   AutoTask,
@@ -86,6 +86,13 @@ const http = axios.create({
 // Authentication requests must not enter the business API's refresh interceptor.
 const authHttp = axios.create({ baseURL: "/api", timeout: 15000 });
 
+export async function searchCreativeUsers(body: { account_id: number; nickname: string }): Promise<{ users: CreativeUserCandidate[] }> {
+  return (await http.post<{ users: CreativeUserCandidate[] }>("/xhs/creative/users", body)).data;
+}
+
+export async function searchCreativeAccount(body: CreativeAccountSearch): Promise<CreativeRun> {
+  return (await http.post<CreativeRun>("/xhs/creative/search-account", body)).data;
+}
 export async function searchCreativeNotes(payload: CreativeSearch): Promise<CreativeRun> {
   return (await http.post<CreativeRun>("/xhs/creative/search", payload, { timeout: 240000 })).data;
 }

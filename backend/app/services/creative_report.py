@@ -49,11 +49,18 @@ def render_report(document: dict) -> str:
         '@media print{body{margin:0;padding:0}article{break-inside:avoid}}',
         '</style></head><body><h1>小红书热点创作报告</h1>',
         paragraph(f"关键词：{document['search']['keyword']} · 任务 #{document['task_id']} · {document['created_at']}"),
+    ]
+    if document["search"].get("source") == "user":
+        nickname = escape(document["search"].get("nickname") or "")
+        red_id = document["search"].get("red_id") or ""
+        label = f"样本来源：账号 {nickname}"
+        parts.append(paragraph(f"{label}（小红书号 {escape(red_id)}）" if red_id else label))
+    parts.extend([
         paragraph(metadata.get("disclaimer", "创作建议不保证流量，请人工核实。")),
         f'<small>有效正文 {len(sources)} 篇；每篇分析最多使用 {escape(metadata.get("excerpt_chars_per_note", ""))} 字符；{"长正文保留首尾" if metadata.get("excerpt_strategy") == "head_and_tail" else "正文从开头截取"}；完整正文见文末。模型：{escape(metadata.get("model_name", ""))}</small>',
         '<section><h2>样本分析</h2>', paragraph(result["summary"]),
         '<ul>' + ''.join(f'<li>{escape(p)}</li>' for p in result["patterns"]) + '</ul></section>',
-    ]
+    ])
     if result.get("style_summary"):
         parts.extend(['<section><h2>文案风格依据</h2>', paragraph(result["style_summary"]), '</section>'])
     for i, idea in enumerate(result["ideas"], 1):
