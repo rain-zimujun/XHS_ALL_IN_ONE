@@ -229,14 +229,19 @@ export function HotContentPage() {
   async function submitSearch() {
     if (!accountId) { setError("请先选择已绑定的小红书账号。"); return; }
     if (selectedAccount) { await loadAccountNotes(selectedAccount); return; }
-    if (keyword.trim() && nickname.trim()) { setError("首次搜索只能填关键词或昵称其中之一；选好账号后再用名称筛选。"); return; }
-    if (nickname.trim()) { await searchAccount(); return; }
-    if (!keyword.trim()) { setError("请输入关键词或昵称后再搜索。"); return; }
+    if (searchSource === "account") {
+      if (!nickname.trim()) { setError("请输入昵称后再搜索账号。"); return; }
+      await searchAccount(); return;
+    }
+    if (!keyword.trim()) { setError("请输入关键词后再搜索。"); return; }
     await searchKeyword();
   }
 
   const accountMode = Boolean(selectedAccount);
-  const bothFilled = !accountMode && Boolean(keyword.trim()) && Boolean(nickname.trim());
+  // Each mode reads only its own input: a leftover keyword must not block an
+  // account search, and a leftover nickname must not block a keyword search.
+  const activeInputFilled = searchSource === "account" ? Boolean(nickname.trim()) : Boolean(keyword.trim());
+  const canSubmit = Boolean(accountId) && (accountMode || activeInputFilled);
   const sampleList = useMemo(() => creativeSamples(run, collection), [run, collection]);
   const notes = useMemo(() => {
     if (run?.payload.search.source === "user" && accountFilter.trim()) {
@@ -288,10 +293,10 @@ export function HotContentPage() {
           </Card>}
           <Space wrap>
             <Button type="primary" htmlType="submit" icon={<SearchOutlined />} loading={searching || searchingAccount}
-              disabled={!accountId || bothFilled || (accountMode ? false : !keyword.trim() && !nickname.trim())}>
+              disabled={!canSubmit}>
               {accountMode ? "重新加载账号笔记" : searchSource === "account" ? "搜索账号并加载笔记" : `搜索 ${limit} 篇内容`}
             </Button>
-            <Text type="secondary">{bothFilled ? "首次搜索只能填关键词或昵称其中之一。" : accountMode ? "会重新拉取该账号最近 300 篇；关键词筛选只在已加载列表内生效。" : "自动翻页、去重；数量不足时据实显示。"}</Text>
+            <Text type="secondary">{accountMode ? "会重新拉取该账号最近 300 篇；关键词筛选只在已加载列表内生效。" : searchSource === "account" ? "只读取昵称输入框；关键词框的内容不影响账号搜索。" : "自动翻页、去重；数量不足时据实显示。"}</Text>
           </Space>
         </Form>
       </Card>
