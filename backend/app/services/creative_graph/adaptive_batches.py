@@ -10,7 +10,7 @@ from __future__ import annotations
 
 
 ADAPTIVE_BATCH_POLICY_VERSION = "adaptive-batches-v1"
-MAX_PARALLEL_BATCHES = 3
+MAX_PARALLEL_BATCHES = 5
 
 
 def sample_batch_count(metadata: dict | None) -> int:
@@ -22,7 +22,11 @@ def sample_batch_count(metadata: dict | None) -> int:
 def downstream_batch_policy(sample_batches: int, *, default_size: int) -> dict:
     """Return a serializable policy used in batch fingerprints and diagnostics."""
     count = sample_batches if type(sample_batches) is int and sample_batches >= 1 else 1
-    fine_grained = count > 1
+    # One item per request only pays off when the sample set itself was split
+    # broadly. With 4-6 notes (two sample batches) grouping five items per review
+    # keeps each request small while cutting the number of calls, and therefore
+    # the number of chances for a malformed response, by five.
+    fine_grained = count > 2
     return {
         "version": ADAPTIVE_BATCH_POLICY_VERSION,
         "sample_batch_count": count,

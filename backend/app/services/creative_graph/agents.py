@@ -285,6 +285,10 @@ def build_agents(model: CompatibleChatModel) -> dict[str, StructuredAgent]:
     # Each role binds its own handwritten TypedDict at construction. Pydantic
     # models below are adapters for the existing deterministic business checks.
     sample_agent = replace(SAMPLE_AGENT, max_attempts=3)
+    # Reviewers see one small item per call. A single malformed response should
+    # not abort a long review stage, so they get one more repair attempt.
+    title_review_agent = replace(TITLE_REVIEW_AGENT, max_attempts=3)
+    copy_review_agent = replace(COPY_REVIEW_AGENT, max_attempts=3)
     return {
         "sample_analysis": StructuredAgent(model, sample_agent, response_format=responses.SampleAnalysisResponse, output_model=legacy.SampleAnalysis, response_format_factory=sample_response_type),
         "sample_review": StructuredAgent(model, SAMPLE_REVIEW_AGENT, response_format=responses.SampleReviewResponse, output_model=legacy.SampleReviewResponse, response_format_factory=sample_review_response_type),
@@ -292,9 +296,9 @@ def build_agents(model: CompatibleChatModel) -> dict[str, StructuredAgent]:
         "topic": StructuredAgent(model, production_spec(TOPIC_AGENT), response_format=responses.TopicResponse, output_model=legacy.TopicBrief, output_adapter=normalize_topic_reference_lists, include_prompt_schema=False, input_projection=partial(production_context, "topic"), response_format_factory=topic_response_type),
         "topic_review": StructuredAgent(model, TOPIC_REVIEW_AGENT, response_format=responses.TopicReviewResponse, output_model=legacy.TopicReviewResponse, state_fields=("topic_revision", "input_fingerprint"), include_prompt_schema=False, response_format_factory=topic_review_response_type, payload_output_adapter=bind_topic_issue_quotes),
         "title": StructuredAgent(model, production_spec(langgraph_title_spec()), response_format=responses.TitleResponse, output_model=legacy.TitleCandidates, state_fields=("topic_revision", "input_fingerprint"), include_prompt_schema=False, input_projection=partial(production_context, "title"), response_format_factory=title_response_type, payload_output_adapter=bind_title_ids),
-        "title_review": StructuredAgent(model, TITLE_REVIEW_AGENT, response_format=responses.TitleReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False, response_format_factory=title_review_response_type, payload_output_adapter=expand_title_review),
+        "title_review": StructuredAgent(model, title_review_agent, response_format=responses.TitleReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False, response_format_factory=title_review_response_type, payload_output_adapter=expand_title_review),
         "copy": StructuredAgent(model, production_spec(COPY_AGENT), response_format=responses.CopyResponse, output_model=legacy.CopyVariants, state_fields=("input_fingerprint",), include_prompt_schema=False, input_projection=partial(production_context, "copy"), response_format_factory=copy_response_type, payload_output_adapter=bind_copy_ids),
-        "copy_review": StructuredAgent(model, COPY_REVIEW_AGENT, response_format=responses.CopyReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False, response_format_factory=item_review_response_type),
+        "copy_review": StructuredAgent(model, copy_review_agent, response_format=responses.CopyReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False, response_format_factory=item_review_response_type),
         "image": StructuredAgent(model, IMAGE_AGENT, response_format=responses.ImageResponse, output_model=ImageBatchOutput, state_fields=("input_fingerprint",), include_prompt_schema=False, response_format_factory=image_response_type),
         "final_review": StructuredAgent(model, FINAL_REVIEW_AGENT, response_format=responses.FinalReviewResponse, output_model=legacy.ItemReviewResponse, state_fields=("revision", "input_fingerprint"), include_prompt_schema=False, response_format_factory=item_review_response_type),
     }

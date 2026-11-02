@@ -268,6 +268,9 @@ def test_independent_review_and_visual_nodes_use_shared_parallel_limit(monkeypat
 
     assert result
     assert configured == {
+        # A one-idea run yields a single title/copy batch, so parallelism is 1.
+        "title_gen": 1,
+        "copy_gen": 1,
         "title_review": MAX_PARALLEL_BATCHES,
         "copy_review": MAX_PARALLEL_BATCHES,
         "image": MAX_PARALLEL_BATCHES,
