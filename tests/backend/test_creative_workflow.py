@@ -1,4 +1,4 @@
-import copy
+﻿import copy
 import json
 from collections import Counter
 
@@ -266,7 +266,7 @@ def test_api_multi_agent_saves_checkpoints_and_report_and_enforces_ownership(env
     assert len(model.calls) == calls
 
 
-def test_api_timeout_retries_three_times_and_keeps_draft_without_final_result(env):
+def test_api_timeout_retries_five_times_and_keeps_draft_without_final_result(env):
     model = WorkflowCompletion(timeout_stage="CopyVariants")
     install_client(model)
     result = collect_for_analysis(env, {"model_id": env.model_id, "idea_count": 1, "workflow": "multi_agent"})
@@ -274,7 +274,8 @@ def test_api_timeout_retries_three_times_and_keeps_draft_without_final_result(en
     assert result["error_type"] == "ai_read_timeout"
     assert "result" not in result["payload"]
     assert result["payload"]["pipeline"]["stages"]["title"]["output"]
-    assert model.counts["CopyVariants"] == 4
+    from backend.app.services.creative_retries import NETWORK_ATTEMPTS
+    assert model.counts["CopyVariants"] == NETWORK_ATTEMPTS
 
 
 def test_api_quality_failure_keeps_review_and_excludes_final_result(env):

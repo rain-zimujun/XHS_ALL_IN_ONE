@@ -57,7 +57,7 @@ export function HotContentPage() {
   const [imageMin, setImageMin] = useState(2);
   const [imageMax, setImageMax] = useState(4);
   const [visualPreferences, setVisualPreferences] = useState("");
-  const [workflow, setWorkflow] = useState<NonNullable<CreativeAnalysisOptions["workflow"]>>("multi_agent");
+  const [workflow, setWorkflow] = useState<NonNullable<CreativeAnalysisOptions["workflow"]>>("langgraph");
   const [audience, setAudience] = useState("电商、服装行业、AI、时尚行业、营销行业、美工、后期从业者");
   const [instruction, setInstruction] = useState("符合小红书爆款文案的调性，文案尽可能精简、抓眼球");
   const collecting = collection?.status === "running" || collection?.status === "pending";
@@ -170,7 +170,7 @@ export function HotContentPage() {
         setImageMin(item.payload.analysis.image_count_min || 2);
         setImageMax(item.payload.analysis.image_count_max || 4);
         setVisualPreferences(item.payload.analysis.visual_preferences || "");
-        setWorkflow(item.payload.analysis.workflow || "multi_agent");
+        setWorkflow(item.payload.analysis.workflow || "langgraph");
         setAudience(item.payload.analysis.audience); setInstruction(item.payload.analysis.instruction);
       }
       if (item.task_type === "creative_search") { setCollection(null); setRun(item); setSelected((item.payload.items || []).map(n => n.note_id)); }
@@ -342,8 +342,8 @@ export function HotContentPage() {
           </Row>
           <Collapse style={{ marginBottom: 16 }} items={[{ key: "workflow", label: "高级生成选项", children: <Form.Item label="生成方式">
             <Select aria-label="生成方式" value={workflow} onChange={setWorkflow} options={[
-              { value: "langgraph", label: "LangGraph 分阶段创作与评审（试用）" },
-              { value: "multi_agent", label: "多 Agent 分阶段创作与评审（推荐）" }, { value: "legacy", label: "旧版一次综合生成（对照用）" },
+              { value: "langgraph", label: "LangGraph 分阶段创作与评审（默认）" },
+              { value: "multi_agent", label: "多 Agent 分阶段创作与评审（试用，后续可能移除）" }, { value: "legacy", label: "旧版一次综合生成（对照用）" },
             ]} />
           </Form.Item> }]} />
           <Space wrap>
@@ -352,7 +352,7 @@ export function HotContentPage() {
           </Space>
         </Form>
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>正文参考本批有效样本的共同语气、开头、分段与互动方式，保持原创。每个标题对应 {variantCount} 版不同文案，每版都有独立配图建议与提示词；共生成 {ideaCount * variantCount} 版，数量越多通常耗时和费用越高。</Paragraph>
-        {workflow !== "legacy" && <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>当前使用{workflow === "langgraph" ? " LangGraph 试用流程" : "多 Agent"}：样本 → 受众 → 选题 → 标题 → 正文 → 配图 → 终审。{workflow === "langgraph" ? `配图与终审逐篇处理，样本分批较多时标题和正文评审也会拆到单项；每批完成后保存进度。当前数量首次全部通过约需 ${7 + 2 * ideaCount + 2 * ideaCount * variantCount} 次模型请求，累计上限会按采集数量和输出批次数自适应（至少 72 次、最多 512 次），每轮执行窗口为 90 分钟。` : "首次全部通过通常为 10 次模型请求，任务总计最多 36 次，每轮执行窗口为 30 分钟。"}每个生产阶段最多质量返工 3 次，执行窗口到期后不再开始新请求。模型评分仅供参考，仍需人工确认。</Paragraph>}
+        {workflow !== "legacy" && <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>当前使用{workflow === "langgraph" ? " LangGraph 流程（默认）" : "多 Agent 试用流程"}：样本 → 受众 → 选题 → 标题 → 正文 → 配图 → 终审。{workflow === "langgraph" ? `配图与终审逐篇处理，样本分批较多时标题和正文评审也会拆到单项；每批完成后保存进度。当前数量首次全部通过约需 ${7 + 2 * ideaCount + 2 * ideaCount * variantCount} 次模型请求，累计上限会按采集数量和输出批次数自适应（至少 72 次、最多 512 次），每轮执行窗口为 90 分钟。` : "首次全部通过通常为 10 次模型请求，任务总计最多 36 次，每轮执行窗口为 30 分钟。"}每个生产阶段最多质量返工 3 次，执行窗口到期后不再开始新请求。模型评分仅供参考，仍需人工确认。</Paragraph>}
         <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>点击生成会将样本文字发送给所选模型服务，按其规则计费；每次请求读取超时为 3 分钟。多 Agent 与 LangGraph 遇到临时网络故障最多额外重试 5 次，通常分别等待 15、30、60、90、120 秒；格式修复另计，最多一次。超时的原请求仍可能完成并计费。LangGraph 模型服务失败或执行窗口到期，可在累计请求次数未用尽时从失败阶段继续；停止任务无法撤回已发出的请求。</Paragraph>
       </Card>
       {collection && <Card title={`创作任务 #${collection.id} · ${collection.payload.search.keyword || collection.payload.search.nickname || "账号样本"}`} extra={collecting ? <Space>
