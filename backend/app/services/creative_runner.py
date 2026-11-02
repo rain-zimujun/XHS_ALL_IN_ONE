@@ -85,6 +85,14 @@ def _generate_for_task(db, task, client_factory):
         db.refresh(task)
         if task.status == "cancelled" and state["status"] != "cancelled":
             raise RunCancelled()
+        # Graph checkpoints go through this callback, so the pause flag has to be
+        # honoured here too (the same place cancellation is checked).
+        if (task.status == "running" and state.get("status") != "paused"
+                and ((task.payload or {}).get("analysis") or {}).get("workflow") == "langgraph"
+                and (task.payload or {}).get("pause_requested")):
+            task.payload = {**task.payload, "pause_requested": False}
+            db.commit()
+            raise RunPaused()
         task.payload = {**task.payload, "pipeline": state, "stage": state["activity"]}
         if graph_state is not None:
             task.payload = {**task.payload, "graph_state": graph_state}
