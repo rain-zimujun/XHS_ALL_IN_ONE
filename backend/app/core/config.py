@@ -110,6 +110,10 @@ class Settings(BaseSettings):
 
     # Asset storage
     asset_storage_type: str = "local"
+    # Optional data root. Empty keeps the historical layout (assets under
+    # backend/app/storage); setting it moves assets to <data_dir>/storage, which
+    # is what a portable or packaged install needs.
+    data_dir: str = ""
 
     # Frontend static serving
     frontend_serve_static: bool = False
@@ -148,6 +152,8 @@ class Settings(BaseSettings):
 
     @property
     def storage_dir(self) -> Path:
+        if self.data_dir.strip():
+            return Path(self.data_dir).expanduser() / "storage"
         return Path("backend/app/storage")
 
 

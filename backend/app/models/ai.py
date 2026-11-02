@@ -1,9 +1,9 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from backend.app.core.database import Base
@@ -37,7 +37,18 @@ class AiDraft(Base):
     body: Mapped[str] = mapped_column(Text, default="")
     tags: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
     source_note_id: Mapped[Optional[int]] = mapped_column(ForeignKey("notes.id"), nullable=True)
+    # Where the draft came from (manual | creative | note | benchmark) and which
+    # creative variant it mirrors; the pair is the idempotency key for re-saving.
+    source_type: Mapped[str] = mapped_column(String(32), default="manual")
+    source_task_id: Mapped[Optional[int]] = mapped_column(Integer, nullable=True, index=True)
+    source_variant_id: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="draft")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=shanghai_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=shanghai_now, onupdate=shanghai_now)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "source_task_id", "source_variant_id", name="uq_draft_source_variant"),
+    )
 
 
 class AiGeneratedAsset(Base):

@@ -1,7 +1,9 @@
 import { Alert, Button, Card, Col, Collapse, Row, Select, Space, Tabs, Tag, Typography } from "antd";
 import { useState } from "react";
 
-import { downloadExportFile, exportCreativeReport } from "../../../lib/api";
+import { Link } from "react-router-dom";
+
+import { downloadExportFile, exportCreativeReport, saveCreativeToDrafts } from "../../../lib/api";
 import { currentDecision } from "../../../lib/creative-reviews";
 import { ReviewDetails } from "./creative-reviews";
 
@@ -16,9 +18,12 @@ function QualityBadge({ label, review }: { label: string; review?: CreativeQuali
   </Tag>;
 }
 
-function VariantContent({ title, variant }: { title: string; variant: CreativeVariant }) {
+function VariantContent({ title, variant, taskId }: { title: string; variant: CreativeVariant; taskId: number }) {
   const [copied, setCopied] = useState<"body" | "note" | null>(null);
   const [copyError, setCopyError] = useState(false);
+  const [draftError, setDraftError] = useState("");
+  const [draftId, setDraftId] = useState<number | null>(null);
+  const [savingDraft, setSavingDraft] = useState(false);
   const tags = variant.tags.map(t => `#${t.replace(/^#+/, "")}`).join(" ");
   async function copyNote(kind: "body" | "note") {
     setCopyError(false);
@@ -27,13 +32,29 @@ function VariantContent({ title, variant }: { title: string; variant: CreativeVa
       setCopied(kind);
     } catch { setCopyError(true); }
   }
+  async function saveDraft() {
+    if (!variant.variant_id) return;
+    setSavingDraft(true); setDraftError("");
+    try {
+      const result = await saveCreativeToDrafts(taskId, [variant.variant_id]);
+      const saved = result.created[0] ?? result.skipped[0];
+      setDraftId(saved ? saved.draft_id : null);
+    } catch { setDraftError("存入草稿失败，请检查网络后重试。"); }
+    finally { setSavingDraft(false); }
+  }
   return <Row gutter={[16, 16]} data-testid="creative-variant-content">
     <Col xs={24} xl={12}>
       <Card size="small" title="正文文案">
         {copyError && <Alert type="warning" title="浏览器未允许复制，请选中正文手动复制。" style={{ marginBottom: 12 }} />}
+        {draftError && <Alert type="error" title={draftError} style={{ marginBottom: 12 }} />}
         <Space wrap style={{ marginBottom: 16 }}>
           <Button onClick={() => void copyNote("body")}>{copied === "body" ? "已复制正文和话题" : "复制正文和话题"}</Button>
           <Button onClick={() => void copyNote("note")}>{copied === "note" ? "已复制完整笔记" : "复制完整笔记"}</Button>
+          <Button type="primary" ghost loading={savingDraft} disabled={!variant.variant_id}
+            onClick={() => void saveDraft()}>
+            {draftId ? "已存入草稿" : "存入草稿工坊"}
+          </Button>
+          {draftId && <Link to="/platforms/xhs/drafts">去草稿工坊查看 →</Link>}
         </Space>
         <Paragraph copyable={{ text: [variant.body, tags].join("\n\n") }} style={{ whiteSpace: "pre-wrap" }} data-testid="creative-body">{variant.body}</Paragraph>
         <Title level={5}>话题标签</Title>
@@ -57,7 +78,7 @@ function VariantContent({ title, variant }: { title: string; variant: CreativeVa
   </Row>;
 }
 
-function IdeaContent({ idea, sources, pipeline }: { idea: CreativeIdea; sources: NonNullable<CreativeRun["payload"]["sources"]>; pipeline?: CreativePipeline }) {
+function IdeaContent({ idea, sources, pipeline, taskId }: { idea: CreativeIdea; sources: NonNullable<CreativeRun["payload"]["sources"]>; pipeline?: CreativePipeline; taskId: number }) {
   const legacy = !idea.variants;
   const variants: CreativeVariant[] = idea.variants || [{
     label: "原有文案", body: idea.body, tags: idea.tags, cover_text: idea.cover_text, image_plan: idea.image_plan,
@@ -75,7 +96,7 @@ function IdeaContent({ idea, sources, pipeline }: { idea: CreativeIdea; sources:
             <QualityBadge label="正文" review={variant.quality?.copy} />
             <QualityBadge label="终审" review={variant.quality?.final} />
           </Space>
-          <VariantContent title={idea.title} variant={variant} />
+          <VariantContent title={idea.title} variant={variant} taskId={taskId} />
           {variant.quality && <Collapse style={{ marginTop: 16 }} items={[{ key: "review", label: "当前文案评审详情（正文与终审）", children: <>
             <Title level={5}>正文评审</Title>
             <ReviewDetails quality={variant.quality.copy} decision={currentDecision(pipeline, "copy", variant.variant_id)} />
@@ -108,6 +129,8 @@ function IdeaContent({ idea, sources, pipeline }: { idea: CreativeIdea; sources:
 export function CreativeResults({ run, onUpdate }: { run: CreativeRun; onUpdate: (updated: CreativeRun) => void }) {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
+  const [savingAll, setSavingAll] = useState(false);
+  const [draftNotice, setDraftNotice] = useState("");
   const [selectedIdeaId, setSelectedIdeaId] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<"original" | "title" | "copy" | "final">("original");
   const [filterBy, setFilterBy] = useState<"title" | "copy" | "final">("final");
@@ -140,6 +163,14 @@ export function CreativeResults({ run, onUpdate }: { run: CreativeRun; onUpdate:
     try { onUpdate(await exportCreativeReport(run.id)); }
     catch { setError("报告导出失败，请检查本地输出目录是否可写。"); }
     finally { setExporting(false); }
+  }
+  async function saveAllDrafts() {
+    setSavingAll(true); setError(""); setDraftNotice("");
+    try {
+      const result = await saveCreativeToDrafts(run.id, []);
+      setDraftNotice(`新增 ${result.created.length} 条草稿，${result.skipped.length} 条已存在。`);
+    } catch { setError("存入草稿失败，请检查网络后重试。"); }
+    finally { setSavingAll(false); }
   }
   return <Space orientation="vertical" size={16} style={{ width: "100%" }} data-testid="creative-results">
     <Card title="4. 创作结果 · 先选标题，再选文案">
@@ -174,7 +205,7 @@ export function CreativeResults({ run, onUpdate }: { run: CreativeRun; onUpdate:
         {!visibleIdeas.length && <Col span={24}><Text type="secondary">没有达到当前分数条件的标题。</Text></Col>}
       </Row>
     </Card>
-    {idea && <IdeaContent key={`${run.id}-${selectedIndex}`} idea={idea} sources={sources} pipeline={run.payload.pipeline} />}
+    {idea && <IdeaContent key={`${run.id}-${selectedIndex}`} idea={idea} sources={sources} pipeline={run.payload.pipeline} taskId={run.id} />}
     <Collapse items={[{
       key: "analysis", label: "样本分析与文案风格依据", children: <>
         <Title level={5}>本批样本的文案风格</Title>
@@ -194,7 +225,10 @@ export function CreativeResults({ run, onUpdate }: { run: CreativeRun; onUpdate:
           catch { setError("报告下载失败，可尝试重新导出后下载。"); }
         }}>下载 {file.file_name.endsWith(".html") ? "HTML 阅读版" : "JSON 完整数据"}</Button>)}
         <Button onClick={() => void exportAgain()} loading={exporting}>重新导出报告</Button>
+        <Button type="primary" ghost loading={savingAll} onClick={() => void saveAllDrafts()}>全部存入草稿工坊</Button>
       </Space>
+      {draftNotice && <Alert style={{ marginTop: 12 }} type="success" title={draftNotice}
+        description={<Link to="/platforms/xhs/drafts">去草稿工坊查看 →</Link>} />}
       {run.payload.report_directory && <Paragraph type="secondary" style={{ marginTop: 12, marginBottom: 0 }}>服务端固定输出文件夹：<Text code copyable>{run.payload.report_directory}</Text></Paragraph>}
     </Card>
   </Space>;

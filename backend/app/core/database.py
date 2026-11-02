@@ -37,8 +37,40 @@ def init_db(bind=engine) -> None:
     import backend.app.models  # noqa: F401
 
     _run_alembic_migrations()
+    _ensure_draft_source_columns(bind)
     _normalize_model_config_names(bind)
     _normalize_sqlite_datetime_storage(bind)
+
+
+def _ensure_draft_source_columns(bind) -> None:
+    """Add the creative-source columns for databases created before them.
+
+    SQLite upgrades here are ``create_all`` based, which never alters an
+    existing table, so drafts made by older versions would otherwise miss the
+    columns the save-to-drafts endpoint writes.
+    """
+    if not str(bind.url).startswith("sqlite"):
+        return
+    inspector = inspect(bind)
+    if "ai_drafts" not in set(inspector.get_table_names()):
+        return
+    existing = {column["name"] for column in inspector.get_columns("ai_drafts")}
+    additions = {
+        "source_type": "VARCHAR(32) NOT NULL DEFAULT 'manual'",
+        "source_task_id": "INTEGER",
+        "source_variant_id": "VARCHAR(64)",
+        "status": "VARCHAR(32) NOT NULL DEFAULT 'draft'",
+        "updated_at": "DATETIME",
+    }
+    missing = {name: ddl for name, ddl in additions.items() if name not in existing}
+    with bind.begin() as connection:
+        for name, ddl in missing.items():
+            connection.execute(text(f"ALTER TABLE ai_drafts ADD COLUMN {name} {ddl}"))
+        connection.execute(text(
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_draft_source_variant ON ai_drafts (user_id, source_task_id, source_variant_id)"
+        ))
+        if "updated_at" in missing:
+            connection.execute(text("UPDATE ai_drafts SET updated_at = created_at WHERE updated_at IS NULL"))
 
 
 def _run_alembic_migrations() -> None:

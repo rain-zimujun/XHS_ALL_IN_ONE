@@ -1,4 +1,4 @@
-import json
+﻿import json
 from types import SimpleNamespace
 
 import pytest
@@ -13,7 +13,7 @@ from backend.app.api import files as files_api
 from backend.app.core.database import Base, get_db
 from backend.app.core.security import create_access_token, encrypt_text
 from backend.app.main import app
-from backend.app.models import AccountCookieVersion, ModelConfig, Note, PlatformAccount, PublishJob, Task, User
+from backend.app.models import AccountCookieVersion, AiDraft, ModelConfig, Note, PlatformAccount, PublishJob, Task, User
 from backend.app.schemas.creative import CreativeAnalysisOptions, CreativeAnalyzeRequest, CreativeSearchRequest
 from backend.app.services import creative_report, creative_runner, creative_service
 from backend.app.services.creative_analysis import get_creative_text_client_factory
@@ -165,6 +165,53 @@ def test_insufficient_search_results_are_reported(monkeypatch):
     notes, warnings = creative_service.search_samples(ShortAdapter(), CreativeSearchRequest(account_id=1, keyword="AI", limit=30))
     assert len(notes) == 1
     assert "实际获得 1 篇" in warnings[0]
+
+
+def test_save_run_to_drafts_is_idempotent_and_owned(env):
+    result_payload = {"ideas": [
+        {"idea_id": "idea_1", "title": "标题一", "variants": [
+            {"variant_id": "copy_0_0", "label": "版本一", "body": "正文一", "tags": ["AI服装", "#设计", "AI服装"]},
+            {"variant_id": "copy_0_1", "label": "版本二", "body": "正文二", "tags": []},
+        ]},
+        {"idea_id": "idea_2", "title": "标题二", "variants": [
+            {"variant_id": "copy_1_0", "label": "版本一", "body": "正文三", "tags": ["测试"]},
+        ]},
+    ]}
+    with env.factory() as db:
+        task = Task(user_id=env.user_id, platform="xhs", task_type="creative_analysis",
+                    status="completed", progress=100, payload={"result": result_payload})
+        db.add(task); db.commit(); task_id = task.id
+
+    url = f"/api/xhs/creative/runs/{task_id}/save-to-drafts"
+    first = env.client.post(url, headers=env.headers,
+                            json={"variant_ids": ["copy_0_0", "copy_1_0"], "title_prefix": "BAM｜"})
+    assert first.status_code == 200, first.text
+    assert len(first.json()["created"]) == 2
+    with env.factory() as db:
+        drafts = db.scalars(select(AiDraft).order_by(AiDraft.id)).all()
+        assert [draft.title for draft in drafts] == ["BAM｜标题一", "BAM｜标题二"]
+        assert drafts[0].tags == ["AI服装", "设计"]
+        assert drafts[0].source_type == "creative" and drafts[0].source_task_id == task_id
+        assert drafts[0].source_variant_id == "copy_0_0" and drafts[0].status == "draft"
+
+    again = env.client.post(url, headers=env.headers, json={"variant_ids": ["copy_0_0", "copy_1_0"]})
+    assert again.json()["created"] == [] and len(again.json()["skipped"]) == 2
+
+    rest = env.client.post(url, headers=env.headers, json={})
+    assert len(rest.json()["created"]) == 1 and rest.json()["created"][0]["variant_id"] == "copy_0_1"
+
+    missing = env.client.post(url, headers=env.headers, json={"variant_ids": ["copy_9_9"]})
+    assert missing.json()["created"] == [] and missing.json()["missing"] == ["copy_9_9"]
+    assert env.client.post(url, headers=env.other_headers, json={}).status_code == 404
+
+
+def test_save_run_to_drafts_rejects_tasks_without_result(env):
+    with env.factory() as db:
+        task = Task(user_id=env.user_id, platform="xhs", task_type="creative_analysis",
+                    status="completed", progress=100, payload={"result": None})
+        db.add(task); db.commit(); task_id = task.id
+    response = env.client.post(f"/api/xhs/creative/runs/{task_id}/save-to-drafts", headers=env.headers, json={})
+    assert response.status_code == 400
 
 
 def test_nickname_search_returns_account_candidates(env):

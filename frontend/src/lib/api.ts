@@ -86,6 +86,18 @@ const http = axios.create({
 // Authentication requests must not enter the business API's refresh interceptor.
 const authHttp = axios.create({ baseURL: "/api", timeout: 15000 });
 
+export type SaveDraftsResult = {
+  created: { draft_id: number; variant_id: string; idea_id?: string; title: string }[];
+  skipped: { draft_id: number; variant_id: string }[];
+  missing: string[];
+};
+
+export async function saveCreativeToDrafts(taskId: number, variantIds: string[], titlePrefix = ""): Promise<SaveDraftsResult> {
+  return (await http.post<SaveDraftsResult>(`/xhs/creative/runs/${taskId}/save-to-drafts`, {
+    variant_ids: variantIds, title_prefix: titlePrefix,
+  })).data;
+}
+
 export async function searchCreativeUsers(body: { account_id: number; nickname: string }): Promise<{ users: CreativeUserCandidate[] }> {
   return (await http.post<{ users: CreativeUserCandidate[] }>("/xhs/creative/users", body)).data;
 }

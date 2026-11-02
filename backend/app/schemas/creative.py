@@ -1,4 +1,4 @@
-from typing import Annotated, Literal
+﻿from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -19,6 +19,15 @@ class CreativeSearchRequest(BaseModel):
     sort_type_choice: int = Field(default=2, ge=0, le=4)
     note_time: int = Field(default=2, ge=0, le=3)
     note_type: int = Field(default=2, ge=0, le=2)
+
+
+class CreativeSaveDraftsRequest(BaseModel):
+    """Save one or more generated variants into the draft workbench."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    variant_ids: list[str] = Field(default_factory=list, max_length=300)
+    title_prefix: str = Field(default="", max_length=30)
 
 
 class CreativeUserSearchRequest(BaseModel):

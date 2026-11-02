@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import func, select, update
@@ -9,9 +9,9 @@ from backend.app.api.tasks import serialize_task
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
 from backend.app.core.time import shanghai_now
-from backend.app.models import Note, Task, User
+from backend.app.models import AiDraft, Note, Task, User
 from backend.app.schemas.creative import (CreativeAccountNotesRequest, CreativeAnalyzeRequest, CreativeCollectRequest,
-                                          CreativeSearchRequest, CreativeUserSearchRequest)
+                                          CreativeSaveDraftsRequest, CreativeSearchRequest, CreativeUserSearchRequest)
 from backend.app.services.creative_analysis import CreativeError, get_creative_text_client_factory, owned_text_model
 from backend.app.services.creative_runner import analyze_collection, collect_samples
 from backend.app.services.creative_report import export_report
@@ -158,6 +158,62 @@ def search_account(
     task.finished_at = shanghai_now()
     db.commit()
     return serialize_creative_task(db, task)
+
+
+@router.post("/runs/{task_id}/save-to-drafts")
+def save_run_to_drafts(
+    task_id: int, payload: CreativeSaveDraftsRequest,
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
+):
+    """Copy chosen variants into the draft workbench, one draft per variant."""
+    # A collect task that also ran a generation keeps its result on the collect task.
+    task = owned_task(db, current_user, task_id)
+    result = (task.payload or {}).get("result") or {}
+    ideas = result.get("ideas") or []
+    if not ideas:
+        raise HTTPException(400, "该任务还没有可用的成稿，无法存入草稿。")
+    wanted = set(payload.variant_ids)
+    prefix = payload.title_prefix.strip()
+    created, skipped, missing = [], [], []
+    for idea in ideas:
+        for variant in idea.get("variants") or []:
+            variant_id = str(variant.get("variant_id") or "")
+            if not variant_id:
+                continue
+            if wanted and variant_id not in wanted:
+                continue
+            existing = db.scalar(select(AiDraft).where(
+                AiDraft.user_id == current_user.id,
+                AiDraft.source_task_id == task.id,
+                AiDraft.source_variant_id == variant_id,
+            ))
+            if existing is not None:
+                skipped.append({"draft_id": existing.id, "variant_id": variant_id})
+                continue
+            tags = []
+            for tag in variant.get("tags") or []:
+                clean = str(tag).strip().lstrip("#").strip()
+                if clean and clean not in tags:
+                    tags.append(clean)
+            draft = AiDraft(
+                user_id=current_user.id, platform="xhs",
+                title=(prefix + str(idea.get("title") or ""))[:200],
+                body=str(variant.get("body") or ""),
+                tags=tags[:10] or None,
+                source_type="creative", source_task_id=task.id,
+                source_variant_id=variant_id, status="draft",
+            )
+            db.add(draft)
+            db.flush()
+            created.append({
+                "draft_id": draft.id, "variant_id": variant_id,
+                "idea_id": idea.get("idea_id"), "title": draft.title,
+            })
+    if wanted:
+        found = {item["variant_id"] for item in created} | {item["variant_id"] for item in skipped}
+        missing = sorted(wanted - found)
+    db.commit()
+    return {"created": created, "skipped": skipped, "missing": missing}
 
 
 @router.get("/runs")
