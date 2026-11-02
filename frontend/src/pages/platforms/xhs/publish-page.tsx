@@ -110,17 +110,55 @@ export function XhsPublishPage() {
   const isScheduleValid = publishMode !== "scheduled" || isFutureScheduledAt(scheduledAt);
   const isPublishLocked = selectedJob ? ["publishing", "published", "scheduled"].includes(selectedJob.status) : false;
   const hasAccount = Boolean(selectedAccountId || (selectedJob && selectedJob.platform_account_id && selectedJob.platform_account_id > 0));
+  const titleLength = (selectedJob?.title ?? "").trim().length;
+  const bodyLength = (selectedJob?.body ?? "").trim().length;
+  const uploadedImages = imageAssets.filter((asset) => asset.upload_status === "uploaded").length;
   const readyChecks = [
-    { label: "标题已填写", ok: Boolean(selectedJob?.title?.trim()) },
-    { label: "已选择发布账号", ok: hasAccount },
-    { label: "草稿包含至少一张图片或一个视频", ok: hasAnyAsset },
-    { label: "定时时间是未来时间", ok: isScheduleValid },
-    { label: "任务状态可发布", ok: Boolean(selectedJob && !isPublishLocked) },
+    {
+      label: titleLength > 20 ? `标题 ${titleLength} 字，超过 20 字上限` : "标题已填写（≤20 字）",
+      ok: Boolean(selectedJob?.title?.trim()) && titleLength <= 20,
+    },
+    {
+      label: bodyLength > 1000 ? `正文 ${bodyLength} 字，超过 1000 字上限` : "正文已填写（≤1000 字）",
+      ok: bodyLength > 0 && bodyLength <= 1000,
+    },
+    { label: hasAccount ? "已选择发布账号" : "未选择发布账号（需先绑定 Creator 账号）", ok: hasAccount },
+    {
+      label: imageAssets.length === 0 ? "至少需要 1 张图片" : `图片 ${imageAssets.length} 张（已上传 ${uploadedImages} 张）`,
+      ok: imageAssets.length > 0,
+    },
+    {
+      label: videoAssets.length > 0 ? "包含视频素材，当前只支持图文发布" : "不含视频素材",
+      ok: videoAssets.length === 0,
+    },
+    {
+      label: publishMode === "scheduled" ? (isScheduleValid ? "定时时间在将来" : "定时时间无效或已过去") : "立即发布",
+      ok: isScheduleValid,
+    },
+    {
+      label: isPublishLocked ? "任务已发布或已定时，不能重复发布" : "任务状态可发布",
+      ok: Boolean(selectedJob && !isPublishLocked),
+    },
   ];
   const canPublish = Boolean(selectedJob && readyChecks.every((check) => check.ok));
 
   function parseTopics(value: string): string[] {
     return value.split(/[,\n，]/).map((item) => item.trim()).filter(Boolean);
+  }
+
+  function explainPublishError(detail: string): string {
+    const text = (detail || "").toLowerCase();
+    if (!text) return "发布失败，请确认 Creator 账号和素材状态后重试。";
+    if (detail.includes("视频")) return "当前只支持图文发布：请移除视频素材，改用图片。";
+    if (text.includes("creator account required")) return "需要 Creator 账号：请先在「账号绑定」里扫码登录创作服务平台账号。";
+    if (detail.includes("素材上传失败")) return "素材上传到小红书失败：请检查图片格式（jpg/png）、文件大小与网络后重试。";
+    if (detail.includes("至少需要一个素材") || detail.includes("没有成功上传的素材")) return "请先添加至少 1 张图片再发布。";
+    if (detail.includes("发布标题")) return "请先填写标题再发布。";
+    if (text.includes("future")) return "定时时间需要晚于当前时间。";
+    if (text.includes("already completed")) return "该任务已经发布或已定时，不能重复发布。";
+    if (text.includes("401") || text.includes("403") || detail.includes("登录")) return "账号登录可能已失效，请重新扫码登录 Creator 账号。";
+    if (text.includes("502") || text.includes("gateway")) return "小红书接口暂时不可用，请稍后重试。";
+    return detail;
   }
 
   function applyJob(job: PublishJob) {
@@ -382,7 +420,7 @@ export function XhsPublishPage() {
                         <Title level={5} style={{ margin: 0 }}>#{selectedJob.id} {selectedJob.title || "未命名"}</Title>
                         <Space size={8} style={{ marginTop: 4 }}>
                           {getStatusTag(selectedJob.status)}
-                          {selectedJob.publish_error && <Text type="danger" style={{ fontSize: 12 }}>{selectedJob.publish_error}</Text>}
+                          {selectedJob.publish_error && <Text type="danger" style={{ fontSize: 12 }}>{explainPublishError(selectedJob.publish_error)}</Text>}
                         </Space>
                       </Col>
                       <Col>
@@ -505,7 +543,7 @@ export function XhsPublishPage() {
                                   onChange={(val) => setPublishMode(val)}
                                   options={[
                                     { value: "immediate", label: "立即发布" },
-                                    { value: "scheduled", label: "定时发布" },
+                                    { value: "scheduled", label: "定时发布（由小红书执行）" },
                                   ]}
                                 />
                               </Form.Item>
@@ -550,8 +588,20 @@ export function XhsPublishPage() {
                         />
                         {selectedJob.external_note_id && (
                           <div style={{ marginTop: 8 }}>
-                            <Text type="secondary" style={{ fontSize: 12 }}>已发布笔记：{selectedJob.external_note_id}</Text>
+                            <Text type="secondary" style={{ fontSize: 12 }}>已发布笔记：</Text>
+                            <a
+                              href={`https://www.xiaohongshu.com/explore/${selectedJob.external_note_id}`}
+                              target="_blank"
+                              rel="noreferrer"
+                            >
+                              {selectedJob.external_note_id}
+                            </a>
                           </div>
+                        )}
+                        {selectedJob.status === "scheduled" && selectedJob.scheduled_at && (
+                          <Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 8 }}>
+                            已提交给小红书定时，到点由平台发布；如需取消或改时间，请到创作服务平台操作。
+                          </Text>
                         )}
                       </Card>
                     </Col>
