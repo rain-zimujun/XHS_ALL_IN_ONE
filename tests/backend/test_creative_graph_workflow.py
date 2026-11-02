@@ -184,7 +184,7 @@ def test_graph_executes_ten_roles_and_persists_serializable_global_state(count, 
                for call in final_calls)
     assert all(len(i["variants"]) == variants for i in result["ideas"])
     assert metadata["workflow"] == "langgraph"
-    assert len(model.calls) == metadata["request_count"] == 9 + 2 * count + 2 * count * variants
+    assert len(model.calls) == metadata["request_count"] == 9 + 2 * count + 2 * count * variants + 2 * (count - 1)
     assert w.state["sample_review"]["status"] == "passed"
     approved_claims = w.state["sample_review"]["approved_claims"]
     assert len(approved_claims) == w.state["sample_review"]["claim_count"] - w.state["sample_review"]["rejected_claim_count"]
@@ -478,12 +478,11 @@ def test_graph_full_chain_normalizes_title_review_blocking_severity_without_retr
     assert metadata["request_count"] == 15
 
 
-def test_graph_title_revision_restores_approved_candidates_changed_by_model():
-    class LooseTitleRevision(GraphCompletion):
+def test_title_revision_only_regenerates_the_failed_idea():
+    class FailingIdeaTitles(GraphCompletion):
         def __init__(self):
             super().__init__()
             self.failed_idea_once = False
-            self.corrupted_revision_once = False
 
         def __call__(self, **kwargs):
             prompt, _ = json.JSONDecoder().raw_decode(kwargs["user_prompt"])
@@ -502,22 +501,28 @@ def test_graph_title_revision_restores_approved_candidates_changed_by_model():
                             "revision_instruction": "补出具体问题或收益。", "related_item_ids": [],
                         }]
                 return json.dumps(output, ensure_ascii=False)
-            if wire_name == "TitleResponse" and "quality_revision" in prompt and not self.corrupted_revision_once:
-                self.corrupted_revision_once = True
+            if wire_name == "TitleResponse" and "quality_revision" in prompt:
+                # Revisions only carry the failed idea, so every candidate in
+                # this request is a legitimate target.
                 output = json.loads(raw)
-                output["ideas"]["idea_1"]["candidates"][0]["title"] = "模型错误改动的已通过标题"
+                for group in output["ideas"].values():
+                    group["candidates"][0]["title"] += "新"
                 return json.dumps(output, ensure_ascii=False)
             return raw
 
-    model = LooseTitleRevision()
+    model = FailingIdeaTitles()
     w = workflow(model, count=3, variants=2)
     result, _ = w.run()
     assert len(result["ideas"]) == 3
-    assert all(len(idea["variants"]) == 2 for idea in result["ideas"])
-    assert model.counts["TitleCandidates"] == 2
-    # Round 1 reviews three batches; round 2 only re-judges the failed idea's
-    # candidates because the approved ones keep their verdict.
+    # Three first-pass requests (one per idea) plus one rework request.
+    assert model.counts["TitleCandidates"] == 4
     assert model.counts["title_review"] == 4
+    producer = [entry for entry in w.state["pipeline"]["stages"]["title"]["history"] if entry["role"] == "producer"]
+    first, last = producer[0]["output"], producer[-1]["output"]
+    untouched = [i["idea_id"] for i in first["ideas"] if i["idea_id"] != "idea_2"]
+    assert [i for i in last["ideas"] if i["idea_id"] in untouched] == [
+        i for i in first["ideas"] if i["idea_id"] in untouched
+    ]
     assert w.state["pipeline"]["status"] == "completed"
 
 
@@ -618,7 +623,7 @@ def test_conditional_review_edge_returns_to_producer_and_only_revises_failed_ite
     assert len(result["ideas"]) == 3
     # A title rework re-judges only the unresolved idea: approved candidates keep
     # their verdict, so this path spends two calls fewer than a full re-review.
-    assert len(model.calls) == {"TopicReviewResponse": 34, "title_review": 35, "copy_review": 37}[stage]
+    assert len(model.calls) == {"TopicReviewResponse": 38, "title_review": 39, "copy_review": 41}[stage]
     producer = {"TopicReviewResponse": "topic", "title_review": "title", "copy_review": "copy"}[stage]
     item = w.state["pipeline"]["stages"][producer]
     assert item["quality_revisions"] == 1

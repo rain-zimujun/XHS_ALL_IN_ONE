@@ -1,4 +1,4 @@
-﻿"""StateGraph controls the workflow; nodes read state and return partial updates.
+"""StateGraph controls the workflow; nodes read state and return partial updates.
 
 No legacy workflow object or hidden manual producer/reviewer loop is used.
 The mutable snapshot on the runner mirrors graph state solely for persistence
@@ -43,6 +43,10 @@ from backend.app.services.creative_graph.copy_review import (
 )
 from backend.app.services.creative_graph.adaptive_batches import MAX_PARALLEL_BATCHES, sample_batch_count
 from backend.app.services.creative_graph.batch_runner import run_batches
+from backend.app.services.creative_graph.producer_batches import (
+    COPY_BATCH_VERSION, TITLE_BATCH_VERSION, merge_copy_batches, merge_title_batches,
+    prepare_copy_batches, prepare_title_batches,
+)
 from backend.app.services.creative_graph.visual_batches import (
     IMAGE_BATCH_VERSION, FINAL_BATCH_VERSION, prepare_image_batches, image_batch_revision,
     merge_image_batches, prepare_final_batches, merge_final_batches,
@@ -85,7 +89,8 @@ def estimate_graph_request_budget(source_count: int, options: dict) -> int:
         copy_review_calls = idea_count
     audience_terms = reader_needs.split_audience_terms(options.get("audience") or "内容创作者")
     audience_calls = 1 + min(8, len(audience_terms))
-    first_pass = (sample_batches * 2 + audience_calls + 2 + 1 + title_review_calls + 1
+    # Title and copy generation now run one request per idea / locked title.
+    first_pass = (sample_batches * 2 + audience_calls + 2 + idea_count + title_review_calls + idea_count
                   + copy_review_calls + idea_count * variant_count * 2)
     return min(MAX_GRAPH_REQUESTS, max(MIN_GRAPH_REQUESTS, first_pass * GRAPH_REQUEST_HEADROOM_MULTIPLIER))
 
@@ -792,7 +797,27 @@ class LangGraphWorkflow:
             **topic_inputs(s), topic_review=s["topic_review"],
             title_max_length=s["options"].get("title_max_length", 26),
         )
-        return self._producer(s, "title", payload, lambda r: title_generation.validate_title_candidates(r, payload))
+        validator = lambda r: title_generation.validate_title_candidates(r, payload)
+
+        def invoke(agent, original, _validator, pipeline, revision):
+            # One request per idea: a 5-idea request carried about 30k characters
+            # and hit the relay's 524 window.
+            batches = prepare_title_batches(original, revision)
+            run = run_batches(
+                agent=agent, payload=original, batches=batches,
+                metadata=pipeline["stages"]["title"]["metadata"], prefix="title_gen",
+                version=TITLE_BATCH_VERSION,
+                validate=title_generation.validate_title_candidates,
+                merge=lambda results: merge_title_batches(results, original, revision),
+                checkpoint=lambda text: self._checkpoint(pipeline, text),
+                revision=revision, prepare_revision=lambda _rev, batch: batch.get("_revision"),
+                max_workers=max(1, min(MAX_PARALLEL_BATCHES, len(batches))),
+                state_lock=self._checkpoint_lock,
+            )
+            validator(run.output)
+            return run
+
+        return self._producer(s, "title", payload, validator, invoke=invoke)
 
     def _reviewed_title_texts(self) -> dict[str, str] | None:
         """Title text as it stood when the latest title review ran."""
@@ -839,7 +864,27 @@ class LangGraphWorkflow:
 
     def copy_node(self, s: CreativeGraphState) -> CopyUpdate:
         payload = copy_generation.prepare_copy_input(**title_inputs(s), title_review=s["title_review"], variant_count=s["options"]["variant_count"])
-        return self._producer(s, "copy", payload, lambda r: copy_generation.validate_copy_variants(r, payload))
+        validator = lambda r: copy_generation.validate_copy_variants(r, payload)
+
+        def invoke(agent, original, _validator, pipeline, revision):
+            # One request per locked title keeps each call well below the relay's
+            # response window (5x3 used to send every variant in one request).
+            batches = prepare_copy_batches(original, revision)
+            run = run_batches(
+                agent=agent, payload=original, batches=batches,
+                metadata=pipeline["stages"]["copy"]["metadata"], prefix="copy_gen",
+                version=COPY_BATCH_VERSION,
+                validate=copy_generation.validate_copy_variants,
+                merge=lambda results: merge_copy_batches(results, original, revision),
+                checkpoint=lambda text: self._checkpoint(pipeline, text),
+                revision=revision, prepare_revision=lambda _rev, batch: batch.get("_revision"),
+                max_workers=max(1, min(MAX_PARALLEL_BATCHES, len(batches))),
+                state_lock=self._checkpoint_lock,
+            )
+            validator(run.output)
+            return run
+
+        return self._producer(s, "copy", payload, validator, invoke=invoke)
 
     def copy_review_node(self, s: CreativeGraphState) -> CopyReviewUpdate:
         payload = copy_review.prepare_copy_review_input(**copy_inputs(s))

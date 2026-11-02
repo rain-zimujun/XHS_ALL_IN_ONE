@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from functools import partial
 import unicodedata
+from typing import Any
 
 from backend.app.core.security import decrypt_text
 from backend.app.schemas.creative import CreativeAnalysisOptions
@@ -54,6 +55,25 @@ def prepare_copy_input(*, title_review, variant_count: int = 3, **title_review_i
     })
     result["input_fingerprint"] = content_fingerprint(result)
     return result
+
+
+def bind_copy_ids(value: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Assign program-owned variant IDs in the global title order.
+
+    Batched copy requests carry one locked title, so the model cannot know the
+    global position; the batch payload provides it and IDs stay stable across
+    batches, caching and revisions.
+    """
+    base = payload.get("_title_index", 0)
+    ideas = []
+    for index, group in enumerate(value.get("ideas", []), start=base):
+        cloned = dict(group)
+        cloned["variants"] = [
+            {**variant, "variant_id": f"copy_{index}_{position}"}
+            for position, variant in enumerate(group.get("variants", []))
+        ]
+        ideas.append(cloned)
+    return {**value, "ideas": ideas}
 
 
 def validate_copy_variants(result: CopyVariants, payload: dict) -> None:

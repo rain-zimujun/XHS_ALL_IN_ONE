@@ -83,7 +83,8 @@ def bind_title_ids(value: dict[str, Any], payload: dict[str, Any]) -> dict[str, 
     """Bind program-owned idea/candidate IDs and normalize title whitespace."""
     ideas = []
     expected = payload["topic_brief"]["ideas"]
-    for idea_index, idea in enumerate(expected):
+    # Batched requests carry one idea; the global index keeps candidate IDs stable.
+    for idea_index, idea in enumerate(expected, start=payload.get("_idea_index", 0)):
         group = value["ideas"][idea["idea_id"]]
         candidates = []
         for candidate_index, candidate in enumerate(group["candidates"]):

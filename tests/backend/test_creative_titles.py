@@ -1,4 +1,4 @@
-import copy
+﻿import copy
 import json
 
 import pytest
@@ -40,7 +40,7 @@ def valid_titles(payload):
         "ideas": [{
             "idea_id": idea["idea_id"],
             "candidates": [{
-                "candidate_id": f"title_{i}_{j}", "title": f"配色{i}，换个角度看{j}",
+                "candidate_id": f"title_{i}_{j}", "title": f"配色{idea['idea_id']}，换个角度看{j}",
                 "claim_ids": [claim["claim_id"] for claim in payload.get("approved_claims_by_idea", {}).get(idea["idea_id"], [])[:1]],
                 "source_note_ids": payload.get("approved_claims_by_idea", {}).get(idea["idea_id"], [{}])[0].get("note_ids", [])[:1],
                 "angle": f"切入角度{j}", "reader_value": "获得具体配色参考。",

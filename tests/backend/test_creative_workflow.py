@@ -53,11 +53,17 @@ class WorkflowCompletion:
                         output["ideas"][i]["reader_promise"] += "，聚焦样本支持的表达要点"
             elif schema in ("TitleCandidates", "CopyVariants"):
                 collection, key, text_field = ("candidates", "candidate_id", "title") if schema == "TitleCandidates" else ("variants", "variant_id", "body")
-                previous = {v[key]: v for g in old["ideas"] for v in g[collection]}
+                # Batched requests carry one idea, so match the saved group and
+                # position instead of relying on batch-local IDs.
+                previous_groups = {g["idea_id"]: g[collection] for g in old["ideas"]}
                 for group in output["ideas"]:
+                    saved = previous_groups.get(group.get("idea_id"), [])
                     for i, v in enumerate(group[collection]):
-                        group[collection][i] = copy.deepcopy(previous[v[key]])
-                        if v[key] in ids:
+                        if i >= len(saved):
+                            continue
+                        old_item = saved[i]
+                        group[collection][i] = copy.deepcopy(old_item)
+                        if old_item[key] in ids:
                             group[collection][i][text_field] += "新"
             elif schema == "ImagePlans":
                 previous = {v["variant_id"]: v for v in old["variants"]}
