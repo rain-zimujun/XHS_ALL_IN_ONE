@@ -1,4 +1,4 @@
-import copy
+﻿import copy
 
 import pytest
 
@@ -64,7 +64,7 @@ def test_compact_title_review_promotes_existing_low_score_issue_to_blocking():
     for current in compact["reviews"]:
         current["comment"] = "标题切入明确，但读者收益需要更具体。"
         current["scores"] = {score["criterion"]: score["score"] for score in current["scores"]}
-    review["scores"]["reader_benefit"] = 5.0
+    review["scores"]["reader_benefit"] = 4.0
     review["issues"] = [{
         "criterion": "reader_benefit", "severity": "suggestion", "field": "title",
         "quote": batch["items"][0]["fields"]["title"], "problem": "读者收益不够具体。",

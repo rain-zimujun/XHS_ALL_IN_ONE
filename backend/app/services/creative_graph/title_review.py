@@ -1,4 +1,4 @@
-"""Bounded title-judge requests; canonical handoffs keep their full context."""
+﻿"""Bounded title-judge requests; canonical handoffs keep their full context."""
 from copy import deepcopy
 
 from backend.app.schemas.creative_agents import ItemJudgement, ItemReviewResponse
@@ -13,13 +13,14 @@ from backend.app.services.creative_graph.adaptive_batches import (
 
 
 TITLE_REVIEW_BATCH_SIZE = 5
-TITLE_REVIEW_VERSION = "title-review-adaptive-v5"
+TITLE_REVIEW_VERSION = "title-review-adaptive-v6"
 TITLE_CRITERION_ORDER = {criterion.key: index for index, criterion in enumerate(rubric_for("title"))}
 TITLE_REVIEW_AGENT = AgentSpec(stage="title", name="标题评委 Agent", temperature=0.2, system_prompt="""你是独立标题评委，只评价当前批次 items，不修改标题或上游选题。
 按 response_format 返回 JSON，每个 item_id 恰好一次；scores 的六项分数为 0～10 数字，对应 rubric，不添加标准。
 按标题实际表达评价点击吸引力、具体程度、读者收益、关键词与受众匹配、同组差异和自然度。
 结合 keyword、requirements、当前选题、目标受众和样本标题风格；要求出现的主题词应自然出现在标题里。
 对照 reader_promise、must_cover 和 boundaries 检查承诺；若候选绑定了获批样本结论，需检查标题承诺是否能由对应结论及来源支撑。候选自述的 rationale 不是事实依据，不能用理由代替好标题。
+标题受长度限制（约 20～26 字）：reader_benefit 只要求体现收益方向或信息缺口，与 reader_promise 方向一致即可，不要求列出完整检查清单，也不因未覆盖全部 must_cover 判 blocking。
 comment 用一句短话概括评分依据，preserve 简短写值得保留的点，comparison 简短比较本批候选的实际差异，不输出逐项长篇分析。
 低于 rubric.minimum 的每一项必须有对应 issue；blocking 标准低分必须标 blocking。不通过的标题必须给具体问题和修改指令。
 虚构数字、亲测、无法兑现的承诺或违反事实边界应标 blocking，即使分数高也不能抵消；不为保证获选项而抬高评分。

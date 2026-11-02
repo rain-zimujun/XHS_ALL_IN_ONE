@@ -37,7 +37,10 @@ TOPIC_RUBRIC = (
 TITLE_RUBRIC = (
     RubricCriterion("hook", "点击吸引力", 0.25, 6.0, True),
     RubricCriterion("specificity", "具体程度", 0.20, 6.0, True),
-    RubricCriterion("reader_benefit", "读者收益", 0.20, 5.5, True),
+    # A 20-30 character title can promise a direction, not a full checklist.
+    # With richer sample sets the judge used to score this below 5.5 and block
+    # every candidate, so the title bar is looser than the body-copy one.
+    RubricCriterion("reader_benefit", "读者收益", 0.20, 5.0, True),
     RubricCriterion("relevance", "关键词与受众匹配度", 0.15, 6.0, True),
     RubricCriterion("difference", "与其他标题的差异化", 0.10, 5.0),
     RubricCriterion("naturalness", "自然度与可读性", 0.10, 5.0),
