@@ -322,4 +322,5 @@ docs/               # 设计文档与变更记录
 | `docs/hot-content-guide.md` | 热点创作使用指南 |
 | `docs/account-search-plan.md` | 按账号搜索的方案与决策记录 |
 | `docs/creative-agent-plan.md` | 创作 Agent 与评审设计 |
+| `docs/tasks/HANDOFF.md` | **交接状态**：当前进度、已知问题、换设备恢复步骤 |
 | `docs/project-change-log.md` | 开发过程与变更记录 |
