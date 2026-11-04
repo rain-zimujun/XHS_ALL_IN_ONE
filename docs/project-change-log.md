@@ -3,6 +3,17 @@
 > 这份文档用于记录本 Fork 的项目理解、产品决策、技术改动、验证结果和可复用的简历素材。
 > 每完成一个小任务都要更新：日期、问题背景、实现方式、测试结果、提交号和后续边界。
 
+### 2026-11-04 修复 Creator 手机验证码：406 设备闸门重试与 Cookie 连续性
+
+- 现象：Creator 手机验证码登录，刚收到的码提示「验证码校验失败或已过期」；随后重试又变成「验证码发送失败」。
+- 根因一（发送失败）：`verify-code` / `qr-code` 的 **HTTP 406 是设备会话级概率闸门**（代码里已有 `LOGIN_SESSION_MAX_ATTEMPTS = 16` 的注释与常量），但 `send_phone_code` 与 `generate_qrcode` 都只发一次、从未使用该重试常量，被标记的会话必然失败。
+- 根因二（校验失败）：`create_phone_session` 返回的是**发码前**的 Cookie，而 `send_phone_code` 把响应新下发的 `gid`/`sec_poison_id`/`ets` 合并进了 API 实例内部；校验时拿着旧 Cookie，平台按「另一台设备」处理，于是判定验证码无效。
+- 修复：
+  - `send_phone_code` / `generate_qrcode` 增加闸门重试：遇到 406 时 `_reset_anonymous_session()` 重建 `a1`/`webId`/安全 Cookie 后重试，最多 16 次，带退避；成功后返回 `host_cookies_snapshot()` 的完整会话。
+  - Creator 与 PC 两个登录适配器都改为保存**发码后**的 Cookie 快照。
+  - `login_by_phone` 遇到 406 时给出明确提示「登录会话被平台风控标记（406），请重新获取验证码后再试」，不再笼统报错。
+  - 登录确认失败时把平台原文透出（原来是 `Phone login failed`）。
+- 验证：`POST /api/xhs/login-sessions/creator/qrcode` 修复后 200（3.6s，之前多次 406）；`test_api.py` 中登录/账号相关 25 项通过。手机验证码链路需用户配合实测（会真实发送短信）。
 ### 2026-11-04 浏览器代签试点：话题 ID 通过真实浏览器获取（M3.5）
 
 - 背景：话题搜索接口用我们自己的签名始终 406，而浏览器里同样的请求能 200。改用「真实浏览器代签」，不再逆向签名版本。

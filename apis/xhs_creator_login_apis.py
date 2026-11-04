@@ -647,41 +647,50 @@ class XHSCreatorLoginApi:
         return gid
 
     def generate_qrcode(self, cookies=None, old_qr_id=None):
-        if cookies:
-            self.profile.update_cookies(cookies)
-        self._require_security_cookies()
         api = '/api/cas/customer/web/qr-code'
-        data = {'service': self.creator_url}
-        if old_qr_id:
-            data['old_qr_id'] = str(old_qr_id)
-        headers, cookie_map, body = self._signed(
-            api,
-            data,
-            'POST',
-            tier='0101',
-            mns_profile='login_ready',
-            b1_profile='login',
-        )
-        headers['content-type'] = 'application/json'
-        headers = build_creator_login_headers(
-            headers,
-            self._cookies_for_url(self.customer_url, cookie_map),
-            kind='cas-post-no-rate',
-        )
-        response = self.http.post(
-            self.customer_url + api,
-            headers=headers,
-            data=body.encode('utf-8'),
-            proxies=self.proxies,
-            timeout=REQUEST_TIMEOUT,
-        )
-        self._debug_dump(
-            'qr-code (POST, 0101/a1)',
-            request_headers=headers,
-            request_body=body,
-            response=response,
-        )
-        values = self._merge_response_cookies(response)
+        response = None
+        for attempt in range(1, LOGIN_SESSION_MAX_ATTEMPTS + 1):
+            if attempt > 1:
+                self._reset_anonymous_session()
+                cookies = self.generate_init_cookies()
+            if cookies:
+                self.profile.update_cookies(cookies)
+            self._require_security_cookies()
+            data = {'service': self.creator_url}
+            if old_qr_id:
+                data['old_qr_id'] = str(old_qr_id)
+            headers, cookie_map, body = self._signed(
+                api,
+                data,
+                'POST',
+                tier='0101',
+                mns_profile='login_ready',
+                b1_profile='login',
+            )
+            headers['content-type'] = 'application/json'
+            headers = build_creator_login_headers(
+                headers,
+                self._cookies_for_url(self.customer_url, cookie_map),
+                kind='cas-post-no-rate',
+            )
+            response = self.http.post(
+                self.customer_url + api,
+                headers=headers,
+                data=body.encode('utf-8'),
+                proxies=self.proxies,
+                timeout=REQUEST_TIMEOUT,
+            )
+            self._debug_dump(
+                f'qr-code (POST, 0101/a1, attempt {attempt})',
+                request_headers=headers,
+                request_body=body,
+                response=response,
+            )
+            values = self._merge_response_cookies(response)
+            if response.status_code != 406:
+                break
+            logger.debug(f'qr-code 406 设备闸门，重建会话重试 ({attempt}/{LOGIN_SESSION_MAX_ATTEMPTS})')
+            time.sleep(min(1.5, 0.3 * attempt))
         result = response.json()
         if not result.get('success'):
             return False, self._response_message(response, result, '获取二维码失败'), None
@@ -692,7 +701,7 @@ class XHSCreatorLoginApi:
                 'res_json': result,
             }
         return True, '成功', {
-            'cookies': values,
+            'cookies': self.host_cookies_snapshot() or values,
             'qr_id': data_obj['id'],
             'qr_url': data_obj['url'],
             'support_channels': data_obj.get('support_qr_code_channel_infos', []),
@@ -940,43 +949,54 @@ class XHSCreatorLoginApi:
         return result.get('success', False), result.get('data') or {}, values
 
     def send_phone_code(self, phone, cookies=None, zone='86'):
-        if cookies:
-            self.profile.update_cookies(cookies)
-        self._require_security_cookies()
         api = '/api/cas/customer/web/verify-code'
-        # BeerLogin serializes this object in insertion order. The compact body
-        # is also the signer input, so retain the browser's service/phone/zone
-        # order instead of treating JSON object order as cosmetic.
-        data = {'service': self.creator_url, 'phone': phone, 'zone': zone}
-        headers, cookie_map, body = self._signed(
-            api,
-            data,
-            'POST',
-            tier='0101',
-            mns_profile='login_ready',
-            b1_profile='login',
-        )
-        headers['content-type'] = 'application/json'
-        self._add_service_ratelimit_header(headers)
-        headers = build_creator_login_headers(
-            headers,
-            self._cookies_for_url(self.customer_url, cookie_map),
-            kind='cas-post',
-        )
-        response = self.http.post(
-            self.customer_url + api,
-            headers=headers,
-            data=body.encode('utf-8'),
-            proxies=self.proxies,
-            timeout=REQUEST_TIMEOUT,
-        )
-        self._debug_dump(
-            'verify-code (POST, 0101/a1)',
-            request_headers=headers,
-            request_body=body,
-            response=response,
-        )
-        self._merge_response_cookies(response)
+        response = None
+        for attempt in range(1, LOGIN_SESSION_MAX_ATTEMPTS + 1):
+            if attempt > 1:
+                # The 406 gate marks the whole anonymous device session, so a retry
+                # must rebuild a1/webId/security cookies instead of resending.
+                self._reset_anonymous_session()
+                cookies = self.generate_init_cookies()
+            if cookies:
+                self.profile.update_cookies(cookies)
+            self._require_security_cookies()
+            # BeerLogin serializes this object in insertion order. The compact body
+            # is also the signer input, so retain the browser's service/phone/zone
+            # order instead of treating JSON object order as cosmetic.
+            data = {'service': self.creator_url, 'phone': phone, 'zone': zone}
+            headers, cookie_map, body = self._signed(
+                api,
+                data,
+                'POST',
+                tier='0101',
+                mns_profile='login_ready',
+                b1_profile='login',
+            )
+            headers['content-type'] = 'application/json'
+            self._add_service_ratelimit_header(headers)
+            headers = build_creator_login_headers(
+                headers,
+                self._cookies_for_url(self.customer_url, cookie_map),
+                kind='cas-post',
+            )
+            response = self.http.post(
+                self.customer_url + api,
+                headers=headers,
+                data=body.encode('utf-8'),
+                proxies=self.proxies,
+                timeout=REQUEST_TIMEOUT,
+            )
+            self._debug_dump(
+                f'verify-code (POST, 0101/a1, attempt {attempt})',
+                request_headers=headers,
+                request_body=body,
+                response=response,
+            )
+            self._merge_response_cookies(response)
+            if response.status_code != 406:
+                break
+            logger.debug(f'verify-code 406 设备闸门，重建会话重试 ({attempt}/{LOGIN_SESSION_MAX_ATTEMPTS})')
+            time.sleep(min(1.5, 0.3 * attempt))
         result = response.json()
         success = bool(result.get('success'))
         message = result.get('msg') or result.get('message')
@@ -1037,6 +1057,8 @@ class XHSCreatorLoginApi:
                 if success
                 else self._response_message(response, result, '手机号登录失败')
             )
+        if not success and response.status_code == 406:
+            message = '登录会话被平台风控标记（406），请重新获取验证码后再试'
         return success, str(message), {
             'cookies': values,
             'res_json': result,

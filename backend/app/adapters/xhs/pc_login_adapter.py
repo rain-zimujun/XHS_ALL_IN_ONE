@@ -63,9 +63,12 @@ class XhsPcLoginAdapter:
             api = XHSLoginApi()
             cookies = api.generate_init_cookies()
             success, message, _ = api.send_phone_code(phone, cookies)
+            # Keep the cookies the send-code response set; otherwise verify runs in a
+            # different device session and the platform reports the code as expired.
+            merged = api.host_cookies_snapshot() or cookies
         if not success:
             raise RuntimeError(message)
-        return {"cookies": cookies, "message": message or "sent"}
+        return {"cookies": merged, "message": message or "sent"}
 
     def confirm_phone_login(self, phone: str, code: str, cookies: dict[str, Any]) -> dict[str, Any]:
         with direct_xhs_request_env():

@@ -74,9 +74,13 @@ class XhsCreatorLoginAdapter:
             api = XHSCreatorLoginApi()
             cookies = api.generate_init_cookies()
             success, message, _ = api.send_phone_code(phone, cookies)
+            # send_phone_code merges the response cookies (gid/sec_poison_id/ets...)
+            # into the API instance, not into the input dict. The confirm call must
+            # reuse that jar or the platform treats the code as another session's.
+            merged = api.host_cookies_snapshot() or cookies
         if not success:
             raise RuntimeError(message)
-        return {"cookies": cookies, "message": message or "sent"}
+        return {"cookies": merged, "message": message or "sent"}
 
     def confirm_phone_login(self, phone: str, code: str, cookies: dict[str, Any]) -> dict[str, Any]:
         with direct_xhs_request_env():

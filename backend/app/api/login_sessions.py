@@ -365,7 +365,7 @@ def _confirm_phone_login(
         result = adapter.confirm_phone_login(payload.phone, payload.code, cookies)
         user_info = adapter.get_user_info(result["cookies"])
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Phone login failed") from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"手机号登录失败：{exc}") from exc
 
     sync_creator = payload.sync_creator if payload.sync_creator is not None else stored_sync_creator
     session.status = "confirmed"
