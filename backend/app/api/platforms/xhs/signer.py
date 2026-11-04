@@ -1,4 +1,4 @@
-"""Signer endpoints: drive a logged-in browser for signatures and topic lookup."""
+﻿"""Signer endpoints: drive a logged-in browser for signatures and topic lookup."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -54,6 +54,45 @@ def _ensure_browser(db: Session, user: User, *, start: bool) -> BrowserBridge:
     if start and not bridge.profile_in_use():
         bridge.launch(visible=False)
     return bridge
+
+
+@router.post("/import-account")
+def signer_import_account(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Create/refresh a Creator account from the signing browser's session.
+
+    The creator CAS login endpoints reject our anonymous device sessions with a
+    probabilistic 406 gate, but the browser is already logged in (the user scanned
+    once), so importing its cookie jar skips that gate entirely.
+    """
+    bridge = _bridge_for(profile_dir_for(db, current_user))
+    if not bridge.attach():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="签名浏览器未启动，请先在签名浏览器里登录")
+    if not bridge.is_logged_in():
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="签名浏览器未登录小红书，请先扫码登录")
+    flat = {
+        cookie["name"]: cookie["value"]
+        for cookie in bridge.cookies()
+        if "xiaohongshu.com" in str(cookie.get("domain") or "") and cookie.get("name") and cookie.get("value")
+    }
+    if not flat.get("a1"):
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="签名浏览器没有可用的登录 Cookie")
+
+    from backend.app.adapters.xhs.creator_login_adapter import XhsCreatorLoginAdapter
+    from backend.app.api.login_sessions import _create_account_from_login
+
+    adapter = XhsCreatorLoginAdapter()
+    try:
+        user_info = adapter.get_user_info(flat)
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"读取创作者信息失败：{exc}") from exc
+    account, action = _create_account_from_login(
+        db=db, user_id=current_user.id, sub_type="creator", user_info=user_info, cookies=flat,
+    )
+    db.commit()
+    from backend.app.api.accounts import serialize_account
+
+    return serialize_account(account, action)
+
 
 
 @router.get("/status")

@@ -21,6 +21,7 @@ from backend.app.services.account_service import (
     serialize_account,
     upsert_platform_account_from_login,
 )
+from backend.app.services import login_gate
 
 router = APIRouter(prefix="/xhs/login-sessions", tags=["xhs-login-sessions"])
 
@@ -137,6 +138,20 @@ def _create_account_from_login(
     )
 
 
+def _reject_if_cooling(key: str) -> None:
+    left = login_gate.remaining(key)
+    if left > 0:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"平台风控冷却中，请约 {max(1, left // 60 + 1)} 分钟后再试",
+        )
+
+
+def _penalize_if_gate(key: str, exc: Exception) -> None:
+    if login_gate.looks_like_gate(exc):
+        login_gate.penalize(key)
+
+
 @router.post("/pc/qrcode")
 def pc_qrcode(
     payload: PcQrCodeRequest | None = None,
@@ -145,9 +160,12 @@ def pc_qrcode(
     adapter: XhsPcLoginAdapter = Depends(get_pc_login_adapter),
 ):
     payload = payload or PcQrCodeRequest()
+    _reject_if_cooling("pc-qr")
     try:
         qr_payload = adapter.create_qrcode()
+        login_gate.clear("pc-qr")
     except Exception as exc:
+        _penalize_if_gate("pc-qr", exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"XHS PC QR code generation failed: {exc}",
@@ -181,9 +199,12 @@ def creator_qrcode(
     db: Session = Depends(get_db),
     adapter: XhsCreatorLoginAdapter = Depends(get_creator_login_adapter),
 ):
+    _reject_if_cooling("creator-qr")
     try:
         payload = adapter.create_qrcode()
+        login_gate.clear("creator-qr")
     except Exception as exc:
+        _penalize_if_gate("creator-qr", exc)
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"XHS Creator QR code generation failed: {exc}",
@@ -276,10 +297,13 @@ def pc_phone_send_code(
     db: Session = Depends(get_db),
     adapter: XhsPcLoginAdapter = Depends(get_pc_login_adapter),
 ):
+    _reject_if_cooling("pc-phone")
     try:
         result = adapter.create_phone_session(payload.phone)
+        login_gate.clear("pc-phone")
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to send phone code") from exc
+        _penalize_if_gate("pc-phone", exc)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to send phone code: {exc}") from exc
     session = LoginSession(
         user_id=current_user.id,
         platform="xhs",
@@ -315,10 +339,13 @@ def creator_phone_send_code(
     db: Session = Depends(get_db),
     adapter: XhsCreatorLoginAdapter = Depends(get_creator_login_adapter),
 ):
+    _reject_if_cooling("creator-phone")
     try:
         result = adapter.create_phone_session(payload.phone)
+        login_gate.clear("creator-phone")
     except Exception as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Failed to send phone code") from exc
+        _penalize_if_gate("creator-phone", exc)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to send phone code: {exc}") from exc
     session = LoginSession(
         user_id=current_user.id,
         platform="xhs",
@@ -365,6 +392,7 @@ def _confirm_phone_login(
         result = adapter.confirm_phone_login(payload.phone, payload.code, cookies)
         user_info = adapter.get_user_info(result["cookies"])
     except Exception as exc:
+        _penalize_if_gate(f"{sub_type}-phone", exc)
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"手机号登录失败：{exc}") from exc
 
     sync_creator = payload.sync_creator if payload.sync_creator is not None else stored_sync_creator

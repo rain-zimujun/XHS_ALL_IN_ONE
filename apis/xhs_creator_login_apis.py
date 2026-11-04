@@ -1,4 +1,4 @@
-import json
+﻿import json
 import os
 import random
 import re
@@ -83,7 +83,7 @@ QR_STATUS_MESSAGES = {
 # 概率闸门（2026-07-25 实证）：被标记的会话重发全部 406，通过的会话持续稳定；
 # 同请求重发无效，必须整包重建匿名设备会话。通过率随时间波动（实测 ~0%-50%），
 # 16 次尝试在中等通过率（≥0.2）下累计成功率 >97%。
-LOGIN_SESSION_MAX_ATTEMPTS = 16
+LOGIN_SESSION_MAX_ATTEMPTS = 5
 
 
 class XHSCreatorLoginApi:
@@ -690,7 +690,7 @@ class XHSCreatorLoginApi:
             if response.status_code != 406:
                 break
             logger.debug(f'qr-code 406 设备闸门，重建会话重试 ({attempt}/{LOGIN_SESSION_MAX_ATTEMPTS})')
-            time.sleep(min(1.5, 0.3 * attempt))
+            time.sleep(min(5.0, 1.5 * attempt))
         result = response.json()
         if not result.get('success'):
             return False, self._response_message(response, result, '获取二维码失败'), None
@@ -996,7 +996,7 @@ class XHSCreatorLoginApi:
             if response.status_code != 406:
                 break
             logger.debug(f'verify-code 406 设备闸门，重建会话重试 ({attempt}/{LOGIN_SESSION_MAX_ATTEMPTS})')
-            time.sleep(min(1.5, 0.3 * attempt))
+            time.sleep(min(5.0, 1.5 * attempt))
         result = response.json()
         success = bool(result.get('success'))
         message = result.get('msg') or result.get('message')
@@ -1061,7 +1061,7 @@ class XHSCreatorLoginApi:
             if response.status_code != 406:
                 break
             logger.debug(f'service-ticket 406 概率拒绝，同会话重发 ({attempt}/8)')
-            time.sleep(min(1.2, 0.25 * attempt))
+            time.sleep(min(4.0, 1.2 * attempt))
         values = self._merge_response_cookies(response)
         result = response.json()
         success = bool(result.get('success'))
