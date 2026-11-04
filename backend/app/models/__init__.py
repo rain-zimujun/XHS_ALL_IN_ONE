@@ -1,4 +1,4 @@
-from backend.app.models.ai import DEFAULT_TEXT_MODEL_NAME, AiDraft, AiGeneratedAsset, DraftAsset, ModelConfig
+﻿from backend.app.models.ai import DEFAULT_TEXT_MODEL_NAME, AiDraft, AiGeneratedAsset, DraftAsset, ModelConfig, TopicCache
 from backend.app.models.api_log import ApiLog
 from backend.app.models.auto_task import AutoTask
 from backend.app.models.keyword_group import KeywordGroup
@@ -18,6 +18,7 @@ __all__ = [
     "ApiLog",
     "AutoTask",
     "DEFAULT_TEXT_MODEL_NAME",
+    "TopicCache",
     "DraftAsset",
     "KeywordGroup",
     "LoginSession",

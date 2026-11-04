@@ -48,6 +48,15 @@ def resolve_topics(api, topics: list[str] | None) -> tuple[list[dict], list[str]
     plain: list[str] = []
     warnings: list[str] = []
     for topic in topics or []:
+        if isinstance(topic, dict) and topic.get("id"):
+            # Already resolved (topic cache or pasted link): use it as-is.
+            hash_tags.append({
+                "id": str(topic["id"]),
+                "link": str(topic.get("link") or ""),
+                "name": str(topic.get("name") or "话题"),
+                "type": "topic",
+            })
+            continue
         if not isinstance(topic, str) or not topic.strip():
             continue
         topic_id, ref_name = parse_topic_ref(topic)

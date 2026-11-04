@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 from datetime import datetime
@@ -17,6 +17,7 @@ from backend.app.core.time import shanghai_now
 from backend.app.models import AccountCookieVersion, PlatformAccount, PublishAsset, PublishJob, Task, User
 from backend.app.schemas.common import paginated
 from backend.app.services.publish_sync import sync_scheduled_jobs
+from backend.app.services.topic_lookup import entities_for_topics
 
 router = APIRouter(prefix="/publish", tags=["publish"])
 
@@ -522,6 +523,9 @@ def publish_job_to_creator(
         "postTime": _scheduled_post_time(job),
     }
     _apply_publish_options(note_info, _load_publish_options(job))
+    if note_info.get("topics"):
+        # Cached entities skip the (rejected) topic-search API entirely.
+        note_info["topics"] = entities_for_topics(db, current_user.id, note_info["topics"])
 
     task = Task(
         user_id=current_user.id,

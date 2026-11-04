@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional
@@ -62,6 +62,21 @@ class AiGeneratedAsset(Base):
     params: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
     file_path: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=shanghai_now)
+
+
+class TopicCache(Base):
+    """Topic name -> platform topic entity, so publishing never needs the search API."""
+
+    __tablename__ = "topic_cache"
+    __table_args__ = (UniqueConstraint("user_id", "name", name="uq_topic_cache_name"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    name: Mapped[str] = mapped_column(String(128), index=True)
+    topic_id: Mapped[str] = mapped_column(String(64), default="")
+    link: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=shanghai_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=shanghai_now)
 
 
 class DraftAsset(Base):

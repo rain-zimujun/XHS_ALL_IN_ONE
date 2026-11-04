@@ -3,6 +3,16 @@
 > 这份文档用于记录本 Fork 的项目理解、产品决策、技术改动、验证结果和可复用的简历素材。
 > 每完成一个小任务都要更新：日期、问题背景、实现方式、测试结果、提交号和后续边界。
 
+### 2026-11-04 浏览器代签试点：话题 ID 通过真实浏览器获取（M3.5）
+
+- 背景：话题搜索接口用我们自己的签名始终 406，而浏览器里同样的请求能 200。改用「真实浏览器代签」，不再逆向签名版本。
+- 实现：
+  - `services/browser_bridge.py`：按 profile 启动 Edge（独立 `--user-data-dir`，隐藏窗口但非 headless），CDP 连接、登录检测（读 Cookie）、`DevToolsActivePort`/进程命令行找回端口、`set_file_input` 传图、`capture_typing` 逐字输入并截获响应；`search_topics` 自动切「上传图文」、补一张临时图、输入 `#关键词`，抓 `/api/galaxy/v2/creator/servicegw/v2/search/topics` 的响应（`data.topics[].topic_info_dto`，含 `id`/`link`/`name`）。
+  - `models.TopicCache` + `services/topic_lookup.py`：话题名 → 实体缓存；发布时 `entities_for_topics` 命中就用实体，不命中保留原字符串走降级；`resolve_topics` 支持直接传入实体字典。
+  - `api/platforms/xhs/signer.py`：`GET /api/xhs/signer/status`、`POST /api/xhs/signer/login`（弹出窗口扫码）、`POST /api/xhs/signer/topics`（浏览器搜话题并缓存）。
+  - `database.py`：alembic 迁移后补一次 `create_all`，新增表无需手写迁移。
+- 关键发现：页面上下文的裸 `fetch` 不带签名（406），必须走 UI 路径让页面自己发请求；真正的关键词接口是 `servicegw/v2/search/topics`，`recommend/overt/topics` 只是通用推荐。
+- 验证：登录后 `/signer/status` 返回 `running=true, logged_in=true`；`POST /signer/topics {"keyword":"穿搭"}` 返回 200（7.8s，50 条候选，首条即精确匹配），并写入 `topic_cache` 50 条；新增 5 个缓存/实体用例，`test_topic_lookup.py` + `test_creator_topics.py` 共 12 项通过。
 ### 2026-11-04 话题实体：支持粘贴话题链接（搜索接口不可用时的替代路径）
 
 - 背景：正文里的 `#话题` 是**灰色纯文字**，不会自动变成可点击话题；平台只认发布参数 `common.hash_tag` 里的话题实体（`id` + `name` + `type`）。

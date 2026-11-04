@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
@@ -109,6 +109,9 @@ def _run_alembic_migrations() -> None:
             command.stamp(alembic_cfg, "head")
         else:
             command.upgrade(alembic_cfg, "head")
+        # Alembic does not know about tables added after the last migration
+        # (e.g. topic_cache), so let SQLAlchemy create whatever is still missing.
+        Base.metadata.create_all(bind=engine)
     except ImportError:
         Base.metadata.create_all(bind=engine)
 
