@@ -24,7 +24,7 @@ import {
 import { useEffect, useState } from "react";
 
 import { AddAccountDrawer } from "../../../components/account/add-account-drawer";
-import { checkAccount, deleteAccount, fetchAccounts } from "../../../lib/api";
+import { checkAccount, deleteAccount, fetchAccounts, importCreatorFromSigner } from "../../../lib/api";
 import { formatShanghaiTime } from "../../../lib/time";
 import type { PlatformAccount } from "../../../types";
 
@@ -62,6 +62,8 @@ export function XhsAccountsPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [checkingAccountIds, setCheckingAccountIds] = useState<Set<number>>(() => new Set());
   const [error, setError] = useState<string | null>(null);
+  const [importing, setImporting] = useState(false);
+  const [importNotice, setImportNotice] = useState<string | null>(null);
 
   async function loadAccounts() {
     setIsLoading(true);
@@ -119,6 +121,21 @@ export function XhsAccountsPage() {
     void loadAccounts();
   }, []);
 
+  async function importFromSigner() {
+    setImporting(true);
+    setImportNotice(null);
+    try {
+      const account = await importCreatorFromSigner();
+      setImportNotice(`已从签名浏览器导入：${account.nickname || "Creator 账号"}`);
+      await loadAccounts();
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setImportNotice(detail || "导入失败：请确认签名浏览器已登录小红书");
+    } finally {
+      setImporting(false);
+    }
+  }
+
   return (
     <div style={{ padding: "0 0 32px" }}>
       {/* Page header */}
@@ -144,13 +161,28 @@ export function XhsAccountsPage() {
               热点创作使用小红书 PC 账号，扫码绑定后即可搜索和采集；已有账号仍可在这里管理。
             </Text>
           </div>
-          <Button type="primary" icon={<PlusOutlined />} onClick={() => setDrawerOpen(true)}>
-            绑定账号
-          </Button>
+          <Space wrap>
+            <Button icon={<SyncOutlined />} loading={importing} onClick={() => void importFromSigner()}>
+              从签名浏览器导入
+            </Button>
+            <Button type="primary" icon={<PlusOutlined />} onClick={() => setDrawerOpen(true)}>
+              绑定账号
+            </Button>
+          </Space>
         </div>
       </div>
 
       {/* Section card */}
+      {importNotice && (
+        <Alert
+          style={{ marginBottom: 16 }}
+          type={importNotice.startsWith("已") ? "success" : "warning"}
+          showIcon
+          closable
+          title={importNotice}
+          onClose={() => setImportNotice(null)}
+        />
+      )}
       <Card
         title={
           <span style={{ color: "rgba(255,255,255,0.88)", fontWeight: 600 }}>已绑定账号</span>

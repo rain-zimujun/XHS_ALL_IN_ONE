@@ -870,6 +870,24 @@ export type PublishSyncSummary = {
   errors: string[];
 };
 
+export type SignerStatus = { running: boolean; logged_in: boolean; port: number; profile: string; reason?: string };
+
+export async function fetchSignerStatus(): Promise<SignerStatus> {
+  return (await http.get<SignerStatus>("/xhs/signer/status")).data;
+}
+
+export async function openSignerLogin(): Promise<{ opened: boolean; port: number; logged_in: boolean }> {
+  return (await http.post("/xhs/signer/login")).data;
+}
+
+export async function importCreatorFromSigner(): Promise<{ nickname?: string }> {
+  return (await http.post("/xhs/signer/import-account")).data;
+}
+
+export async function searchSignerTopics(keyword: string, limit = 10): Promise<{ items: { id: string; name: string; link: string }[]; total: number }> {
+  return (await http.post("/xhs/signer/topics", { keyword, limit })).data;
+}
+
 export async function syncPublishJobs(): Promise<PublishSyncSummary> {
   return (await http.post<PublishSyncSummary>("/publish/jobs/sync")).data;
 }
