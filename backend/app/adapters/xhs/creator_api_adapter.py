@@ -1,23 +1,65 @@
 from __future__ import annotations
 
+import re
 from typing import Any
+from urllib.parse import parse_qs, urlsplit
 
 from backend.app.adapters.xhs.request_env import direct_xhs_request_env
 
+_TOPIC_ID_RE = re.compile(r"[0-9a-f]{24}")
+_TOPIC_PATH_RE = re.compile(r"/topics?/([0-9a-f]{24})")
+_TOPIC_QUERY_RE = re.compile(r"(?:topic_id|topicId)=([0-9a-f]{24})")
+
+
+def parse_topic_ref(text: str) -> tuple[str, str]:
+    """Split a topic reference into ``(topic_id, name)``.
+
+    Accepts a topic page link, a bare topic id, or a plain name. The creator
+    topic-search endpoint currently rejects our signature (HTTP 406), so a link
+    or id lets the caller bypass the lookup entirely.
+    """
+    value = (text or "").strip()
+    if not value:
+        return "", ""
+    if "://" in value or value.startswith("/"):
+        match = _TOPIC_PATH_RE.search(value) or _TOPIC_QUERY_RE.search(value)
+        if match:
+            name = ""
+            try:
+                query = parse_qs(urlsplit(value).query)
+                name = (query.get("name") or query.get("topic_name") or [""])[0]
+            except ValueError:
+                name = ""
+            return match.group(1), name.strip()
+        return "", value
+    if _TOPIC_ID_RE.fullmatch(value):
+        return value, ""
+    return "", value
+
 
 def resolve_topics(api, topics: list[str] | None) -> tuple[list[dict], list[str], list[str]]:
-    """Map topic names to platform topic entities, degrading to plain text.
+    """Map topic references to platform topic entities, degrading to plain text.
 
-    The creator topic-search endpoint occasionally answers ``success: false``
-    without a message (and without entities). Aborting the whole publish because
-    a hashtag cannot be resolved is worse than posting it as plain text, so the
-    caller gets back the unresolved names plus a warning list.
+    References that already carry an id (pasted topic link or bare id) become
+    entities directly. Names still go through the lookup endpoint; when it
+    fails, the text is posted as a plain hashtag instead of aborting the publish.
     """
     hash_tags: list[dict] = []
     plain: list[str] = []
     warnings: list[str] = []
     for topic in topics or []:
         if not isinstance(topic, str) or not topic.strip():
+            continue
+        topic_id, ref_name = parse_topic_ref(topic)
+        if topic_id:
+            hash_tags.append({
+                "id": topic_id,
+                "link": "",
+                "name": ref_name or "话题",
+                "type": "topic",
+            })
+            if not ref_name:
+                warnings.append(f"话题 {topic_id} 没有提供名称，已用默认名称关联")
             continue
         name = topic.strip()
         try:
@@ -123,7 +165,7 @@ class XhsCreatorApiAdapter:
 
             success, message, payload = self._api().post_note(note_info)
         if not success:
-            raise RuntimeError(message or "Creator note publish failed")
+            raise RuntimeError(f"{message or 'Creator note publish failed'} | raw={str(payload)[:300]}")
         return payload or {}
 
     def _post_uploaded_image_note(self, note_info: dict[str, Any]) -> dict[str, Any]:
@@ -199,7 +241,7 @@ class XhsCreatorApiAdapter:
         payload = response.json()
         if not payload.get("success"):
             raise RuntimeError(
-                payload.get("msg") or payload.get("message") or "Creator note publish failed"
+                payload.get("msg") or payload.get("message") or f"Creator note publish failed: {str(payload)[:300]}"
             )
         if topic_warnings and isinstance(payload, dict):
             payload["_topic_warnings"] = topic_warnings

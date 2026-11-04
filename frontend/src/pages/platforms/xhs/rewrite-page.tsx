@@ -1,4 +1,4 @@
-import {
+﻿import {
   DeleteOutlined,
   EditOutlined,
   ExperimentOutlined,
@@ -1124,7 +1124,7 @@ export function XhsDraftsPage() {
                   placeholder="用逗号分隔，例如：AI服装，服装设计"
                   maxLength={200}
                 />
-                <Text type="secondary" style={{ fontSize: 12 }}>默认带入草稿里的标签，可增删改；最多 10 个。</Text>
+                <Text type="secondary" style={{ fontSize: 12 }}>默认带入草稿里的标签，可增删改；最多 10 个。想关联成真正的话题，可粘贴话题链接（如 https://www.xiaohongshu.com/page/topics/xxxx?name=xxx）。</Text>
               </div>
               <div>
                 <Text strong>发布方式</Text>

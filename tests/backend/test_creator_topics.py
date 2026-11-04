@@ -58,3 +58,27 @@ def test_creator_rap_fingerprint_template_is_loadable():
     value = load_creator_rap_fingerprint_hex()
     assert value.startswith("03ea00000010")
     assert len(value) == 872
+
+def test_parse_topic_ref_accepts_link_id_and_name():
+    from backend.app.adapters.xhs.creator_api_adapter import parse_topic_ref
+
+    topic_id = "6aeaa74800000000030009b1"
+    assert parse_topic_ref(f"https://www.xiaohongshu.com/page/topics/{topic_id}?name=AI服装") == (topic_id, "AI服装")
+    assert parse_topic_ref(f"https://www.xiaohongshu.com/topic/{topic_id}") == (topic_id, "")
+    assert parse_topic_ref(f"https://x.com/a?topic_id={topic_id}") == (topic_id, "")
+    assert parse_topic_ref(topic_id) == (topic_id, "")
+    assert parse_topic_ref("AI服装设计") == ("", "AI服装设计")
+    assert parse_topic_ref("") == ("", "")
+
+
+def test_resolve_topics_uses_id_from_link_without_lookup():
+    class NoLookup:
+        def get_topic(self, keyword):
+            raise AssertionError("lookup should be skipped when an id is present")
+
+    topic_id = "6aeaa74800000000030009b1"
+    hash_tags, plain, warnings = resolve_topics(
+        NoLookup(), [f"https://www.xiaohongshu.com/page/topics/{topic_id}?name=AI服装"]
+    )
+    assert hash_tags == [{"id": topic_id, "link": "", "name": "AI服装", "type": "topic"}]
+    assert plain == [] and warnings == []
