@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any
 
@@ -65,7 +65,7 @@ class XhsPcLoginAdapter:
             success, message, _ = api.send_phone_code(phone, cookies)
             # Keep the cookies the send-code response set; otherwise verify runs in a
             # different device session and the platform reports the code as expired.
-            merged = api.host_cookies_snapshot() or cookies
+            merged = dict(api.profile.cookie_map)
         if not success:
             raise RuntimeError(message)
         return {"cookies": merged, "message": message or "sent"}

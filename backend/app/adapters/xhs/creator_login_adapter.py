@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from typing import Any
 
@@ -77,7 +77,7 @@ class XhsCreatorLoginAdapter:
             # send_phone_code merges the response cookies (gid/sec_poison_id/ets...)
             # into the API instance, not into the input dict. The confirm call must
             # reuse that jar or the platform treats the code as another session's.
-            merged = api.host_cookies_snapshot() or cookies
+            merged = dict(api.profile.cookie_map)
         if not success:
             raise RuntimeError(message)
         return {"cookies": merged, "message": message or "sent"}

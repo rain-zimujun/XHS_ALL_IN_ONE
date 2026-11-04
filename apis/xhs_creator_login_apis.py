@@ -1,4 +1,4 @@
-import json
+﻿import json
 import os
 import random
 import re
@@ -701,7 +701,7 @@ class XHSCreatorLoginApi:
                 'res_json': result,
             }
         return True, '成功', {
-            'cookies': self.host_cookies_snapshot() or values,
+            'cookies': values,
             'qr_id': data_obj['id'],
             'qr_url': data_obj['url'],
             'support_channels': data_obj.get('support_qr_code_channel_infos', []),

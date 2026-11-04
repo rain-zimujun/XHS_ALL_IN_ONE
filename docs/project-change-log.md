@@ -3,6 +3,12 @@
 > 这份文档用于记录本 Fork 的项目理解、产品决策、技术改动、验证结果和可复用的简历素材。
 > 每完成一个小任务都要更新：日期、问题背景、实现方式、测试结果、提交号和后续边界。
 
+### 2026-11-04 修复手机验证码「安全 Cookie 缺失」：host_cookies_snapshot 是嵌套字典
+
+- 现象：手机验证码登录报 `Creator security bootstrap incomplete: websectiga(length=0) ... gid(length=0)`。
+- 根因：上一版用 `api.host_cookies_snapshot()` 保存发码后的 Cookie，但它返回的是 **按域名分组的嵌套字典** `{host: {name: value}}`，而非扁平 `{name: value}`；写进登录会话后，`websectiga`/`sec_poison_id`/`gid` 在顶层取不到，校验直接判为缺失。
+- 修复：Creator 与 PC 适配器改用 `dict(api.profile.cookie_map)`（扁平字典，正是签名与校验使用的同一份）；二维码返回值也不再使用嵌套快照。
+- 验证：`generate_init_cookies()` 返回的扁平 Cookie 中 `websectiga=64`、`sec_poison_id=36`、`gid=72` 长度全部符合预期；后端已重启。
 ### 2026-11-04 修复 Creator 手机验证码：406 设备闸门重试与 Cookie 连续性
 
 - 现象：Creator 手机验证码登录，刚收到的码提示「验证码校验失败或已过期」；随后重试又变成「验证码发送失败」。
