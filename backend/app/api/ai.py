@@ -431,6 +431,25 @@ def generate_cover(
     return _serialize_generated_asset(asset)
 
 
+@router.get("/images/status")
+def image_generation_status(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Whether the optional built-in image generation is available.
+
+    It is deliberately optional: without a default image model the creative
+    flow still works end-to-end as long as images are uploaded manually.
+    """
+    config = db.scalars(select(ModelConfig).where(
+        ModelConfig.user_id == current_user.id,
+        ModelConfig.model_type == "image",
+        ModelConfig.is_default.is_(True),
+    )).first()
+    return {
+        "ready": config is not None,
+        "model_name": config.model_name if config is not None else "",
+        "hint": "配置默认图片模型后可一键生成配图；不配置也可以手动上传图片完成发布。",
+    }
+
+
 @router.post("/images/generate")
 def generate_image(
     payload: GenerateImageRequest,

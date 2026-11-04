@@ -30,6 +30,16 @@ class CreativeSaveDraftsRequest(BaseModel):
     title_prefix: str = Field(default="", max_length=30)
 
 
+class CreativeGenerateImagesRequest(BaseModel):
+    """Optional built-in image generation for a finished creative run."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    variant_ids: list[str] = Field(default_factory=list, max_length=100)
+    scope: Literal["cover", "all"] = "cover"
+    max_images: int = Field(default=4, ge=1, le=10)
+
+
 class CreativeUserSearchRequest(BaseModel):
     """Nickname -> account candidates; the nickname is the only search term."""
 

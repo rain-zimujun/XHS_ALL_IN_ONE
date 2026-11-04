@@ -1,9 +1,9 @@
 import { Alert, Button, Card, Col, Collapse, Row, Select, Space, Tabs, Tag, Typography } from "antd";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { Link } from "react-router-dom";
 
-import { downloadExportFile, exportCreativeReport, saveCreativeToDrafts } from "../../../lib/api";
+import { downloadExportFile, exportCreativeReport, fetchImageGenerationStatus, generateRunImages, saveCreativeToDrafts } from "../../../lib/api";
 import { currentDecision } from "../../../lib/creative-reviews";
 import { ReviewDetails } from "./creative-reviews";
 
@@ -18,12 +18,15 @@ function QualityBadge({ label, review }: { label: string; review?: CreativeQuali
   </Tag>;
 }
 
-function VariantContent({ title, variant, taskId }: { title: string; variant: CreativeVariant; taskId: number }) {
+function VariantContent({ title, variant, taskId, imageReady }: { title: string; variant: CreativeVariant; taskId: number; imageReady: boolean }) {
   const [copied, setCopied] = useState<"body" | "note" | null>(null);
   const [copyError, setCopyError] = useState(false);
   const [draftError, setDraftError] = useState("");
   const [draftId, setDraftId] = useState<number | null>(null);
   const [savingDraft, setSavingDraft] = useState(false);
+  const [generating, setGenerating] = useState(false);
+  const [genError, setGenError] = useState("");
+  const [generatedUrls, setGeneratedUrls] = useState<string[]>([]);
   const tags = variant.tags.map(t => `#${t.replace(/^#+/, "")}`).join(" ");
   async function copyNote(kind: "body" | "note") {
     setCopyError(false);
@@ -42,11 +45,24 @@ function VariantContent({ title, variant, taskId }: { title: string; variant: Cr
     } catch { setDraftError("存入草稿失败，请检查网络后重试。"); }
     finally { setSavingDraft(false); }
   }
+  async function generateImages() {
+    if (!variant.variant_id) return;
+    setGenerating(true); setGenError("");
+    try {
+      const result = await generateRunImages(taskId, { variant_ids: [variant.variant_id], scope: "cover", max_images: 1 });
+      setGeneratedUrls(result.created.map(item => item.url));
+      if (result.failed.length) setGenError(result.failed[0].error);
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setGenError(detail || "配图生成失败，可以手动上传图片。");
+    } finally { setGenerating(false); }
+  }
   return <Row gutter={[16, 16]} data-testid="creative-variant-content">
     <Col xs={24} xl={12}>
       <Card size="small" title="正文文案">
         {copyError && <Alert type="warning" title="浏览器未允许复制，请选中正文手动复制。" style={{ marginBottom: 12 }} />}
         {draftError && <Alert type="error" title={draftError} style={{ marginBottom: 12 }} />}
+        {genError && <Alert type="warning" title={`配图生成失败：${genError}（仍可手动上传图片）`} style={{ marginBottom: 12 }} />}
         <Space wrap style={{ marginBottom: 16 }}>
           <Button onClick={() => void copyNote("body")}>{copied === "body" ? "已复制正文和话题" : "复制正文和话题"}</Button>
           <Button onClick={() => void copyNote("note")}>{copied === "note" ? "已复制完整笔记" : "复制完整笔记"}</Button>
@@ -55,7 +71,15 @@ function VariantContent({ title, variant, taskId }: { title: string; variant: Cr
             {draftId ? "已存入草稿" : "存入草稿工坊"}
           </Button>
           {draftId && <Link to="/platforms/xhs/drafts">去草稿工坊查看 →</Link>}
+          {imageReady
+            ? <Button loading={generating} disabled={!variant.variant_id} onClick={() => void generateImages()}>生成封面配图</Button>
+            : <Link to="/models"><Text type="secondary" style={{ fontSize: 12 }}>未配置图片模型（可选）· 去配置</Text></Link>}
         </Space>
+        {generatedUrls.length > 0 && <Space wrap style={{ marginBottom: 12 }}>
+          {generatedUrls.map((url, index) => <img key={index} src={url} alt={`生成的配图 ${index + 1}`} referrerPolicy="no-referrer"
+            style={{ width: 96, height: 128, objectFit: "cover", borderRadius: 6 }} />)}
+          <Text type="secondary" style={{ fontSize: 12 }}>已保存为草稿素材</Text>
+        </Space>}
         <Paragraph copyable={{ text: [variant.body, tags].join("\n\n") }} style={{ whiteSpace: "pre-wrap" }} data-testid="creative-body">{variant.body}</Paragraph>
         <Title level={5}>话题标签</Title>
         <Paragraph copyable={{ text: tags }}>{variant.tags.map((tag, i) => <Tag key={i}>{tag}</Tag>)}</Paragraph>
@@ -78,7 +102,7 @@ function VariantContent({ title, variant, taskId }: { title: string; variant: Cr
   </Row>;
 }
 
-function IdeaContent({ idea, sources, pipeline, taskId }: { idea: CreativeIdea; sources: NonNullable<CreativeRun["payload"]["sources"]>; pipeline?: CreativePipeline; taskId: number }) {
+function IdeaContent({ idea, sources, pipeline, taskId, imageReady }: { idea: CreativeIdea; sources: NonNullable<CreativeRun["payload"]["sources"]>; pipeline?: CreativePipeline; taskId: number; imageReady: boolean }) {
   const legacy = !idea.variants;
   const variants: CreativeVariant[] = idea.variants || [{
     label: "原有文案", body: idea.body, tags: idea.tags, cover_text: idea.cover_text, image_plan: idea.image_plan,
@@ -96,7 +120,7 @@ function IdeaContent({ idea, sources, pipeline, taskId }: { idea: CreativeIdea; 
             <QualityBadge label="正文" review={variant.quality?.copy} />
             <QualityBadge label="终审" review={variant.quality?.final} />
           </Space>
-          <VariantContent title={idea.title} variant={variant} taskId={taskId} />
+          <VariantContent title={idea.title} variant={variant} taskId={taskId} imageReady={imageReady} />
           {variant.quality && <Collapse style={{ marginTop: 16 }} items={[{ key: "review", label: "当前文案评审详情（正文与终审）", children: <>
             <Title level={5}>正文评审</Title>
             <ReviewDetails quality={variant.quality.copy} decision={currentDecision(pipeline, "copy", variant.variant_id)} />
@@ -130,12 +154,20 @@ export function CreativeResults({ run, onUpdate }: { run: CreativeRun; onUpdate:
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
   const [savingAll, setSavingAll] = useState(false);
+  const [imageReady, setImageReady] = useState(false);
   const [draftNotice, setDraftNotice] = useState("");
   const [selectedIdeaId, setSelectedIdeaId] = useState<string | null>(null);
   const [sortBy, setSortBy] = useState<"original" | "title" | "copy" | "final">("original");
   const [filterBy, setFilterBy] = useState<"title" | "copy" | "final">("final");
   const [minimumScore, setMinimumScore] = useState(0);
   const { result, analysis_metadata: metadata, sources = [] } = run.payload;
+  useEffect(() => {
+    let alive = true;
+    fetchImageGenerationStatus()
+      .then(status => { if (alive) setImageReady(status.ready); })
+      .catch(() => { /* optional feature: ignore */ });
+    return () => { alive = false; };
+  }, []);
   if (!result) return null;
   const scoreFor = (idea: CreativeIdea, metric: "title" | "copy" | "final") => {
     if (metric === "title") return idea.quality?.title?.overall_score;
@@ -205,7 +237,7 @@ export function CreativeResults({ run, onUpdate }: { run: CreativeRun; onUpdate:
         {!visibleIdeas.length && <Col span={24}><Text type="secondary">没有达到当前分数条件的标题。</Text></Col>}
       </Row>
     </Card>
-    {idea && <IdeaContent key={`${run.id}-${selectedIndex}`} idea={idea} sources={sources} pipeline={run.payload.pipeline} taskId={run.id} />}
+    {idea && <IdeaContent key={`${run.id}-${selectedIndex}`} idea={idea} sources={sources} pipeline={run.payload.pipeline} taskId={run.id} imageReady={imageReady} />}
     <Collapse items={[{
       key: "analysis", label: "样本分析与文案风格依据", children: <>
         <Title level={5}>本批样本的文案风格</Title>

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional
@@ -73,3 +73,6 @@ class DraftAsset(Base):
     url: Mapped[str] = mapped_column(Text, default="")
     local_path: Mapped[str] = mapped_column(Text, default="")
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
+    # upload | generated：区分手动上传与内置生图，生图保留提示词便于复现
+    source: Mapped[str] = mapped_column(String(32), default="upload")
+    prompt: Mapped[str] = mapped_column(Text, default="")

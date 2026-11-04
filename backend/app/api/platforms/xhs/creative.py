@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from sqlalchemy import func, select, update
@@ -9,9 +9,12 @@ from backend.app.api.tasks import serialize_task
 from backend.app.core.database import get_db
 from backend.app.core.deps import get_current_user
 from backend.app.core.time import shanghai_now
-from backend.app.models import AiDraft, Note, Task, User
+from backend.app.api.ai import get_image_ai_client
+from backend.app.core.security import decrypt_text
+from backend.app.models import AiDraft, AiGeneratedAsset, DraftAsset, ModelConfig, Note, Task, User
 from backend.app.schemas.creative import (CreativeAccountNotesRequest, CreativeAnalyzeRequest, CreativeCollectRequest,
-                                          CreativeSaveDraftsRequest, CreativeSearchRequest, CreativeUserSearchRequest)
+                                          CreativeGenerateImagesRequest, CreativeSaveDraftsRequest, CreativeSearchRequest,
+                                          CreativeUserSearchRequest)
 from backend.app.services.creative_analysis import CreativeError, get_creative_text_client_factory, owned_text_model
 from backend.app.services.creative_runner import analyze_collection, collect_samples
 from backend.app.services.creative_report import export_report
@@ -215,6 +218,91 @@ def save_run_to_drafts(
         missing = sorted(wanted - found)
     db.commit()
     return {"created": created, "skipped": skipped, "missing": missing}
+
+
+@router.post("/runs/{task_id}/generate-images")
+def generate_run_images(
+    task_id: int, payload: CreativeGenerateImagesRequest,
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db),
+    image_ai_client=Depends(get_image_ai_client),
+):
+    """Optional: render the planned prompts with the configured image model.
+
+    Without a default image model this returns 400 and nothing else changes —
+    uploading images by hand remains a complete path.
+    """
+    task = owned_task(db, current_user, task_id)
+    result = (task.payload or {}).get("result") or {}
+    ideas = result.get("ideas") or []
+    if not ideas:
+        raise HTTPException(400, "该任务还没有可用的成稿，无法生成配图。")
+    model_config = db.scalars(select(ModelConfig).where(
+        ModelConfig.user_id == current_user.id,
+        ModelConfig.model_type == "image",
+        ModelConfig.is_default.is_(True),
+    )).first()
+    if model_config is None:
+        raise HTTPException(400, "还没有配置默认图片模型。不配置也可以：手动上传图片同样能完成发布。")
+
+    wanted = set(payload.variant_ids)
+    planned: list[tuple[str, str]] = []
+    for idea in ideas:
+        for variant in idea.get("variants") or []:
+            variant_id = str(variant.get("variant_id") or "")
+            if not variant_id or (wanted and variant_id not in wanted):
+                continue
+            plans = variant.get("image_plan") or []
+            chosen = plans[:1] if payload.scope == "cover" else plans
+            for plan in chosen:
+                prompt = str(plan.get("prompt") or "").strip()
+                if prompt:
+                    planned.append((variant_id, prompt))
+            if len(planned) >= payload.max_images:
+                break
+        if len(planned) >= payload.max_images:
+            break
+    planned = planned[:payload.max_images]
+    if not planned:
+        raise HTTPException(400, "没有找到可用的生图提示词。")
+
+    api_key = decrypt_text(model_config.encrypted_api_key) if model_config.encrypted_api_key else ""
+    created, failed = [], []
+    for variant_id, prompt in planned:
+        try:
+            raw = image_ai_client.generate_image(model_config=model_config, api_key=api_key, prompt=prompt)
+            url = str((raw or {}).get("url") or "")
+            if not url:
+                raise ValueError("图片接口没有返回可用的图片地址")
+        except Exception as exc:  # one bad image must not abort the batch
+            failed.append({"variant_id": variant_id, "error": str(exc)[:200]})
+            continue
+        asset = AiGeneratedAsset(
+            user_id=current_user.id, prompt=prompt, model_name=model_config.model_name,
+            params={"raw": (raw or {}).get("raw")}, file_path=url,
+        )
+        db.add(asset)
+        db.flush()
+        draft = db.scalar(select(AiDraft).where(
+            AiDraft.user_id == current_user.id,
+            AiDraft.source_task_id == task.id,
+            AiDraft.source_variant_id == variant_id,
+        ))
+        draft_asset_id = None
+        if draft is not None:
+            last = db.scalar(select(func.max(DraftAsset.sort_order)).where(DraftAsset.draft_id == draft.id)) or 0
+            draft_asset = DraftAsset(
+                draft_id=draft.id, asset_type="image", url=url, local_path=url,
+                sort_order=last + 1, source="generated", prompt=prompt,
+            )
+            db.add(draft_asset)
+            db.flush()
+            draft_asset_id = draft_asset.id
+        created.append({
+            "variant_id": variant_id, "url": url, "asset_id": asset.id,
+            "draft_id": draft.id if draft is not None else None, "draft_asset_id": draft_asset_id,
+        })
+    db.commit()
+    return {"created": created, "failed": failed, "planned": len(planned)}
 
 
 @router.get("/runs")

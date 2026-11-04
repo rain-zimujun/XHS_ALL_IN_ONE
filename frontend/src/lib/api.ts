@@ -92,6 +92,25 @@ export type SaveDraftsResult = {
   missing: string[];
 };
 
+export type ImageGenerationStatus = { ready: boolean; model_name: string; hint: string };
+
+export type GeneratedImageResult = {
+  created: { variant_id: string; url: string; asset_id: number; draft_id: number | null; draft_asset_id: number | null }[];
+  failed: { variant_id: string; error: string }[];
+  planned: number;
+};
+
+export async function fetchImageGenerationStatus(): Promise<ImageGenerationStatus> {
+  return (await http.get<ImageGenerationStatus>("/ai/images/status")).data;
+}
+
+export async function generateRunImages(
+  taskId: number,
+  body: { variant_ids?: string[]; scope?: "cover" | "all"; max_images?: number },
+): Promise<GeneratedImageResult> {
+  return (await http.post<GeneratedImageResult>(`/xhs/creative/runs/${taskId}/generate-images`, body)).data;
+}
+
 export async function saveCreativeToDrafts(taskId: number, variantIds: string[], titlePrefix = ""): Promise<SaveDraftsResult> {
   return (await http.post<SaveDraftsResult>(`/xhs/creative/runs/${taskId}/save-to-drafts`, {
     variant_ids: variantIds, title_prefix: titlePrefix,
