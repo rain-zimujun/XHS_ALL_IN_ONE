@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 import random
 import re
@@ -1025,28 +1025,43 @@ class XHSCreatorLoginApi:
             'source': '',
             'type': 'phoneVerifyCode',
         }
-        headers, cookie_map, body = self._signed(
-            api,
-            data,
-            'POST',
-            tier='0101',
-            mns_profile='login_ready',
-            b1_profile='login',
-        )
-        headers['content-type'] = 'application/json'
-        self._add_service_ratelimit_header(headers)
-        headers = build_creator_login_headers(
-            headers,
-            self._cookies_for_url(self.customer_url, cookie_map),
-            kind='cas-post',
-        )
-        response = self.http.post(
-            self.customer_url + api,
-            headers=headers,
-            data=body.encode('utf-8'),
-            proxies=self.proxies,
-            timeout=REQUEST_TIMEOUT,
-        )
+        # The same request-level 406 gate applies here. The code is bound to the
+        # sending session, so the session cannot be rebuilt — only the signature
+        # can be regenerated, which is what a resend does.
+        response = None
+        for attempt in range(1, 9):
+            headers, cookie_map, body = self._signed(
+                api,
+                data,
+                'POST',
+                tier='0101',
+                mns_profile='login_ready',
+                b1_profile='login',
+            )
+            headers['content-type'] = 'application/json'
+            self._add_service_ratelimit_header(headers)
+            headers = build_creator_login_headers(
+                headers,
+                self._cookies_for_url(self.customer_url, cookie_map),
+                kind='cas-post',
+            )
+            response = self.http.post(
+                self.customer_url + api,
+                headers=headers,
+                data=body.encode('utf-8'),
+                proxies=self.proxies,
+                timeout=REQUEST_TIMEOUT,
+            )
+            self._debug_dump(
+                f'service-ticket (POST, 0101/a1, attempt {attempt})',
+                request_headers=headers,
+                request_body=body,
+                response=response,
+            )
+            if response.status_code != 406:
+                break
+            logger.debug(f'service-ticket 406 概率拒绝，同会话重发 ({attempt}/8)')
+            time.sleep(min(1.2, 0.25 * attempt))
         values = self._merge_response_cookies(response)
         result = response.json()
         success = bool(result.get('success'))
