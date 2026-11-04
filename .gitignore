@@ -1,4 +1,4 @@
-__pycache__
+﻿__pycache__
 node_modules/
 *.so
 .Python
@@ -39,3 +39,5 @@ AGENTS.md
 .superpowers
 .pytest_cache
 docx
+# 本地数据（含浏览器 profile 与 Cookie，绝不能提交）
+data/
