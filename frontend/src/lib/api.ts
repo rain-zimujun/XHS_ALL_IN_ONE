@@ -863,6 +863,17 @@ export async function updatePublishJob(jobId: number, payload: PublishJobUpdateP
   return response.data;
 }
 
+export type PublishSyncSummary = {
+  checked: number;
+  published: number;
+  still_scheduled: number;
+  errors: string[];
+};
+
+export async function syncPublishJobs(): Promise<PublishSyncSummary> {
+  return (await http.post<PublishSyncSummary>("/publish/jobs/sync")).data;
+}
+
 export async function publishJobToCreator(jobId: number): Promise<PublishJob> {
   const response = await http.post<PublishJob>(`/publish/jobs/${jobId}/publish`);
   return response.data;

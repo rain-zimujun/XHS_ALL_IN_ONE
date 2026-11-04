@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from datetime import datetime
 from typing import Optional
@@ -24,6 +24,9 @@ class PublishJob(Base):
     publish_options: Mapped[str] = mapped_column(Text, default="{}")
     status: Mapped[str] = mapped_column(String(32), default="pending")
     scheduled_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
+    # When we handed the note to the creator API. For scheduled notes the platform
+    # publishes later, so published_at is filled by the status sync instead.
+    submitted_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)
     external_note_id: Mapped[str] = mapped_column(String(128), default="")
     publish_error: Mapped[str] = mapped_column(Text, default="")
     published_at: Mapped[Optional[datetime]] = mapped_column(DateTime, nullable=True)

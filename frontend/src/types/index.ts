@@ -588,6 +588,7 @@ export type PublishJob = {
   publish_options?: PublishOptions;
   status: "pending" | "uploading" | "publishing" | "scheduled" | "published" | "failed" | "cancelled" | string;
   scheduled_at?: string | null;
+  submitted_at?: string | null;
   external_note_id: string;
   publish_error: string;
   published_at?: string | null;

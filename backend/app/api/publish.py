@@ -16,6 +16,7 @@ from backend.app.core.security import decrypt_text
 from backend.app.core.time import shanghai_now
 from backend.app.models import AccountCookieVersion, PlatformAccount, PublishAsset, PublishJob, Task, User
 from backend.app.schemas.common import paginated
+from backend.app.services.publish_sync import sync_scheduled_jobs
 
 router = APIRouter(prefix="/publish", tags=["publish"])
 
@@ -122,6 +123,7 @@ def serialize_publish_job(job: PublishJob) -> dict:
         "publish_options": _load_publish_options(job),
         "status": job.status,
         "scheduled_at": job.scheduled_at.isoformat() if job.scheduled_at else None,
+        "submitted_at": job.submitted_at.isoformat() if job.submitted_at else None,
         "external_note_id": job.external_note_id,
         "publish_error": job.publish_error,
         "published_at": job.published_at.isoformat() if job.published_at else None,
@@ -262,6 +264,16 @@ def get_publish_jobs(
         statement = statement.where(PublishJob.platform == platform)
     jobs = db.scalars(statement.order_by(PublishJob.created_at.desc(), PublishJob.id.desc())).all()
     return paginated([serialize_publish_job(job) for job in jobs], page, page_size)
+
+
+@router.post("/jobs/sync")
+def sync_jobs(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    adapter_factory=Depends(get_creator_publish_adapter_factory),
+):
+    """Refresh scheduled jobs from the creator posted list (read-only)."""
+    return sync_scheduled_jobs(db, current_user, adapter_factory)
 
 
 @router.get("/jobs/{job_id}")
@@ -531,10 +543,13 @@ def publish_job_to_creator(
 
     try:
         payload = adapter_factory(cookies).post_note(note_info)
+        job.submitted_at = shanghai_now()
         job.status = "scheduled" if job.publish_mode == "scheduled" else "published"
         job.external_note_id = _extract_external_note_id(payload)
         job.publish_error = ""
-        job.published_at = shanghai_now()
+        # Scheduled notes are published by the platform later; the status sync
+        # fills published_at once the note shows up in the posted list.
+        job.published_at = None if job.publish_mode == "scheduled" else job.submitted_at
         task.status = "completed"
         task.progress = 100
         task.payload = {

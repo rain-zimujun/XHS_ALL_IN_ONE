@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from sqlalchemy import create_engine, event, inspect, text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
@@ -71,6 +71,10 @@ def _ensure_draft_source_columns(bind) -> None:
             ))
             if "updated_at" in missing:
                 connection.execute(text("UPDATE ai_drafts SET updated_at = created_at WHERE updated_at IS NULL"))
+        if "publish_jobs" in tables:
+            existing_jobs = {column["name"] for column in inspector.get_columns("publish_jobs")}
+            if "submitted_at" not in existing_jobs:
+                connection.execute(text("ALTER TABLE publish_jobs ADD COLUMN submitted_at DATETIME"))
         if "draft_assets" in tables:
             existing_assets = {column["name"] for column in inspector.get_columns("draft_assets")}
             for name, ddl in {

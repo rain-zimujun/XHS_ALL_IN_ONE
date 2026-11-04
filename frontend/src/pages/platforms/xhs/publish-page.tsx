@@ -9,6 +9,7 @@ import {
   ReloadOutlined,
   SaveOutlined,
   SendOutlined,
+  SyncOutlined,
 } from "@ant-design/icons";
 import {
   Alert,
@@ -41,6 +42,7 @@ import {
   fetchPublishJob,
   fetchPublishJobs,
   publishJobToCreator,
+  syncPublishJobs,
   updatePublishJob,
 } from "../../../lib/api";
 import { formatShanghaiTime } from "../../../lib/time";
@@ -98,6 +100,7 @@ export function XhsPublishPage() {
   const [isDetailLoading, setIsDetailLoading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isPublishing, setIsPublishing] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -304,9 +307,27 @@ export function XhsPublishPage() {
     }
   }
 
+  async function handleSync(silent = false) {
+    setIsSyncing(true);
+    if (!silent) setError(null);
+    try {
+      const summary = await syncPublishJobs();
+      if (summary.published > 0) {
+        setMessage(`状态同步完成：${summary.published} 条已确认发布，${summary.still_scheduled} 条仍在等待定时。`);
+      }
+      if (summary.errors.length > 0) setError(summary.errors.join("；"));
+      if (summary.published > 0) await loadJobs();
+    } catch {
+      if (!silent) setError("状态同步失败，请检查 Creator 账号状态。");
+    } finally {
+      setIsSyncing(false);
+    }
+  }
+
   useEffect(() => {
     void loadJobs();
     void loadAccounts();
+    void handleSync(true);
   }, []);
 
   const scheduledDayjs: Dayjs | null = scheduledAt ? dayjs(scheduledAt) : null;
@@ -425,6 +446,7 @@ export function XhsPublishPage() {
                       </Col>
                       <Col>
                         <Space>
+                          <Button icon={<SyncOutlined />} onClick={() => void handleSync()} loading={isSyncing}>同步状态</Button>
                           <Button icon={<SaveOutlined />} onClick={handleSave} loading={isSaving}>保存参数</Button>
                           <Popconfirm title="确定删除此发布任务？" onConfirm={handleDeleteJob}>
                             <Button danger icon={<DeleteOutlined />}>删除</Button>
