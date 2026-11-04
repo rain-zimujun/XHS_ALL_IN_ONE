@@ -37,6 +37,24 @@ def parse_topic_ref(text: str) -> tuple[str, str]:
     return "", value
 
 
+def _publish_failure_message(payload: Any, status_code: int) -> str:
+    """Translate the creator post rejection into an actionable message."""
+    message = ""
+    if isinstance(payload, dict):
+        message = str(payload.get("msg") or payload.get("message") or "")
+    if message:
+        return message
+    code = payload.get("code") if isinstance(payload, dict) else None
+    if status_code in (401, 403):
+        return "Creator 登录已失效，请重新登录创作服务平台"
+    if code == -1 or status_code in (406, 429):
+        return (
+            "平台拒绝了这次发布（code=-1，通常是发布频率/风控限制）。"
+            "请稍后再试，或到创作服务平台确认是否有待审/失败记录"
+        )
+    return f"Creator note publish failed: {str(payload)[:300]}"
+
+
 def resolve_topics(api, topics: list[str] | None) -> tuple[list[dict], list[str], list[str]]:
     """Map topic references to platform topic entities, degrading to plain text.
 
@@ -249,9 +267,7 @@ class XhsCreatorApiAdapter:
         )
         payload = response.json()
         if not payload.get("success"):
-            raise RuntimeError(
-                payload.get("msg") or payload.get("message") or f"Creator note publish failed: {str(payload)[:300]}"
-            )
+            raise RuntimeError(_publish_failure_message(payload, response.status_code))
         if topic_warnings and isinstance(payload, dict):
             payload["_topic_warnings"] = topic_warnings
         return payload
