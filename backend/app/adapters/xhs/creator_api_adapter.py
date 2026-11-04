@@ -5,6 +5,48 @@ from typing import Any
 from backend.app.adapters.xhs.request_env import direct_xhs_request_env
 
 
+def resolve_topics(api, topics: list[str] | None) -> tuple[list[dict], list[str], list[str]]:
+    """Map topic names to platform topic entities, degrading to plain text.
+
+    The creator topic-search endpoint occasionally answers ``success: false``
+    without a message (and without entities). Aborting the whole publish because
+    a hashtag cannot be resolved is worse than posting it as plain text, so the
+    caller gets back the unresolved names plus a warning list.
+    """
+    hash_tags: list[dict] = []
+    plain: list[str] = []
+    warnings: list[str] = []
+    for topic in topics or []:
+        if not isinstance(topic, str) or not topic.strip():
+            continue
+        name = topic.strip()
+        try:
+            success, _message, payload = api.get_topic(name)
+        except Exception:  # a broken lookup must not abort the publish
+            success, payload = False, None
+        items = []
+        if isinstance(payload, dict):
+            data = payload.get("data")
+            if isinstance(data, dict):
+                items = data.get("topic_info_dtos") or []
+        if not success or not items:
+            plain.append(name)
+            warnings.append(f"话题「{name}」未能关联到话题实体，已按普通文字写入正文")
+            continue
+        item = items[0]
+        if not isinstance(item, dict) or not item.get("id"):
+            plain.append(name)
+            warnings.append(f"话题「{name}」数据不完整，已按普通文字写入正文")
+            continue
+        hash_tags.append({
+            "id": item["id"],
+            "link": item.get("link", ""),
+            "name": item.get("name") or name,
+            "type": "topic",
+        })
+    return hash_tags, plain, warnings
+
+
 class XhsCreatorApiAdapter:
     def __init__(self, cookies: str) -> None:
         self.cookies = cookies
@@ -126,24 +168,14 @@ class XhsCreatorApiAdapter:
         # 浏览器实抓：未选地点时省略 post_loc 键，空对象会被服务端以参数错误打回
         if not post_loc:
             data["common"].pop("post_loc", None)
-        for topic in note_info.get("topics") or []:
-            if not isinstance(topic, str) or not topic.strip():
-                continue
-            success, message, topic_payload = api.get_topic(topic.strip())
-            if not success:
-                raise RuntimeError(message or "Creator topic lookup failed")
-            topic_items = (topic_payload.get("data") or {}).get("topic_info_dtos") or []
-            if not topic_items:
-                raise RuntimeError(f"未找到话题{topic}")
-            item = topic_items[0]
-            insert_topic = {
-                "id": item["id"],
-                "link": item.get("link", ""),
-                "name": item["name"],
-                "type": "topic",
-            }
+        hash_tags, plain_topics, topic_warnings = resolve_topics(api, note_info.get("topics"))
+        for insert_topic in hash_tags:
             data["common"]["hash_tag"].append(insert_topic)
             data["common"]["desc"] += f" #{insert_topic['name']}[话题]# "
+        for name in plain_topics:
+            # Plain text fallback: the note still carries the hashtag text even
+            # when the platform cannot resolve it into a topic entity.
+            data["common"]["desc"] += f" #{name} "
         headers, cookies, body = api._request_params(
             post_api,
             data,
@@ -169,4 +201,6 @@ class XhsCreatorApiAdapter:
             raise RuntimeError(
                 payload.get("msg") or payload.get("message") or "Creator note publish failed"
             )
+        if topic_warnings and isinstance(payload, dict):
+            payload["_topic_warnings"] = topic_warnings
         return payload

@@ -550,6 +550,10 @@ def publish_job_to_creator(
         # Scheduled notes are published by the platform later; the status sync
         # fills published_at once the note shows up in the posted list.
         job.published_at = None if job.publish_mode == "scheduled" else job.submitted_at
+        if isinstance(payload, dict) and payload.get("_topic_warnings"):
+            options = _load_publish_options(job)
+            options["topic_warnings"] = payload["_topic_warnings"]
+            _store_publish_options(job, options)
         task.status = "completed"
         task.progress = 100
         task.payload = {

@@ -1,4 +1,4 @@
-import os
+﻿import os
 import tempfile
 import time
 
@@ -249,7 +249,7 @@ class XHS_Creator_Apis:
                 timeout=REQUEST_TIMEOUT,
             )
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success, msg = bool(res_json.get("success")), res_json.get("msg") or res_json.get("message") or "接口未返回原因"
         except Exception as error:
             res_json = None
             success, msg = False, _log_api_error(error)
@@ -274,7 +274,7 @@ class XHS_Creator_Apis:
                 timeout=REQUEST_TIMEOUT,
             )
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success, msg = bool(res_json.get("success")), res_json.get("msg") or res_json.get("message") or "接口未返回原因"
         except Exception as error:
             res_json = None
             success, msg = False, _log_api_error(error)
@@ -441,7 +441,7 @@ class XHS_Creator_Apis:
                 timeout=REQUEST_TIMEOUT,
             )
             res_json = response.json()
-            success, msg = res_json["success"], res_json["msg"]
+            success, msg = bool(res_json.get("success")), res_json.get("msg") or res_json.get("message") or "接口未返回原因"
         except Exception as error:
             success, msg = False, _log_api_error(error)
         return success, msg, res_json

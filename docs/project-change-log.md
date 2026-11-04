@@ -3,6 +3,17 @@
 > 这份文档用于记录本 Fork 的项目理解、产品决策、技术改动、验证结果和可复用的简历素材。
 > 每完成一个小任务都要更新：日期、问题背景、实现方式、测试结果、提交号和后续边界。
 
+### 2026-11-04 修复发布失败：话题查询异常与指纹模板路径
+
+- 现象：发布中心点「发布」返回 502，任务错误信息只有 `'msg'`，预览里话题显示为一串空的 `#`。
+- 根因一：创作服务平台的**话题搜索接口**返回了 `success: false` 且不带 `msg` 字段，`res_json["msg"]` 抛 `KeyError('msg')`；而适配器把话题解析当成发布前置条件，任一话题失败就整单中止。
+- 根因二（被第一个问题掩盖）：Creator 发布用的 rap 指纹模板路径拼成了 `js/../xhs_utils/xhs_creator/js/...`，实际文件在 `xhs_utils/xhs_creator/js/` 下，因此即便话题通过，下一步也会报 `No such file or directory`。
+- 修复：
+  - 新增 `resolve_topics()`：话题解析失败（无实体、接口报错、数据不完整）时**降级为普通文字话题**继续发布，并把原因写进 `publish_options.topic_warnings`，发布中心用黄色提示列出；话题查询不再阻断发布。
+  - `apis/xhs_creator_apis.py` 里四处 `res_json["msg"]` 改成 `.get("msg") / .get("message")`，接口未给原因时显示「接口未返回原因」而不是 `'msg'`。
+  - 修正指纹模板路径为 `_STATIC_DIR/rap_fingerprint_creator.json`。
+  - 发布中心话题预览兼容「字符串数组」的老草稿标签（之前显示为空 `#`）；错误翻译补充 `'msg'`/`Creator API request failed` 的说明。
+- 验证：新增 5 个话题降级用例 + 1 个指纹模板加载用例，`test_creator_topics.py` 等 16 项通过；真实任务 #1 重试后**发布成功**（`published`，笔记 ID `6aeaa74800000000030009b1`，话题自动降级为普通文字并给出提示）。
 ### 2026-11-04 定时发布状态同步（M4）
 
 - 背景：定时发布是委托小红书原生 `postTime` 执行的，我们提交后状态一直停在 `scheduled`，无法知道平台是否真的发出去了；而且 `published_at` 记录的是「提交时间」，会让人误以为已发布。

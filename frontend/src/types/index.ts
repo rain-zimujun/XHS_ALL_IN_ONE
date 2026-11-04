@@ -600,7 +600,8 @@ export type PublishOptions = {
   location?: string;
   privacy_type?: 0 | 1 | number;
   is_private?: boolean;
-  draft_tags?: Array<{ id?: string; name?: string }>;
+  draft_tags?: Array<{ id?: string; name?: string } | string>;
+  topic_warnings?: string[];
 };
 
 export type SendDraftToPublishPayload = {

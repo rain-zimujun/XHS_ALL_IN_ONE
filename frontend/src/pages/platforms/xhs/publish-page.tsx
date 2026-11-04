@@ -159,6 +159,7 @@ export function XhsPublishPage() {
     if (detail.includes("发布标题")) return "请先填写标题再发布。";
     if (text.includes("future")) return "定时时间需要晚于当前时间。";
     if (text.includes("already completed")) return "该任务已经发布或已定时，不能重复发布。";
+    if (detail.includes("\u0027msg\u0027") || text.includes("creator api request failed")) return "话题或发布接口返回异常（未给出原因）。可先去掉话题后重试，或稍后再试。";
     if (text.includes("401") || text.includes("403") || detail.includes("登录")) return "账号登录可能已失效，请重新扫码登录 Creator 账号。";
     if (text.includes("502") || text.includes("gateway")) return "小红书接口暂时不可用，请稍后重试。";
     return detail;
@@ -514,10 +515,21 @@ export function XhsPublishPage() {
                         {selectedJob.publish_options?.draft_tags && Array.isArray(selectedJob.publish_options.draft_tags) && selectedJob.publish_options.draft_tags.length > 0 && (
                           <div style={{ marginTop: 12 }}>
                             <Space size={[4, 4]} wrap>
-                              {(selectedJob.publish_options.draft_tags as Array<{name?: string}>).map((t, i) => (
-                                <Tag key={i} color="blue">#{t.name || ""}</Tag>
+                              {(selectedJob.publish_options.draft_tags as Array<string | { name?: string }>).map((t, i) => (
+                                <Tag key={i} color="blue">#{typeof t === "string" ? t : (t.name || "")}</Tag>
                               ))}
                             </Space>
+                            {Array.isArray(selectedJob.publish_options?.topic_warnings) && selectedJob.publish_options.topic_warnings.length > 0 && (
+                              <Alert
+                                style={{ marginTop: 8 }}
+                                type="warning"
+                                showIcon
+                                title="部分话题未关联成功"
+                                description={<ul style={{ margin: 0, paddingLeft: 18 }}>
+                                  {(selectedJob.publish_options.topic_warnings as string[]).map((warning, index) => <li key={index}>{warning}</li>)}
+                                </ul>}
+                              />
+                            )}
                           </div>
                         )}
                       </Card>
