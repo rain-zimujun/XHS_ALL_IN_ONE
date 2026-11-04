@@ -1,4 +1,4 @@
-﻿import {
+import {
   DeleteOutlined,
   EditOutlined,
   ExperimentOutlined,
@@ -68,6 +68,7 @@ import {
   generateTitleOptions,
   reorderDraftAssets,
   rewriteDraftWithAi,
+  searchSignerTopics,
   sendDraftToPublish,
   updateDraft,
   updateDraftAsset,
@@ -226,6 +227,10 @@ export function XhsDraftsPage() {
   } | null>(null);
   const [publishAccountId, setPublishAccountId] = useState<number | null>(null);
   const [publishTopics, setPublishTopics] = useState("");
+  const [topicQuery, setTopicQuery] = useState("");
+  const [topicResults, setTopicResults] = useState<{ id: string; name: string }[]>([]);
+  const [topicSearching, setTopicSearching] = useState(false);
+  const [topicSearchNote, setTopicSearchNote] = useState<string | null>(null);
   const [publishMode, setPublishMode] = useState<"immediate" | "scheduled">("immediate");
   const [scheduledAt, setScheduledAt] = useState("");
   const [publishPrivate, setPublishPrivate] = useState(false);
@@ -612,6 +617,38 @@ export function XhsDraftsPage() {
     } finally {
       setIsSendingPublish(false);
     }
+  }
+
+  async function searchTopics() {
+    const keyword = topicQuery.trim().replace(/^#+/, "");
+    if (!keyword) return;
+    setTopicSearching(true);
+    setTopicSearchNote(null);
+    try {
+      const result = await searchSignerTopics(keyword, 8);
+      setTopicResults(result.items);
+      if (result.items.length === 0) {
+        setTopicSearchNote("没有搜到话题；签名浏览器可能需要先在「账号绑定」里登录。");
+      } else {
+        setTopicSearchNote(`找到 ${result.total} 个话题，点选即加入（真实话题可点击）`);
+      }
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setTopicResults([]);
+      setTopicSearchNote(detail || "话题搜索失败：请确认签名浏览器已登录，或稍后再试。");
+    } finally {
+      setTopicSearching(false);
+    }
+  }
+
+  function addTopic(name: string) {
+    const existing = publishTopics.split(/[，,]/).map((item) => item.trim()).filter(Boolean);
+    if (existing.includes(name)) return;
+    if (existing.length >= 10) {
+      setTopicSearchNote("话题最多 10 个。");
+      return;
+    }
+    setPublishTopics([...existing, name].join("，"));
   }
 
   useEffect(() => {
@@ -1125,6 +1162,32 @@ export function XhsDraftsPage() {
                   maxLength={200}
                 />
                 <Text type="secondary" style={{ fontSize: 12 }}>默认带入草稿里的标签，可增删改；最多 10 个。想关联成真正的话题，可粘贴话题链接（如 https://www.xiaohongshu.com/page/topics/xxxx?name=xxx）。</Text>
+                <Space.Compact style={{ marginTop: 8, width: "100%" }}>
+                  <Input
+                    value={topicQuery}
+                    onChange={(event) => setTopicQuery(event.target.value)}
+                    placeholder="搜索真实话题，例如：穿搭"
+                    onPressEnter={() => void searchTopics()}
+                  />
+                  <Button loading={topicSearching} onClick={() => void searchTopics()}>搜索话题</Button>
+                </Space.Compact>
+                {topicResults.length > 0 && (
+                  <Space size={[4, 4]} wrap style={{ marginTop: 8 }}>
+                    {topicResults.map((topic) => (
+                      <Tag
+                        key={topic.id}
+                        color="blue"
+                        style={{ cursor: "pointer" }}
+                        onClick={() => addTopic(topic.name)}
+                      >
+                        + #{topic.name}
+                      </Tag>
+                    ))}
+                  </Space>
+                )}
+                {topicSearchNote && (
+                  <Text type="secondary" style={{ fontSize: 12, display: "block", marginTop: 6 }}>{topicSearchNote}</Text>
+                )}
               </div>
               <div>
                 <Text strong>发布方式</Text>

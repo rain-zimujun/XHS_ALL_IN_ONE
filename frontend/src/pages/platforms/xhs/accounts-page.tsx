@@ -24,7 +24,7 @@ import {
 import { useEffect, useState } from "react";
 
 import { AddAccountDrawer } from "../../../components/account/add-account-drawer";
-import { checkAccount, deleteAccount, fetchAccounts, importCreatorFromSigner } from "../../../lib/api";
+import { checkAccount, deleteAccount, fetchAccounts, fetchSignerStatus, importCreatorFromSigner, openSignerLogin } from "../../../lib/api";
 import { formatShanghaiTime } from "../../../lib/time";
 import type { PlatformAccount } from "../../../types";
 
@@ -64,6 +64,8 @@ export function XhsAccountsPage() {
   const [error, setError] = useState<string | null>(null);
   const [importing, setImporting] = useState(false);
   const [importNotice, setImportNotice] = useState<string | null>(null);
+  const [signer, setSigner] = useState<{ running: boolean; logged_in: boolean; reason?: string } | null>(null);
+  const [signerBusy, setSignerBusy] = useState(false);
 
   async function loadAccounts() {
     setIsLoading(true);
@@ -119,7 +121,31 @@ export function XhsAccountsPage() {
 
   useEffect(() => {
     void loadAccounts();
+    void refreshSigner();
   }, []);
+
+  async function refreshSigner() {
+    try {
+      setSigner(await fetchSignerStatus());
+    } catch {
+      setSigner(null);
+    }
+  }
+
+  async function openSigner() {
+    setSignerBusy(true);
+    try {
+      await openSignerLogin();
+      setImportNotice("已打开签名浏览器窗口，请在其中扫码登录小红书");
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+      await refreshSigner();
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      setImportNotice(detail || "启动签名浏览器失败");
+    } finally {
+      setSignerBusy(false);
+    }
+  }
 
   async function importFromSigner() {
     setImporting(true);
@@ -173,6 +199,16 @@ export function XhsAccountsPage() {
       </div>
 
       {/* Section card */}
+      <Space wrap style={{ marginBottom: 12 }}>
+        <Tag color={signer?.logged_in ? "green" : signer?.running ? "orange" : "default"}>
+          签名浏览器：{signer?.logged_in ? "已登录" : signer?.running ? "运行中未登录" : "未运行"}
+        </Tag>
+        <Button size="small" loading={signerBusy} onClick={() => void openSigner()}>
+          打开登录窗口
+        </Button>
+        <Button size="small" onClick={() => void refreshSigner()}>刷新状态</Button>
+        <Text type="secondary" style={{ fontSize: 12 }}>话题搜索与发布签名都依赖这个浏览器</Text>
+      </Space>
       {importNotice && (
         <Alert
           style={{ marginBottom: 16 }}
